@@ -17,9 +17,8 @@ if not exist "%PYTHON%" (
   exit /b 1
 )
 
-if exist "%PYTHONW%" (
-  start "" "%PYTHONW%" "%MAIN%"
-) else (
-  start "" "%PYTHON%" "%MAIN%"
-)
-exit /b 0
+echo [INFO] Launching with console for debug...
+"%PYTHON%" "%MAIN%"
+echo [INFO] Process ended with code %ERRORLEVEL%.
+pause
+exit /b %ERRORLEVEL%
