@@ -231,7 +231,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.board_project_label = self.board_page.project_label
         self.board_add_image_btn = self.board_page.add_image_btn
-        self.board_add_note_btn = self.board_page.add_note_btn
         self.board_auto_layout_btn = self.board_page.auto_layout_btn
         self.board_fit_btn = self.board_page.fit_btn
         self.board_save_btn = self.board_page.save_btn
@@ -307,7 +306,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.client_list.itemClicked.connect(self.client_controller.on_client_project_selected)
 
         self.board_add_image_btn.clicked.connect(self.board_controller.add_image)
-        self.board_add_note_btn.clicked.connect(self.board_controller.add_note)
         self.board_auto_layout_btn.clicked.connect(self.board_controller.layout_selection_grid)
         self.board_fit_btn.clicked.connect(self.board_controller.fit_view)
         self.board_save_btn.clicked.connect(self.board_controller.save_board)

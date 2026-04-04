@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+import uuid
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -104,6 +106,7 @@ class BoardNoteItem(QtWidgets.QGraphicsRectItem):
         self._bg_color = QtGui.QColor(0, 0, 0, 160)
         self._font_size = 12
         self._align = QtCore.Qt.AlignmentFlag.AlignLeft
+        self._note_id = uuid.uuid4().hex
         self.text_item = QtWidgets.QGraphicsTextItem(text, self)
         self.text_item.setDefaultTextColor(QtGui.QColor("#e6e6e6"))
         self.text_item.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.NoTextInteraction)
@@ -151,11 +154,20 @@ class BoardNoteItem(QtWidgets.QGraphicsRectItem):
 
     def note_data(self) -> dict:
         return {
+            "id": self._note_id,
             "text": self.text_item.toPlainText(),
             "font_size": self._font_size,
             "align": "center" if self._align == QtCore.Qt.AlignmentFlag.AlignHCenter else "left",
             "bg": self._bg_color.name(QtGui.QColor.NameFormat.HexArgb),
+            "scale": self.scale(),
         }
+
+    def set_note_id(self, note_id: str) -> None:
+        if note_id:
+            self._note_id = note_id
+
+    def note_id(self) -> str:
+        return self._note_id
 
     def paint(
         self,
@@ -171,22 +183,113 @@ class BoardNoteItem(QtWidgets.QGraphicsRectItem):
         painter.restore()
 
 
+class BoardGroupItem(QtWidgets.QGraphicsRectItem):
+    def __init__(self, color: QtGui.QColor, parent: Optional[QtWidgets.QGraphicsItem] = None) -> None:
+        super().__init__(parent)
+        self._color = color
+        self._members: list[QtWidgets.QGraphicsItem] = []
+        self._suspend_member_move = False
+        self.setZValue(-10)
+        self.setFlags(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        self._update_pen_brush()
+
+    def _update_pen_brush(self) -> None:
+        pen = QtGui.QPen(self._color)
+        pen.setWidth(2)
+        self.setPen(pen)
+        fill = QtGui.QColor(self._color)
+        fill.setAlpha(40)
+        self.setBrush(fill)
+
+    def set_color(self, color: QtGui.QColor) -> None:
+        self._color = color
+        self._update_pen_brush()
+
+    def color_hex(self) -> str:
+        return self._color.name(QtGui.QColor.NameFormat.HexArgb)
+
+    def members(self) -> list[QtWidgets.QGraphicsItem]:
+        return list(self._members)
+
+    def add_member(self, item: QtWidgets.QGraphicsItem) -> None:
+        if item not in self._members:
+            self._members.append(item)
+        self.update_bounds()
+
+    def remove_member(self, item: QtWidgets.QGraphicsItem) -> None:
+        if item in self._members:
+            self._members.remove(item)
+        self.update_bounds()
+
+    def update_bounds(self) -> None:
+        valid = [m for m in self._members if m.scene() is not None]
+        self._members = valid
+        if not self._members:
+            return
+        bounds = QtCore.QRectF()
+        for item in self._members:
+            bounds = bounds.united(item.sceneBoundingRect())
+        margin = 40.0
+        bounds = bounds.adjusted(-margin, -margin, margin, margin)
+        self._suspend_member_move = True
+        self.setRect(0, 0, bounds.width(), bounds.height())
+        self.setPos(bounds.topLeft())
+        self._suspend_member_move = False
+
+    def contains_scene_point(self, point: QtCore.QPointF) -> bool:
+        return self.mapToScene(self.rect()).boundingRect().contains(point)
+
+    def itemChange(self, change: QtWidgets.QGraphicsItem.GraphicsItemChange, value):  # type: ignore[override]
+        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            if self._suspend_member_move:
+                return value
+            delta = value - self.pos()
+            for item in self._members:
+                if item.scene() is None:
+                    continue
+                item.setPos(item.pos() + delta)
+            return value
+        return super().itemChange(change, value)
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(self.pen())
+        painter.setBrush(self.brush())
+        painter.drawRoundedRect(self.rect(), 12, 12)
+        painter.restore()
+
+
 class BoardController:
     def __init__(self, window: QtWidgets.QMainWindow) -> None:
         self.w = window
         self._project_root: Optional[Path] = None
         self._dirty = False
         self._loading = False
+        self._saving = False
+        self._last_save_ts = 0.0
         self._scene = self.w.board_page.scene
         self._scene.changed.connect(self._on_scene_changed)
 
     def set_project(self, project_root: Optional[Path]) -> None:
+        if project_root is None and self._project_root is not None:
+            now = time.time()
+            if now - self._last_save_ts < 1.0:
+                return
         if self._project_root and self._dirty:
             self.save_board()
         self._project_root = project_root
         enabled = project_root is not None
         self.w.board_add_image_btn.setEnabled(enabled)
-        self.w.board_add_note_btn.setEnabled(enabled)
         self.w.board_save_btn.setEnabled(enabled)
         self.w.board_load_btn.setEnabled(enabled)
         self.w.board_fit_btn.setEnabled(enabled)
@@ -213,10 +316,12 @@ class BoardController:
         src = Path(path)
         self.add_image_from_path(src)
 
-    def add_image_from_path(self, src: Path, scene_pos: Optional[QtCore.QPointF] = None) -> None:
+    def add_image_from_path(
+        self, src: Path, scene_pos: Optional[QtCore.QPointF] = None
+    ) -> Optional[QtWidgets.QGraphicsPixmapItem]:
         if not self._project_root:
             print("[BOARD] No project root set")
-            return
+            return None
         assets_dir = self._project_root / ".skyforge_board_assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
         dest = assets_dir / src.name
@@ -227,12 +332,12 @@ class BoardController:
             except Exception as exc:
                 print(f"[BOARD] Copy failed: {exc}")
                 self._notify(f"Failed to copy image:\n{exc}")
-                return
+                return None
         pixmap = QtGui.QPixmap(str(dest))
         if pixmap.isNull():
             print("[BOARD] Pixmap is null")
             self._notify("Failed to load image.")
-            return
+            return None
         item = QtWidgets.QGraphicsPixmapItem(pixmap)
         item.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -251,18 +356,110 @@ class BoardController:
             item.setScale(scale)
         self._scene.addItem(item)
         self._dirty = True
+        return item
 
     def add_note(self) -> None:
+        self.add_note_at(None)
+
+    def add_note_at(self, scene_pos: Optional[QtCore.QPointF]) -> None:
         if not self._project_root:
             self._notify("Select a project first.")
             return
         item = BoardNoteItem("New note...")
         item.setData(0, "note")
-        item.setPos(self._scene.sceneRect().center())
+        if scene_pos is None:
+            scene_pos = self._scene.sceneRect().center()
+        item.setPos(scene_pos)
         item.setSelected(True)
         self._scene.addItem(item)
         self._dirty = True
         self.edit_note(item)
+
+    def add_group(self) -> None:
+        items = [
+            i
+            for i in self._scene.selectedItems()
+            if isinstance(i, (QtWidgets.QGraphicsPixmapItem, BoardNoteItem))
+        ]
+        if not items:
+            self._notify("Select images to group.")
+            return
+        color = QtWidgets.QColorDialog.getColor(QtGui.QColor("#4aa3ff"), self.w, "Group color")
+        if not color.isValid():
+            return
+        group = BoardGroupItem(color)
+        group.setData(0, "group")
+        self._scene.addItem(group)
+        for item in items:
+            group.add_member(item)
+        group.update_bounds()
+        self._dirty = True
+
+    def ungroup_selected(self) -> None:
+        groups = [i for i in self._scene.selectedItems() if isinstance(i, BoardGroupItem)]
+        if not groups:
+            self._notify("Select a group to ungroup.")
+            return
+        for group in groups:
+            for member in group.members():
+                member.setSelected(True)
+            self._scene.removeItem(group)
+        self._dirty = True
+
+    def try_add_item_to_group(
+        self, item: QtWidgets.QGraphicsItem, scene_pos: Optional[QtCore.QPointF]
+    ) -> None:
+        if scene_pos is None:
+            scene_pos = item.sceneBoundingRect().center()
+        for group in self._groups():
+            if group.contains_scene_point(scene_pos):
+                group.add_member(item)
+                group.update_bounds()
+                self._dirty = True
+                return
+
+    def handle_item_drop(self, items: list[QtWidgets.QGraphicsItem]) -> None:
+        moved = [i for i in items if isinstance(i, (QtWidgets.QGraphicsPixmapItem, BoardNoteItem))]
+        if not moved:
+            return
+        groups = self._groups()
+        if not groups:
+            return
+        for item in moved:
+            center = item.sceneBoundingRect().center()
+            target_group = None
+            for group in groups:
+                if group.contains_scene_point(center):
+                    target_group = group
+                    break
+            current_group = self._find_group_for_item(item)
+            if target_group is not None and target_group is not current_group:
+                if current_group is not None:
+                    current_group.remove_member(item)
+                target_group.add_member(item)
+            elif target_group is None and current_group is not None:
+                if not current_group.contains_scene_point(center):
+                    current_group.remove_member(item)
+            if current_group is not None:
+                current_group.update_bounds()
+            if target_group is not None:
+                target_group.update_bounds()
+        self._dirty = True
+
+    def select_group_members(self, group_item: BoardGroupItem) -> None:
+        for item in self._scene.selectedItems():
+            item.setSelected(False)
+        for member in group_item.members():
+            member.setSelected(True)
+
+    def _groups(self) -> list[BoardGroupItem]:
+        return [i for i in self._scene.items() if isinstance(i, BoardGroupItem)]
+
+    def _find_group_for_item(self, item: QtWidgets.QGraphicsItem) -> Optional[BoardGroupItem]:
+        for group in self._groups():
+            if item in group.members():
+                return group
+        return None
 
     def fit_view(self) -> None:
         rect = self._scene.itemsBoundingRect()
@@ -328,16 +525,39 @@ class BoardController:
                     "x": item.pos().x(),
                     "y": item.pos().y(),
                 })
+            elif kind == "group" and isinstance(item, BoardGroupItem):
+                members = []
+                for m in item.members():
+                    if m.data(0) == "image":
+                        members.append({"type": "image", "id": str(m.data(1))})
+                    elif m.data(0) == "note" and isinstance(m, BoardNoteItem):
+                        members.append({"type": "note", "id": m.note_id()})
+                if not members:
+                    continue
+                data["items"].append({
+                    "type": "group",
+                    "color": item.color_hex(),
+                    "members": members,
+                })
         try:
+            self._saving = True
+            self._last_save_ts = time.time()
             board_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             self._dirty = False
         except Exception as exc:
             self._notify(f"Failed to save board:\n{exc}")
+        finally:
+            QtCore.QTimer.singleShot(100, self._clear_saving)
+
+    def _clear_saving(self) -> None:
+        self._saving = False
 
     def load_board(self) -> None:
         if not self._project_root:
             return
         board_path = self._project_root / ".skyforge_board.json"
+        if self._saving:
+            return
         self._loading = True
         self._scene.clear()
         if not board_path.exists():
@@ -349,6 +569,9 @@ class BoardController:
             self._loading = False
             return
         assets_dir = self._project_root / ".skyforge_board_assets"
+        image_map: dict[str, QtWidgets.QGraphicsPixmapItem] = {}
+        note_map: dict[str, BoardNoteItem] = {}
+        pending_groups = []
         for entry in payload.get("items", []):
             if entry.get("type") == "image":
                 filename = entry.get("file", "")
@@ -369,15 +592,46 @@ class BoardController:
                 item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
                 item.setScale(float(entry.get("scale", 1.0)))
                 self._scene.addItem(item)
+                if filename:
+                    image_map[str(filename)] = item
             elif entry.get("type") == "note":
                 item = BoardNoteItem(entry.get("text", ""))
                 align = entry.get("align", "left")
                 align_flag = QtCore.Qt.AlignmentFlag.AlignHCenter if align == "center" else QtCore.Qt.AlignmentFlag.AlignLeft
                 bg = entry.get("bg", "#99000000")
                 item.set_note_style(int(entry.get("font_size", 12)), align_flag, QtGui.QColor(bg))
+                item.setScale(float(entry.get("scale", 1.0)))
                 item.setData(0, "note")
                 item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+                note_id = entry.get("id") or uuid.uuid4().hex
+                item.set_note_id(str(note_id))
                 self._scene.addItem(item)
+                note_map[item.note_id()] = item
+            elif entry.get("type") == "group":
+                pending_groups.append(entry)
+        for entry in pending_groups:
+            color = QtGui.QColor(entry.get("color", "#4aa3ff"))
+            group = BoardGroupItem(color)
+            group.setData(0, "group")
+            self._scene.addItem(group)
+            for ref in entry.get("members", []):
+                if isinstance(ref, str):
+                    item = image_map.get(str(ref))
+                    if item is not None:
+                        group.add_member(item)
+                    continue
+                if isinstance(ref, dict):
+                    r_type = ref.get("type")
+                    r_id = str(ref.get("id", ""))
+                    if r_type == "image":
+                        item = image_map.get(r_id)
+                        if item is not None:
+                            group.add_member(item)
+                    elif r_type == "note":
+                        item = note_map.get(r_id)
+                        if item is not None:
+                            group.add_member(item)
+            group.update_bounds()
         self._dirty = False
         self._loading = False
 
@@ -477,6 +731,13 @@ class BoardController:
     def _on_scene_changed(self) -> None:
         if self._loading:
             return
+        if self._saving:
+            return
+        for item in list(self._scene.items()):
+            if isinstance(item, BoardGroupItem):
+                item.update_bounds()
+                if not item.members():
+                    self._scene.removeItem(item)
         self._dirty = True
 
     def _notify(self, text: str) -> None:

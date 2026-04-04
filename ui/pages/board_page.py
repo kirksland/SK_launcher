@@ -26,10 +26,12 @@ class BoardView(QtWidgets.QGraphicsView):
         self._scaling = False
         self._scale_items: list[QtWidgets.QGraphicsItem] = []
         self._scale_start_values: list[float] = []
+        self._scale_start_positions: list[QtCore.QPointF] = []
         self._scale_overlays: list[QtWidgets.QGraphicsRectItem] = []
         self._scale_start_center = QtCore.QPointF()
         self._scale_start_dist = 1.0
         self._scale_start_value = 1.0
+        self._move_start_positions: dict[int, QtCore.QPointF] = {}
 
     def drawBackground(self, painter: QtGui.QPainter, rect: QtCore.QRectF) -> None:
         painter.save()
@@ -65,8 +67,10 @@ class BoardView(QtWidgets.QGraphicsView):
         self.scale(factor, factor)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._move_start_positions = {id(i): i.pos() for i in self.scene().selectedItems()}
         if event.button() == QtCore.Qt.MouseButton.LeftButton and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
-            items = self.scene().selectedItems()
+            items = [i for i in self.scene().selectedItems() if i.data(0) in ("image", "note")]
             if items:
                 self._scaling = True
                 self._scale_items = list(items)
@@ -77,8 +81,10 @@ class BoardView(QtWidgets.QGraphicsView):
                 self._scale_start_center = center
                 self._scale_start_dist = max(1.0, QtCore.QLineF(center, self.mapToScene(event.pos())).length())
                 self._scale_start_values = []
+                self._scale_start_positions = []
                 for item in self._scale_items:
                     self._scale_start_values.append(item.scale())
+                    self._scale_start_positions.append(item.pos())
                     overlay = QtWidgets.QGraphicsRectItem(item.sceneBoundingRect())
                     overlay.setPen(QtGui.QPen(QtGui.QColor("#c6ccd6"), 1, QtCore.Qt.PenStyle.DashLine))
                     overlay.setBrush(QtCore.Qt.BrushStyle.NoBrush)
@@ -105,7 +111,10 @@ class BoardView(QtWidgets.QGraphicsView):
             factor = current_dist / max(1.0, self._scale_start_dist)
             for idx, item in enumerate(self._scale_items):
                 start_scale = self._scale_start_values[idx] if idx < len(self._scale_start_values) else item.scale()
+                start_pos = self._scale_start_positions[idx] if idx < len(self._scale_start_positions) else item.pos()
                 item.setScale(max(0.05, min(8.0, start_scale * factor)))
+                offset = start_pos - self._scale_start_center
+                item.setPos(self._scale_start_center + offset * factor)
                 if idx < len(self._scale_overlays):
                     self._scale_overlays[idx].setRect(item.sceneBoundingRect())
             event.accept()
@@ -127,6 +136,7 @@ class BoardView(QtWidgets.QGraphicsView):
             self._scale_overlays = []
             self._scale_items = []
             self._scale_start_values = []
+            self._scale_start_positions = []
             event.accept()
             return
         if self._panning and event.button() in (
@@ -138,16 +148,38 @@ class BoardView(QtWidgets.QGraphicsView):
             self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
             event.accept()
             return
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            moved = []
+            for item in self.scene().selectedItems():
+                start = self._move_start_positions.get(id(item))
+                if start is not None and (item.pos() - start).manhattanLength() > 2:
+                    moved.append(item)
+            if moved:
+                parent = self.parent()
+                controller = getattr(parent, "_controller", None)
+                if controller is not None and hasattr(controller, "handle_item_drop"):
+                    controller.handle_item_drop(moved)
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         item = self.itemAt(event.pos())
         note_item = None
+        group_item = None
         while item is not None:
             if item.data(0) == "note":
                 note_item = item
                 break
+            if item.data(0) == "group":
+                group_item = item
+                break
             item = item.parentItem()
+        if group_item is not None:
+            parent = self.parent()
+            controller = getattr(parent, "_controller", None)
+            if controller is not None and hasattr(controller, "select_group_members"):
+                controller.select_group_members(group_item)
+                event.accept()
+                return
         if note_item is not None:
             parent = self.parent()
             controller = getattr(parent, "_controller", None)
@@ -156,6 +188,29 @@ class BoardView(QtWidgets.QGraphicsView):
                 event.accept()
                 return
         super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:  # type: ignore[override]
+        parent = self.parent()
+        controller = getattr(parent, "_controller", None)
+        if controller is None:
+            super().contextMenuEvent(event)
+            return
+        menu = QtWidgets.QMenu(self)
+        add_image = menu.addAction("Add Image…")
+        add_note = menu.addAction("Add Note")
+        add_group = menu.addAction("Group Selection")
+        ungroup = menu.addAction("Ungroup")
+        has_group = any(getattr(i, "data", lambda _k: None)(0) == "group" for i in self.scene().selectedItems())
+        ungroup.setEnabled(has_group)
+        action = menu.exec(event.globalPos())
+        if action == add_image and hasattr(controller, "add_image"):
+            controller.add_image()
+        elif action == add_note and hasattr(controller, "add_note_at"):
+            controller.add_note_at(self.mapToScene(event.pos()))
+        elif action == add_group and hasattr(controller, "add_group"):
+            controller.add_group()
+        elif action == ungroup and hasattr(controller, "ungroup_selected"):
+            controller.ungroup_selected()
 
     def set_show_grid(self, enabled: bool) -> None:
         self._show_grid = enabled
@@ -227,8 +282,6 @@ class BoardPage(QtWidgets.QWidget):
 
         self.add_image_btn = QtWidgets.QPushButton("Add Image")
         header.addWidget(self.add_image_btn, 0)
-        self.add_note_btn = QtWidgets.QPushButton("Add Note")
-        header.addWidget(self.add_note_btn, 0)
         self.auto_layout_btn = QtWidgets.QPushButton("Auto Layout")
         header.addWidget(self.auto_layout_btn, 0)
         self.auto_layout_btn.setToolTip("Auto layout (Pinterest / masonry)")
@@ -250,7 +303,7 @@ class BoardPage(QtWidgets.QWidget):
         footer = QtWidgets.QHBoxLayout()
         layout.addLayout(footer)
         self.hint_label = QtWidgets.QLabel(
-            "Tip: Drag items, wheel to zoom, Ctrl+drag to scale selection, middle mouse to pan, Del to remove."
+            "Tip: Right-click for add/group, drag items, wheel to zoom, Ctrl+drag to scale, middle mouse to pan, Del to remove."
         )
         self.hint_label.setStyleSheet("color: #9aa3ad;")
         footer.addWidget(self.hint_label, 1)
@@ -277,7 +330,9 @@ class BoardPage(QtWidgets.QWidget):
             local_path = Path(url.toLocalFile())
             print(f"[BOARD] URL -> {local_path}")
             if local_path.exists():
-                controller.add_image_from_path(local_path, scene_pos=scene_pos)
+                item = controller.add_image_from_path(local_path, scene_pos=scene_pos)
+                if item is not None:
+                    controller.try_add_item_to_group(item, scene_pos)
             else:
                 print(f"[BOARD] Missing path: {local_path}")
 
