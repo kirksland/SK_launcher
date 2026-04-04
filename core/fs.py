@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+HIP_EXTS = (".hip", ".hiplc", ".hipnc")
+
+
+def find_projects(projects_dir: Path) -> List[Path]:
+    if not projects_dir.exists():
+        return []
+    return sorted([p for p in projects_dir.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
+
+
+def find_hips(project_dir: Path) -> List[Path]:
+    hips: List[Path] = []
+    for path in project_dir.iterdir():
+        if path.is_file() and path.suffix.lower() in HIP_EXTS:
+            hips.append(path)
+    return sorted(hips, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def open_hip(path: Path) -> None:
+    # Use default app associated with .hip on the system (usually Houdini).
+    os.startfile(str(path))  # type: ignore[attr-defined]
+
+
+USD_EXTS = (".usd", ".usda", ".usdc", ".usdnc")
+
+
+def list_usd_versions(
+    entity_dir: Path,
+    context: Optional[str] = None,
+    search_locations: Optional[List[str]] = None,
+) -> List[Path]:
+    locations = [loc.lower() for loc in (search_locations or ["publish"])]
+    usd_files: List[Path] = []
+    seen: set[Path] = set()
+
+    for loc in locations:
+        if loc == "publish":
+            publish_dir = entity_dir / "publish"
+            if not publish_dir.exists():
+                continue
+            if context:
+                context_dir = publish_dir / context
+                if not context_dir.exists():
+                    continue
+                candidates = [p for p in context_dir.rglob("*") if p.is_file() and p.suffix.lower() in USD_EXTS]
+            else:
+                candidates = [p for p in publish_dir.rglob("*") if p.is_file() and p.suffix.lower() in USD_EXTS]
+        elif loc == "root":
+            candidates = [
+                p for p in entity_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in USD_EXTS
+            ]
+        else:
+            continue
+
+        for path in candidates:
+            if path not in seen:
+                seen.add(path)
+                usd_files.append(path)
+
+    return sorted(usd_files, key=lambda p: p.name)
+
+
+def list_review_videos(entity_dir: Path, context: Optional[str] = None) -> List[Path]:
+    publish_dir = entity_dir / "publish"
+    if not publish_dir.exists():
+        return []
+    if context:
+        context_dir = publish_dir / context
+        if not context_dir.exists():
+            return []
+        files = list(context_dir.rglob("*"))
+    else:
+        files = list(publish_dir.rglob("*"))
+    videos = [p for p in files if p.is_file() and p.suffix.lower() in (".mp4", ".mov")]
+    return sorted(videos, key=lambda p: p.name)
+
+
+def group_versions(usd_files: List[Path], video_files: List[Path]) -> List[Tuple[str, Optional[Path], Optional[Path]]]:
+    def key_for(p: Path) -> str:
+        return p.stem
+
+    usd_map = {key_for(p): p for p in usd_files}
+    vid_map = {key_for(p): p for p in video_files}
+    keys = sorted(set(usd_map.keys()) | set(vid_map.keys()))
+    grouped: List[Tuple[str, Optional[Path], Optional[Path]]] = []
+    for k in keys:
+        grouped.append((k, usd_map.get(k), vid_map.get(k)))
+    return grouped
+
+
+def name_prefix(name: str) -> str:
+    return name.split("_", 1)[0].lower()
+
+
+def latest_preview_image(entity_dir: Path) -> Optional[Path]:
+    preview_dir = entity_dir / "preview"
+    if not preview_dir.exists():
+        return None
+    candidates = [p for p in preview_dir.iterdir() if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg")]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def list_preview_images(entity_dir: Path) -> List[Path]:
+    preview_dir = entity_dir / "preview"
+    if not preview_dir.exists():
+        return []
+    candidates = [p for p in preview_dir.iterdir() if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg")]
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)

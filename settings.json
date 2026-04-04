@@ -1,0 +1,29 @@
+{
+  "projects_dir": "C:\\Users\\justi\\Documents\\HoudiniProjects",
+  "template_hip": "C:\\Users\\justi\\Documents\\houdini21.0\\skyforge_launcher\\untitled.hipnc",
+  "new_hip_pattern": "{projectName}_001.hipnc",
+  "use_file_association": false,
+  "houdini_exe": "C:\\Program Files\\Side Effects Software\\Houdini 21.0.559\\bin\\houdini.exe",
+  "server_repo_dir": "C:\\Users\\justi\\Documents\\studio project\\StudioProject",
+  "video_backend": "opencv",
+  "asset_manager_projects": [
+    {
+      "local_path": "C:\\Users\\justi\\Documents\\HoudiniProjects\\test_pipeline",
+      "client_id": "test_pipeline"
+    },
+    {
+      "local_path": "C:\\Users\\justi\\Documents\\HoudiniProjects\\BarScene_v2.2",
+      "client_id": null
+    },
+    {
+      "local_path": "C:\\Users\\justi\\Documents\\HoudiniProjects\\Mardini_2026",
+      "client_id": null
+    }
+  ],
+  "asset_schema": {
+    "usd_search": [
+      "publish",
+      "root"
+    ]
+  }
+}
