@@ -50,6 +50,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._project_cache: Dict[Path, Tuple[float, List[Path], float]] = {}
         self._asset_cache: Dict[Path, Tuple[float, List[Path], float]] = {}
         self._card_to_item: Dict[ProjectCard, QtWidgets.QListWidgetItem] = {}
+        self._project_hip_selection: Dict[Path, Path] = {}
         self._project_watch_enabled = True
         self._asset_watch_enabled = True
 

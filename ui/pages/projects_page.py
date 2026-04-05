@@ -8,9 +8,6 @@ from PySide6 import QtCore, QtGui, QtWidgets
 class ProjectsPage(QtWidgets.QWidget):
     def __init__(self, projects_dir: Path, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self._resizing_detail = False
-        self._detail_resize_start_pos = QtCore.QPoint()
-        self._detail_resize_start_width = 0
         layout = QtWidgets.QVBoxLayout(self)
 
         header = QtWidgets.QHBoxLayout()
@@ -52,6 +49,10 @@ class ProjectsPage(QtWidgets.QWidget):
         content = QtWidgets.QHBoxLayout()
         layout.addLayout(content, 1)
 
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        content.addWidget(splitter, 1)
+
         self.project_grid = QtWidgets.QListWidget()
         self.project_grid.setViewMode(QtWidgets.QListView.ViewMode.IconMode)
         self.project_grid.setResizeMode(QtWidgets.QListView.ResizeMode.Adjust)
@@ -61,38 +62,13 @@ class ProjectsPage(QtWidgets.QWidget):
         self.project_grid.setGridSize(QtCore.QSize(230, 240))
         self.project_grid.setWordWrap(True)
 
-        self.project_grid_container = QtWidgets.QFrame()
-        self.project_grid_container.setStyleSheet("QFrame { background: transparent; }")
-        container_layout = QtWidgets.QGridLayout(self.project_grid_container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.addWidget(self.project_grid, 0, 0)
-        content.addWidget(self.project_grid_container, 1)
+        splitter.addWidget(self.project_grid)
 
         self.detail_panel = QtWidgets.QFrame()
         self.detail_panel.setMinimumWidth(260)
-        self.detail_panel.setMaximumWidth(10000)
-        self.detail_panel.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Expanding)
         self.detail_panel.setStyleSheet("background: #2b2f36; border: 1px solid #14171c;")
-        self.detail_panel.setMouseTracking(True)
-        self.detail_panel.installEventFilter(self)
 
-        detail_shell = QtWidgets.QHBoxLayout(self.detail_panel)
-        detail_shell.setContentsMargins(0, 0, 0, 0)
-        detail_shell.setSpacing(0)
-
-        self.detail_resize_handle = QtWidgets.QFrame()
-        self.detail_resize_handle.setFixedWidth(6)
-        self.detail_resize_handle.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
-        self.detail_resize_handle.setStyleSheet("background: transparent;")
-        self.detail_resize_handle.setMouseTracking(True)
-        self.detail_resize_handle.installEventFilter(self)
-        detail_shell.addWidget(self.detail_resize_handle, 0)
-
-        detail_body = QtWidgets.QFrame()
-        detail_body.setStyleSheet("background: transparent;")
-        detail_shell.addWidget(detail_body, 1)
-
-        detail_layout = QtWidgets.QVBoxLayout(detail_body)
+        detail_layout = QtWidgets.QVBoxLayout(self.detail_panel)
         title_row = QtWidgets.QHBoxLayout()
         detail_layout.addLayout(title_row)
         self.detail_title = QtWidgets.QLabel("Project Structure")
@@ -134,7 +110,9 @@ class ProjectsPage(QtWidgets.QWidget):
         self.detail_tree.setHeaderHidden(True)
         detail_layout.addWidget(self.detail_tree, 1)
         self.detail_panel.setVisible(False)
-        container_layout.addWidget(self.detail_panel, 0, 0, alignment=QtCore.Qt.AlignmentFlag.AlignRight)
+        splitter.addWidget(self.detail_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
 
         footer = QtWidgets.QHBoxLayout()
         layout.addLayout(footer)
@@ -152,31 +130,4 @@ class ProjectsPage(QtWidgets.QWidget):
         footer.addWidget(self.status, 1)
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
-        if watched in (self.detail_panel, getattr(self, "detail_resize_handle", None)):
-            if event.type() == QtCore.QEvent.Type.MouseButtonPress:
-                mouse = event  # type: ignore[assignment]
-                if mouse.button() == QtCore.Qt.MouseButton.LeftButton:
-                    pos = mouse.position().toPoint()  # type: ignore[attr-defined]
-                    if watched != self.detail_panel or pos.x() <= 6:
-                        self._resizing_detail = True
-                        self._detail_resize_start_pos = mouse.globalPosition().toPoint()  # type: ignore[attr-defined]
-                        self._detail_resize_start_width = self.detail_panel.width()
-                        if hasattr(self, "detail_resize_handle"):
-                            self.detail_resize_handle.grabMouse()
-                        return True
-            if event.type() == QtCore.QEvent.Type.MouseMove:
-                mouse = event  # type: ignore[assignment]
-                if self._resizing_detail:
-                    delta = mouse.globalPosition().toPoint().x() - self._detail_resize_start_pos.x()  # type: ignore[attr-defined]
-                    new_width = self._detail_resize_start_width - delta
-                    max_w = self.detail_panel.maximumWidth()
-                    new_width = max(self.detail_panel.minimumWidth(), min(max_w, new_width))
-                    self.detail_panel.setFixedWidth(new_width)
-                    return True
-            if event.type() == QtCore.QEvent.Type.MouseButtonRelease:
-                if self._resizing_detail:
-                    self._resizing_detail = False
-                    if hasattr(self, "detail_resize_handle"):
-                        self.detail_resize_handle.releaseMouse()
-                    return True
         return super().eventFilter(watched, event)

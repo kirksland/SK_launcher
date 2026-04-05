@@ -34,14 +34,25 @@ class ProjectsController:
         self.w = window
         self._project_watcher: Optional[QtCore.QFileSystemWatcher] = None
         self._project_refresh_timer: Optional[QtCore.QTimer] = None
+        self._detail_pinned = False
+        self._detail_project_path: Optional[Path] = None
         self.w.project_detail_tree.itemExpanded.connect(self._on_tree_item_expanded)
 
     def refresh_projects(self, *_: object) -> None:
+        current_item = self.w.project_grid.currentItem()
+        current_path: Optional[Path] = None
+        if current_item is not None:
+            path_text = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if path_text:
+                current_path = Path(str(path_text))
+
         self.w.project_grid.clear()
-        self.w.project_detail_panel.setVisible(False)
+        if not self._detail_pinned:
+            self.w.project_detail_panel.setVisible(False)
         self.w._card_to_item.clear()
         projects = find_projects(self.w.projects_dir)
         self._prune_cache(projects, self.w._project_cache)
+        self._prune_selection(projects)
         query = self.w.search_input.text().strip().lower()
         if query:
             projects = [p for p in projects if query in p.name.lower()]
@@ -61,12 +72,35 @@ class ProjectsController:
             show_cloud = any(
                 e.get("local_path") == str(project) and e.get("client_id") for e in self.w._asset_manager_projects
             )
-            card = ProjectCard(project, self.w.project_grid.iconSize(), hips, show_cloud_badge=show_cloud, parent=self.w.project_grid)
+            selected_hip = self.w._project_hip_selection.get(project)
+            card = ProjectCard(
+                project,
+                self.w.project_grid.iconSize(),
+                hips,
+                show_cloud_badge=show_cloud,
+                selected_hip=selected_hip,
+                parent=self.w.project_grid,
+            )
             card.selection_changed.connect(self.on_card_selection_changed)
             self.w._card_to_item[card] = item
             self.w.project_grid.setItemWidget(item, card)
+            current = card.selected_hip()
+            if current is not None:
+                self.w._project_hip_selection[project] = current
+
+        if current_path is not None:
+            for row in range(self.w.project_grid.count()):
+                item = self.w.project_grid.item(row)
+                if not item:
+                    continue
+                path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
+                if path_text and Path(str(path_text)) == current_path:
+                    self.w.project_grid.setCurrentItem(item)
+                    break
         self.w.status.setText(f"{self.w.project_grid.count()} project(s)")
         self.refresh_project_watch_paths()
+        if self._detail_pinned and self._detail_project_path and self._detail_project_path.exists():
+            self._show_project_detail(self._detail_project_path)
 
     def browse_projects_dir(self) -> None:
         directory = QtWidgets.QFileDialog.getExistingDirectory(
@@ -213,6 +247,7 @@ class ProjectsController:
             self.w.project_grid.setCurrentItem(item)
         hip = card.selected_hip()
         if hip is not None:
+            self.w._project_hip_selection[card.project_path] = hip
             self.w.status.setText(f"Selected: {hip.name}")
 
     def on_project_selected(
@@ -221,26 +256,23 @@ class ProjectsController:
         _previous: Optional[QtWidgets.QListWidgetItem] = None,
     ) -> None:
         if current is None:
+            if self._detail_pinned:
+                return
             return
         path_text = current.data(QtCore.Qt.ItemDataRole.UserRole)
         if not path_text:
+            if self._detail_pinned:
+                return
             return
         project_path = Path(str(path_text))
         if not project_path.exists():
+            if self._detail_pinned:
+                return
             return
 
-        self.w.project_detail_panel.setVisible(True)
-        self.w.project_detail_panel.raise_()
-        self.w.project_detail_title.setText(f"Structure: {project_path.name}")
-        self.w.project_detail_tree.clear()
-
-        root_item = QtWidgets.QTreeWidgetItem([project_path.name])
-        root_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, str(project_path))
-        self.w.project_detail_tree.addTopLevelItem(root_item)
-        self._add_lazy_children(root_item, project_path)
-        root_item.setExpanded(True)
-        if hasattr(self.w, "board_controller"):
-            self.w.board_controller.set_project(project_path)
+        self._detail_pinned = True
+        self._detail_project_path = project_path
+        self._show_project_detail(project_path)
 
     def open_selected_project_folder(self) -> None:
         item = self.w.project_grid.currentItem()
@@ -257,6 +289,21 @@ class ProjectsController:
     def close_project_detail_panel(self) -> None:
         self.w.project_detail_panel.setVisible(False)
         self.w.project_grid.clearSelection()
+        self._detail_pinned = False
+        self._detail_project_path = None
+
+    def _show_project_detail(self, project_path: Path) -> None:
+        self.w.project_detail_panel.setVisible(True)
+        self.w.project_detail_title.setText(f"Structure: {project_path.name}")
+        self.w.project_detail_tree.clear()
+
+        root_item = QtWidgets.QTreeWidgetItem([project_path.name])
+        root_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, str(project_path))
+        self.w.project_detail_tree.addTopLevelItem(root_item)
+        self._add_lazy_children(root_item, project_path)
+        root_item.setExpanded(True)
+        if hasattr(self.w, "board_controller"):
+            self.w.board_controller.set_project(project_path)
 
     def _add_lazy_children(self, item: QtWidgets.QTreeWidgetItem, path: Path) -> None:
         try:
@@ -333,6 +380,12 @@ class ProjectsController:
         for key in list(cache.keys()):
             if key not in keep:
                 cache.pop(key, None)
+
+    def _prune_selection(self, projects: List[Path]) -> None:
+        keep = set(projects)
+        for key in list(self.w._project_hip_selection.keys()):
+            if key not in keep:
+                self.w._project_hip_selection.pop(key, None)
 
     def _get_project_hips(
         self, project_path: Path, cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None

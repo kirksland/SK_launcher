@@ -45,6 +45,7 @@ class ProjectCard(QtWidgets.QWidget):
         thumb_size: QtCore.QSize,
         hips: List[Path],
         show_cloud_badge: bool = False,
+        selected_hip: Optional[Path] = None,
         parent: Optional[QtWidgets.QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -52,6 +53,7 @@ class ProjectCard(QtWidgets.QWidget):
         self._hips = hips
         self._variants = group_hip_variants(self._hips)
         self._current_base: Optional[str] = None
+        self._thumb_size = thumb_size
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -98,16 +100,21 @@ class ProjectCard(QtWidgets.QWidget):
         layout.addWidget(thumb_container, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
         self.version_combo = QtWidgets.QComboBox()
-        self.version_combo.setFixedWidth(86)
+        self.version_combo.setFixedWidth(thumb_size.width())
         self.version_combo.setStyleSheet(
             "QComboBox {"
             "background: rgba(20, 20, 20, 180);"
             "color: #fff;"
-            "padding: 2px 10px;"
+            "padding: 2px 14px 2px 10px;"
             "border: 1px solid rgba(255,255,255,80);"
             "border-radius: 6px;"
             "}"
+            "QComboBox QAbstractItemView::item {"
+            "padding-right: 14px;"
+            "}"
         )
+        self.version_combo.view().setMinimumWidth(thumb_size.width())
+        self.version_combo.view().setMaximumWidth(thumb_size.width())
         thumb_layout.addWidget(
             self.version_combo,
             0,
@@ -120,8 +127,9 @@ class ProjectCard(QtWidgets.QWidget):
             self.version_combo.setVisible(False)
         else:
             self._build_variant_menu()
-            first_base = next(iter(self._variants.keys()))
-            self._set_current_base(first_base)
+            if not self._apply_selected_hip(selected_hip):
+                first_base = next(iter(self._variants.keys()))
+                self._set_current_base(first_base)
             self.version_combo.currentTextChanged.connect(self._emit_selection_changed)
 
     def _emit_selection_changed(self) -> None:
@@ -146,13 +154,40 @@ class ProjectCard(QtWidgets.QWidget):
             action.triggered.connect(lambda _checked=False, b=base: self._set_current_base(b))
         self.title_button.setMenu(menu)
 
-    def _set_current_base(self, base: str) -> None:
+    def _set_current_base(self, base: str, emit: bool = True) -> None:
         self._current_base = base
         self.version_combo.clear()
         entries = self._variants.get(base, [])
         for label, _path in entries:
             self.version_combo.addItem(label)
-        self._emit_selection_changed()
+        self._update_combo_popup_width(entries)
+        if emit:
+            self._emit_selection_changed()
+
+    def _update_combo_popup_width(self, entries: List[Tuple[str, Path]]) -> None:
+        if not entries:
+            self.version_combo.view().setMinimumWidth(self._thumb_size.width())
+            return
+        fm = self.version_combo.view().fontMetrics()
+        max_text = max(fm.horizontalAdvance(label) for label, _path in entries)
+        extra_padding = 15  # user-requested breathing room after the longest label
+        popup_width = max(self.version_combo.width(), max_text + extra_padding)
+        self.version_combo.view().setMinimumWidth(popup_width)
+        self.version_combo.view().setMaximumWidth(popup_width)
+
+    def _apply_selected_hip(self, selected_hip: Optional[Path]) -> bool:
+        if selected_hip is None:
+            return False
+        for base, entries in self._variants.items():
+            for label, path in entries:
+                if path == selected_hip:
+                    self._set_current_base(base, emit=False)
+                    idx = self.version_combo.findText(label)
+                    if idx >= 0:
+                        self.version_combo.setCurrentIndex(idx)
+                    self._emit_selection_changed()
+                    return True
+        return False
 
     def selected_hip(self) -> Optional[Path]:
         if not self._variants:
