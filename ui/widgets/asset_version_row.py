@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ui.utils.thumbnails import make_placeholder_pixmap
+from ui.utils.styles import PALETTE, combo_dark_style
 
 
 class AssetVersionRow(QtWidgets.QWidget):
@@ -29,7 +30,9 @@ class AssetVersionRow(QtWidgets.QWidget):
         self.thumb_label = QtWidgets.QLabel()
         self.thumb_label.setFixedSize(self._thumb_size)
         self.thumb_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.thumb_label.setStyleSheet("background: #23272e; border: 1px solid #14171c;")
+        self.thumb_label.setStyleSheet(
+            f"background: {PALETTE['thumb_bg']}; border: 1px solid {PALETTE['border']};"
+        )
         layout.addWidget(self.thumb_label, 0)
 
         self.name_label = QtWidgets.QLabel(base_name)
@@ -40,20 +43,12 @@ class AssetVersionRow(QtWidgets.QWidget):
         layout.addWidget(self.name_label, 1)
 
         self.types_label = QtWidgets.QLabel("")
-        self.types_label.setStyleSheet("color: #9aa3ad;")
+        self.types_label.setStyleSheet(f"color: {PALETTE['muted']};")
         layout.addWidget(self.types_label, 0)
 
         self.version_combo = QtWidgets.QComboBox()
         self.version_combo.setFixedWidth(80)
-        self.version_combo.setStyleSheet(
-            "QComboBox {"
-            "background: #2b2f36;"
-            "color: #d8dde5;"
-            "padding: 2px 6px;"
-            "border: 1px solid #14171c;"
-            "border-radius: 6px;"
-            "}"
-        )
+        self.version_combo.setStyleSheet(combo_dark_style())
         for entry in entries:
             self.version_combo.addItem(str(entry.get("label")))
         layout.addWidget(self.version_combo, 0)

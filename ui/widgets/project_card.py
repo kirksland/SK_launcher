@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ui.utils.thumbnails import add_cloud_badge, build_thumbnail_pixmap
+from ui.utils.styles import project_card_menu_style, project_card_title_style, project_card_version_combo_style
 
 
 def group_hip_variants(hips: List[Path]) -> Dict[str, List[Tuple[str, Path]]]:
@@ -34,6 +35,33 @@ def group_hip_variants(hips: List[Path]) -> Dict[str, List[Tuple[str, Path]]]:
 
         entries.sort(key=sort_key, reverse=True)
     return dict(sorted(grouped.items(), key=lambda kv: kv[0].lower()))
+
+
+class _HipVersionCombo(QtWidgets.QComboBox):
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._popup_padding = 15
+
+    def set_popup_padding(self, padding: int) -> None:
+        self._popup_padding = max(0, int(padding))
+
+    def showPopup(self) -> None:  # type: ignore[override]
+        super().showPopup()
+        labels = [self.itemText(i) for i in range(self.count())]
+        if not labels:
+            return
+        view = self.view()
+        fm = view.fontMetrics()
+        max_text = max(fm.horizontalAdvance(label) for label in labels)
+        base_gutter = 26  # left padding + frame
+        popup_width = max(self.width(), max_text + base_gutter + self._popup_padding)
+        QtCore.QTimer.singleShot(0, lambda w=popup_width: self._apply_popup_width(w))
+
+    def _apply_popup_width(self, width: int) -> None:
+        view = self.view()
+        popup = view.window()
+        popup.setFixedWidth(width)
+        view.setFixedWidth(width)
 
 
 class ProjectCard(QtWidgets.QWidget):
@@ -83,13 +111,7 @@ class ProjectCard(QtWidgets.QWidget):
         title_font.setPointSize(11)
         self.title_button.setFont(title_font)
         self.title_button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
-        self.title_button.setStyleSheet(
-            "QToolButton {"
-            "background: #ffffff;"
-            "color: #111;"
-            "padding: 4px 6px;"
-            "}"
-        )
+        self.title_button.setStyleSheet(project_card_title_style())
         thumb_layout.addWidget(
             self.title_button,
             0,
@@ -99,22 +121,11 @@ class ProjectCard(QtWidgets.QWidget):
 
         layout.addWidget(thumb_container, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
-        self.version_combo = QtWidgets.QComboBox()
-        self.version_combo.setFixedWidth(thumb_size.width())
-        self.version_combo.setStyleSheet(
-            "QComboBox {"
-            "background: rgba(20, 20, 20, 180);"
-            "color: #fff;"
-            "padding: 2px 14px 2px 10px;"
-            "border: 1px solid rgba(255,255,255,80);"
-            "border-radius: 6px;"
-            "}"
-            "QComboBox QAbstractItemView::item {"
-            "padding-right: 14px;"
-            "}"
-        )
-        self.version_combo.view().setMinimumWidth(thumb_size.width())
-        self.version_combo.view().setMaximumWidth(thumb_size.width())
+        self.version_combo = _HipVersionCombo()
+        self.version_combo.setFixedWidth(86)
+        self.version_combo.setStyleSheet(project_card_version_combo_style())
+        self.version_combo.view().setMinimumWidth(86)
+        self.version_combo.set_popup_padding(15)
         thumb_layout.addWidget(
             self.version_combo,
             0,
@@ -139,20 +150,26 @@ class ProjectCard(QtWidgets.QWidget):
 
     def _build_variant_menu(self) -> None:
         menu = QtWidgets.QMenu(self)
-        menu.setStyleSheet(
-            "QMenu {"
-            "background: #ffffff;"
-            "color: #111;"
-            "border: 1px solid #d0d0d0;"
-            "}"
-            "QMenu::item:selected {"
-            "background: #e6e6e6;"
-            "}"
-        )
+        menu.setStyleSheet(project_card_menu_style())
         for base in self._variants.keys():
             action = menu.addAction(base)
             action.triggered.connect(lambda _checked=False, b=base: self._set_current_base(b))
         self.title_button.setMenu(menu)
+        self._variant_menu = menu
+        menu.aboutToShow.connect(self._update_variant_menu_width)
+
+    def _update_variant_menu_width(self) -> None:
+        menu = getattr(self, "_variant_menu", None)
+        if menu is None:
+            return
+        labels = [a.text() for a in menu.actions()]
+        if not labels:
+            return
+        fm = menu.fontMetrics()
+        max_text = max(fm.horizontalAdvance(label) for label in labels)
+        extra_padding = 30  # right breathing room after longest label
+        menu_width = max(self.title_button.width(), max_text + extra_padding)
+        menu.setFixedWidth(menu_width)
 
     def _set_current_base(self, base: str, emit: bool = True) -> None:
         self._current_base = base
@@ -160,20 +177,8 @@ class ProjectCard(QtWidgets.QWidget):
         entries = self._variants.get(base, [])
         for label, _path in entries:
             self.version_combo.addItem(label)
-        self._update_combo_popup_width(entries)
         if emit:
             self._emit_selection_changed()
-
-    def _update_combo_popup_width(self, entries: List[Tuple[str, Path]]) -> None:
-        if not entries:
-            self.version_combo.view().setMinimumWidth(self._thumb_size.width())
-            return
-        fm = self.version_combo.view().fontMetrics()
-        max_text = max(fm.horizontalAdvance(label) for label, _path in entries)
-        extra_padding = 15  # user-requested breathing room after the longest label
-        popup_width = max(self.version_combo.width(), max_text + extra_padding)
-        self.version_combo.view().setMinimumWidth(popup_width)
-        self.version_combo.view().setMaximumWidth(popup_width)
 
     def _apply_selected_hip(self, selected_hip: Optional[Path]) -> bool:
         if selected_hip is None:

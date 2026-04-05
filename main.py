@@ -22,6 +22,7 @@ from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
 from controllers.board_controller import BoardController
 from ui.widgets.project_card import ProjectCard
+from ui.utils.styles import PALETTE, app_stylesheet
 
 APP_TITLE = "Skyforge Launcher"
 TEST_PIPELINE_ROOT = Path(__file__).resolve().parent / "projects" / "test_pipeline"
@@ -55,14 +56,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._asset_watch_enabled = True
 
         central = QtWidgets.QWidget()
-        central.setStyleSheet(
-            "QWidget { background: #1f2329; color: #d8dde5; }"
-            "QListWidget { background: #1f2329; border: none; }"
-            "QLineEdit { background: #2b2f36; border: 1px solid #14171c; padding: 4px 6px; }"
-            "QPushButton { background: #2b2f36; border: 1px solid #14171c; padding: 4px 8px; }"
-            "QPushButton:hover { background: #323741; }"
-            "QComboBox { background: #2b2f36; border: 1px solid #14171c; padding: 2px 6px; }"
-        )
+        central.setStyleSheet(app_stylesheet())
         self.setCentralWidget(central)
         outer = QtWidgets.QHBoxLayout(central)
 
@@ -122,7 +116,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         title_font.setBold(True)
         title_font.setPointSize(20)
         side_title.setFont(title_font)
-        side_title.setStyleSheet("color: #cfd6df;")
+        side_title.setStyleSheet(f"color: {PALETTE['light_text']};")
         side_layout.addWidget(side_title)
 
         side_sub = QtWidgets.QLabel("Launcher")
@@ -130,7 +124,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         sub_font = QtGui.QFont()
         sub_font.setPointSize(14)
         side_sub.setFont(sub_font)
-        side_sub.setStyleSheet("color: #9aa3ad;")
+        side_sub.setStyleSheet(f"color: {PALETTE['muted']};")
         side_layout.addWidget(side_sub)
 
         side_layout.addSpacing(18)
