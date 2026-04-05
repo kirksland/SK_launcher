@@ -34,6 +34,7 @@ class ProjectsController:
         self.w = window
         self._project_watcher: Optional[QtCore.QFileSystemWatcher] = None
         self._project_refresh_timer: Optional[QtCore.QTimer] = None
+        self.w.project_detail_tree.itemExpanded.connect(self._on_tree_item_expanded)
 
     def refresh_projects(self, *_: object) -> None:
         self.w.project_grid.clear()
@@ -220,38 +221,24 @@ class ProjectsController:
         _previous: Optional[QtWidgets.QListWidgetItem] = None,
     ) -> None:
         if current is None:
-            self.w.project_detail_panel.setVisible(False)
-            if hasattr(self.w, "board_controller"):
-                self.w.board_controller.set_project(None)
             return
         path_text = current.data(QtCore.Qt.ItemDataRole.UserRole)
         if not path_text:
-            self.w.project_detail_panel.setVisible(False)
-            if hasattr(self.w, "board_controller"):
-                self.w.board_controller.set_project(None)
             return
         project_path = Path(str(path_text))
         if not project_path.exists():
-            self.w.project_detail_panel.setVisible(False)
-            if hasattr(self.w, "board_controller"):
-                self.w.board_controller.set_project(None)
             return
 
         self.w.project_detail_panel.setVisible(True)
+        self.w.project_detail_panel.raise_()
         self.w.project_detail_title.setText(f"Structure: {project_path.name}")
         self.w.project_detail_tree.clear()
 
         root_item = QtWidgets.QTreeWidgetItem([project_path.name])
+        root_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, str(project_path))
         self.w.project_detail_tree.addTopLevelItem(root_item)
-        children = sorted(project_path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-        for child in children:
-            child_item = QtWidgets.QTreeWidgetItem([child.name])
-            root_item.addChild(child_item)
-            if child.is_dir():
-                for sub in sorted(child.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-                    sub_item = QtWidgets.QTreeWidgetItem([sub.name])
-                    child_item.addChild(sub_item)
-        self.w.project_detail_tree.expandAll()
+        self._add_lazy_children(root_item, project_path)
+        root_item.setExpanded(True)
         if hasattr(self.w, "board_controller"):
             self.w.board_controller.set_project(project_path)
 
@@ -270,6 +257,31 @@ class ProjectsController:
     def close_project_detail_panel(self) -> None:
         self.w.project_detail_panel.setVisible(False)
         self.w.project_grid.clearSelection()
+
+    def _add_lazy_children(self, item: QtWidgets.QTreeWidgetItem, path: Path) -> None:
+        try:
+            children = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except Exception:
+            return
+        for child in children:
+            child_item = QtWidgets.QTreeWidgetItem([child.name])
+            child_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, str(child))
+            item.addChild(child_item)
+            if child.is_dir():
+                placeholder = QtWidgets.QTreeWidgetItem(["Loading..."])
+                placeholder.setData(0, QtCore.Qt.ItemDataRole.UserRole, None)
+                child_item.addChild(placeholder)
+
+    def _on_tree_item_expanded(self, item: QtWidgets.QTreeWidgetItem) -> None:
+        path_text = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if not path_text:
+            return
+        path = Path(str(path_text))
+        if not path.is_dir():
+            return
+        if item.childCount() == 1 and item.child(0).text(0) == "Loading...":
+            item.takeChild(0)
+            self._add_lazy_children(item, path)
 
     def _launch_houdini(self, hip: Path, project_path: Path) -> None:
         if not self.w._houdini_exe:

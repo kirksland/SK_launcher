@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 import shutil
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -180,7 +181,71 @@ class BoardNoteItem(QtWidgets.QGraphicsRectItem):
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.setBrush(self._bg_color)
         painter.drawRoundedRect(self.rect(), 8, 8)
+        if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
+            pen = QtGui.QPen(QtGui.QColor("#c6ccd6"), 1.5, QtCore.Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 8, 8)
         painter.restore()
+
+
+class BoardImageItem(QtWidgets.QGraphicsItem):
+    def __init__(
+        self,
+        controller: "BoardController",
+        path: Path,
+        parent: Optional[QtWidgets.QGraphicsItem] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._controller = controller
+        self._path = path
+        self._proxy_dim = 512
+        self._full_dim = controller._max_display_dim
+        self._quality = "proxy"
+        self._proxy_pixmap = controller._get_display_pixmap(path, self._proxy_dim)
+        self._full_pixmap: Optional[QtGui.QPixmap] = None
+        self._pixmap = self._proxy_pixmap
+        self._logical_size = controller._get_image_size(path, fallback=self._pixmap.size())
+        self._rect = QtCore.QRectF(0, 0, float(self._logical_size.width()), float(self._logical_size.height()))
+        self.setTransformOriginPoint(self._rect.center())
+
+    def set_quality(self, quality: str) -> None:
+        if quality == self._quality:
+            return
+        if quality == "full":
+            if self._full_pixmap is None:
+                self._full_pixmap = self._controller._get_display_pixmap(self._path, self._full_dim)
+            new_pixmap = self._full_pixmap
+        else:
+            new_pixmap = self._proxy_pixmap
+        if new_pixmap is None or new_pixmap.isNull():
+            return
+        self._pixmap = new_pixmap
+        self.update()
+        self._quality = quality
+
+    def file_name(self) -> str:
+        return self._path.name
+
+    def boundingRect(self) -> QtCore.QRectF:  # type: ignore[override]
+        return self._rect
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        if self._pixmap is None or self._pixmap.isNull():
+            return
+        painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
+            pen = QtGui.QPen(QtGui.QColor("#c6ccd6"), 1.5, QtCore.Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
 
 
 class BoardGroupItem(QtWidgets.QGraphicsRectItem):
@@ -277,8 +342,18 @@ class BoardController:
         self._loading = False
         self._saving = False
         self._last_save_ts = 0.0
+        self._pixmap_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
+        self._max_display_dim = 2048
+        self._low_quality = False
+        self._visible_images: set[int] = set()
+        self._history: list[str] = []
+        self._history_index = -1
+        self._history_timer: Optional[QtCore.QTimer] = None
+        self._group_tree_timer: Optional[QtCore.QTimer] = None
+        self._group_tree_refs: dict[int, BoardGroupItem] = {}
         self._scene = self.w.board_page.scene
         self._scene.changed.connect(self._on_scene_changed)
+        self.w.board_page.groups_tree.itemClicked.connect(self._on_group_tree_clicked)
 
     def set_project(self, project_root: Optional[Path]) -> None:
         if project_root is None and self._project_root is not None:
@@ -296,6 +371,8 @@ class BoardController:
         if project_root:
             self.w.board_page.project_label.setText(f"Project: {project_root.name}")
             self.load_board()
+            if self._history_index < 0:
+                self._reset_history(self._build_payload())
         else:
             self.w.board_page.project_label.setText("No project selected")
             self._scene.clear()
@@ -322,6 +399,9 @@ class BoardController:
         if not self._project_root:
             print("[BOARD] No project root set")
             return None
+        if not src.is_file():
+            print(f"[BOARD] Not a file: {src}")
+            return None
         assets_dir = self._project_root / ".skyforge_board_assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
         dest = assets_dir / src.name
@@ -333,30 +413,87 @@ class BoardController:
                 print(f"[BOARD] Copy failed: {exc}")
                 self._notify(f"Failed to copy image:\n{exc}")
                 return None
-        pixmap = QtGui.QPixmap(str(dest))
-        if pixmap.isNull():
+        item = BoardImageItem(self, dest)
+        if item.boundingRect().isNull():
             print("[BOARD] Pixmap is null")
             self._notify("Failed to load image.")
             return None
-        item = QtWidgets.QGraphicsPixmapItem(pixmap)
         item.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
         )
-        item.setTransformationMode(QtCore.Qt.TransformationMode.SmoothTransformation)
-        item.setTransformOriginPoint(pixmap.rect().center())
+        item.setTransformOriginPoint(item.boundingRect().center())
         item.setData(0, "image")
         item.setData(1, dest.name)
         if scene_pos is None:
             scene_pos = self._scene.sceneRect().center()
         item.setPos(scene_pos)
-        if pixmap.width() > 600:
-            scale = 600 / max(1.0, pixmap.width())
+        logical_w = item.boundingRect().width()
+        if logical_w > 600:
+            scale = 600 / max(1.0, logical_w)
             item.setScale(scale)
         self._scene.addItem(item)
         self._dirty = True
+        self._update_view_quality()
+        self.update_visible_items()
+        self._schedule_history_snapshot()
         return item
+
+    def add_image_from_url(self, url: str, scene_pos: Optional[QtCore.QPointF] = None) -> None:
+        if not self._project_root:
+            self._notify("Select a project first.")
+            return
+        confirm = QtWidgets.QMessageBox.question(
+            self.w,
+            "Import Web Image",
+            f"Download and import this image?\n{url}",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        assets_dir = self._project_root / ".skyforge_board_assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = QtCore.QUrl(url).fileName() or f"web_{uuid.uuid4().hex}.png"
+        dest = assets_dir / safe_name
+        try:
+            urllib.request.urlretrieve(url, dest)
+        except Exception as exc:
+            self._notify(f"Failed to download image:\n{exc}")
+            return
+        self.add_image_from_path(dest, scene_pos=scene_pos)
+
+    def add_image_from_image_data(self, image_data, scene_pos: Optional[QtCore.QPointF] = None) -> None:
+        if not self._project_root:
+            self._notify("Select a project first.")
+            return
+        confirm = QtWidgets.QMessageBox.question(
+            self.w,
+            "Import Dropped Image",
+            "Import the dropped image into the board?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        image = None
+        if isinstance(image_data, QtGui.QImage):
+            image = image_data
+        elif isinstance(image_data, QtGui.QPixmap):
+            image = image_data.toImage()
+        if image is None or image.isNull():
+            self._notify("Dropped image data is not valid.")
+            return
+        assets_dir = self._project_root / ".skyforge_board_assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        dest = assets_dir / f"web_{uuid.uuid4().hex}.png"
+        try:
+            if not image.save(str(dest), "PNG"):
+                self._notify("Failed to save dropped image.")
+                return
+        except Exception as exc:
+            self._notify(f"Failed to save dropped image:\n{exc}")
+            return
+        self.add_image_from_path(dest, scene_pos=scene_pos)
 
     def add_note(self) -> None:
         self.add_note_at(None)
@@ -379,7 +516,7 @@ class BoardController:
         items = [
             i
             for i in self._scene.selectedItems()
-            if isinstance(i, (QtWidgets.QGraphicsPixmapItem, BoardNoteItem))
+            if isinstance(i, (BoardImageItem, BoardNoteItem))
         ]
         if not items:
             self._notify("Select images to group.")
@@ -398,9 +535,12 @@ class BoardController:
     def ungroup_selected(self) -> None:
         groups = [i for i in self._scene.selectedItems() if isinstance(i, BoardGroupItem)]
         if not groups:
+            print("[BOARD][UNGROUP] No group selected")
             self._notify("Select a group to ungroup.")
             return
+        print(f"[BOARD][UNGROUP] Ungroup {len(groups)} group(s)")
         for group in groups:
+            print(f"[BOARD][UNGROUP] Group members: {len(group.members())}")
             for member in group.members():
                 member.setSelected(True)
             self._scene.removeItem(group)
@@ -416,10 +556,11 @@ class BoardController:
                 group.add_member(item)
                 group.update_bounds()
                 self._dirty = True
+                self._schedule_history_snapshot()
                 return
 
     def handle_item_drop(self, items: list[QtWidgets.QGraphicsItem]) -> None:
-        moved = [i for i in items if isinstance(i, (QtWidgets.QGraphicsPixmapItem, BoardNoteItem))]
+        moved = [i for i in items if isinstance(i, (BoardImageItem, BoardNoteItem))]
         if not moved:
             return
         groups = self._groups()
@@ -440,11 +581,39 @@ class BoardController:
             elif target_group is None and current_group is not None:
                 if not current_group.contains_scene_point(center):
                     current_group.remove_member(item)
+            elif target_group is not None and current_group is None:
+                target_group.add_member(item)
             if current_group is not None:
                 current_group.update_bounds()
             if target_group is not None:
                 target_group.update_bounds()
         self._dirty = True
+        self._schedule_history_snapshot()
+
+    def remove_selected_from_groups(self) -> None:
+        removed = False
+        for item in self._scene.selectedItems():
+            group = self._find_group_for_item(item)
+            if group is not None:
+                group.remove_member(item)
+                group.update_bounds()
+                removed = True
+        if removed:
+            self._dirty = True
+            self._schedule_history_snapshot()
+
+    def add_selected_to_group(self, group_key: int) -> None:
+        group = self._group_tree_refs.get(int(group_key))
+        if group is None:
+            return
+        for item in self._scene.selectedItems():
+            if item is group:
+                continue
+            if item.data(0) in ("image", "note"):
+                group.add_member(item)
+        group.update_bounds()
+        self._dirty = True
+        self._schedule_history_snapshot()
 
     def select_group_members(self, group_item: BoardGroupItem) -> None:
         for item in self._scene.selectedItems():
@@ -470,10 +639,23 @@ class BoardController:
     def layout_selection_grid(self) -> None:
         items = [i for i in self._scene.selectedItems() if isinstance(i, QtWidgets.QGraphicsItem)]
         if not items:
-            items = [i for i in self._scene.items() if isinstance(i, QtWidgets.QGraphicsPixmapItem)]
+            items = [i for i in self._scene.items() if isinstance(i, BoardImageItem)]
         if not items:
             self._notify("Select items to layout.")
             return
+
+        # Treat grouped items as a single block to avoid breaking group layout.
+        grouped: list[QtWidgets.QGraphicsItem] = []
+        seen_groups: set[int] = set()
+        for item in items:
+            group = self._find_group_for_item(item)
+            if group is not None:
+                if id(group) not in seen_groups:
+                    grouped.append(group)
+                    seen_groups.add(id(group))
+            else:
+                grouped.append(item)
+        items = grouped
 
         spacing = 12.0
         bounds = QtCore.QRectF()
@@ -493,7 +675,7 @@ class BoardController:
 
         for item in items_sorted:
             rect = item.sceneBoundingRect()
-            if rect.width() > 0:
+            if rect.width() > 0 and not isinstance(item, BoardGroupItem):
                 scale_factor = col_width / rect.width()
                 item.setScale(item.scale() * scale_factor)
                 rect = item.sceneBoundingRect()
@@ -507,38 +689,7 @@ class BoardController:
         if not self._project_root:
             return
         board_path = self._project_root / ".skyforge_board.json"
-        data = {"items": []}
-        for item in self._scene.items():
-            kind = item.data(0)
-            if kind == "image":
-                data["items"].append({
-                    "type": "image",
-                    "file": str(item.data(1)),
-                    "x": item.pos().x(),
-                    "y": item.pos().y(),
-                    "scale": item.scale(),
-                })
-            elif kind == "note" and isinstance(item, BoardNoteItem):
-                data["items"].append({
-                    "type": "note",
-                    **item.note_data(),
-                    "x": item.pos().x(),
-                    "y": item.pos().y(),
-                })
-            elif kind == "group" and isinstance(item, BoardGroupItem):
-                members = []
-                for m in item.members():
-                    if m.data(0) == "image":
-                        members.append({"type": "image", "id": str(m.data(1))})
-                    elif m.data(0) == "note" and isinstance(m, BoardNoteItem):
-                        members.append({"type": "note", "id": m.note_id()})
-                if not members:
-                    continue
-                data["items"].append({
-                    "type": "group",
-                    "color": item.color_hex(),
-                    "members": members,
-                })
+        data = self._build_payload()
         try:
             self._saving = True
             self._last_save_ts = time.time()
@@ -559,81 +710,38 @@ class BoardController:
         if self._saving:
             return
         self._loading = True
+        self._scene.blockSignals(True)
         self._scene.clear()
         if not board_path.exists():
+            self._scene.blockSignals(False)
             self._loading = False
+            self._reset_history({"items": []})
             return
         try:
             payload = json.loads(board_path.read_text(encoding="utf-8"))
         except Exception:
+            self._scene.blockSignals(False)
             self._loading = False
             return
-        assets_dir = self._project_root / ".skyforge_board_assets"
-        image_map: dict[str, QtWidgets.QGraphicsPixmapItem] = {}
-        note_map: dict[str, BoardNoteItem] = {}
-        pending_groups = []
-        for entry in payload.get("items", []):
-            if entry.get("type") == "image":
-                filename = entry.get("file", "")
-                path = assets_dir / filename
-                pixmap = QtGui.QPixmap(str(path))
-                if pixmap.isNull():
-                    continue
-                item = QtWidgets.QGraphicsPixmapItem(pixmap)
-                item.setFlags(
-                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
-                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
-                )
-                item.setTransformationMode(QtCore.Qt.TransformationMode.SmoothTransformation)
-                item.setTransformOriginPoint(pixmap.rect().center())
-                item.setData(0, "image")
-                item.setData(1, filename)
-                item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
-                item.setScale(float(entry.get("scale", 1.0)))
-                self._scene.addItem(item)
-                if filename:
-                    image_map[str(filename)] = item
-            elif entry.get("type") == "note":
-                item = BoardNoteItem(entry.get("text", ""))
-                align = entry.get("align", "left")
-                align_flag = QtCore.Qt.AlignmentFlag.AlignHCenter if align == "center" else QtCore.Qt.AlignmentFlag.AlignLeft
-                bg = entry.get("bg", "#99000000")
-                item.set_note_style(int(entry.get("font_size", 12)), align_flag, QtGui.QColor(bg))
-                item.setScale(float(entry.get("scale", 1.0)))
-                item.setData(0, "note")
-                item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
-                note_id = entry.get("id") or uuid.uuid4().hex
-                item.set_note_id(str(note_id))
-                self._scene.addItem(item)
-                note_map[item.note_id()] = item
-            elif entry.get("type") == "group":
-                pending_groups.append(entry)
-        for entry in pending_groups:
-            color = QtGui.QColor(entry.get("color", "#4aa3ff"))
-            group = BoardGroupItem(color)
-            group.setData(0, "group")
-            self._scene.addItem(group)
-            for ref in entry.get("members", []):
-                if isinstance(ref, str):
-                    item = image_map.get(str(ref))
-                    if item is not None:
-                        group.add_member(item)
-                    continue
-                if isinstance(ref, dict):
-                    r_type = ref.get("type")
-                    r_id = str(ref.get("id", ""))
-                    if r_type == "image":
-                        item = image_map.get(r_id)
-                        if item is not None:
-                            group.add_member(item)
-                    elif r_type == "note":
-                        item = note_map.get(r_id)
-                        if item is not None:
-                            group.add_member(item)
-            group.update_bounds()
+        self._apply_payload(payload)
         self._dirty = False
         self._loading = False
+        self._scene.blockSignals(False)
+        self._update_view_quality()
+        self.update_visible_items()
+        self._reset_history(payload)
+        QtCore.QTimer.singleShot(0, self._fit_view_after_load)
+
+    def _fit_view_after_load(self) -> None:
+        rect = self._scene.itemsBoundingRect()
+        if rect.isNull():
+            return
+        self.fit_view()
+        view = self.w.board_page.view
+        zoom = view.transform().m11()
+        if zoom < 0.02:
+            view.resetTransform()
+            view.centerOn(rect.center())
 
     def edit_note(self, item: BoardNoteItem, global_pos: Optional[QtCore.QPoint] = None) -> None:
         dialog = QtWidgets.QDialog(self.w)
@@ -687,6 +795,13 @@ class BoardController:
                 color_preview.setStyleSheet(
                     f"background: {color.name(QtGui.QColor.NameFormat.HexArgb)}; border: 1px solid #333;"
                 )
+                preview_align = (
+                    QtCore.Qt.AlignmentFlag.AlignHCenter
+                    if align_combo.currentText() == "Center"
+                    else QtCore.Qt.AlignmentFlag.AlignLeft
+                )
+                item.set_note_style(size_spin.value(), preview_align, selected_color)
+                self._dirty = True
 
         def apply_changes() -> None:
             nonlocal applied
@@ -722,7 +837,18 @@ class BoardController:
             scene_pos = item.sceneBoundingRect().topLeft()
             view_pos = view.mapFromScene(scene_pos)
             global_pos = view.viewport().mapToGlobal(view_pos)
-        dialog.move(global_pos + QtCore.QPoint(12, 12))
+        dialog.adjustSize()
+        target = global_pos + QtCore.QPoint(12, 12)
+        screen = QtGui.QGuiApplication.screenAt(target)
+        if screen is None:
+            screen = QtGui.QGuiApplication.primaryScreen()
+        if screen is not None:
+            geom = screen.availableGeometry()
+            dlg = dialog.frameGeometry()
+            x = max(geom.left() + 8, min(target.x(), geom.right() - dlg.width() - 8))
+            y = max(geom.top() + 8, min(target.y(), geom.bottom() - dlg.height() - 8))
+            target = QtCore.QPoint(x, y)
+        dialog.move(target)
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
@@ -739,6 +865,321 @@ class BoardController:
                 if not item.members():
                     self._scene.removeItem(item)
         self._dirty = True
+        self._update_view_quality()
+        self._schedule_history_snapshot()
+        self._schedule_group_tree_update()
+
+    def _get_display_pixmap(self, path: Path, max_dim: Optional[int] = None) -> QtGui.QPixmap:
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            return QtGui.QPixmap(str(path))
+        if max_dim is None:
+            max_dim = self._max_display_dim
+        key = (path, max_dim)
+        cached = self._pixmap_cache.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        pixmap = QtGui.QPixmap(str(path))
+        if not pixmap.isNull():
+            if pixmap.width() > max_dim or pixmap.height() > max_dim:
+                pixmap = pixmap.scaled(
+                    max_dim,
+                    max_dim,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+        self._pixmap_cache[key] = (mtime, pixmap)
+        return pixmap
+
+    def _get_image_size(self, path: Path, fallback: Optional[QtCore.QSize] = None) -> QtCore.QSize:
+        try:
+            reader = QtGui.QImageReader(str(path))
+            size = reader.size()
+            if size.isValid():
+                return size
+        except Exception:
+            pass
+        if fallback is not None and fallback.isValid():
+            return fallback
+        return QtCore.QSize(1, 1)
+
+    def _update_view_quality(self) -> None:
+        view = self.w.board_page.view
+        item_count = sum(1 for i in self._scene.items() if i.data(0) in ("image", "note", "group"))
+        low_quality = item_count >= 200
+        if low_quality == self._low_quality:
+            return
+        self._low_quality = low_quality
+        if low_quality:
+            view.setRenderHints(QtGui.QPainter.RenderHint.Antialiasing, False)
+            view.setRenderHints(QtGui.QPainter.RenderHint.SmoothPixmapTransform, False)
+            view.setRenderHints(QtGui.QPainter.RenderHint.TextAntialiasing, False)
+        else:
+            view.setRenderHints(
+                QtGui.QPainter.RenderHint.Antialiasing
+                | QtGui.QPainter.RenderHint.SmoothPixmapTransform
+                | QtGui.QPainter.RenderHint.TextAntialiasing
+            )
+
+    def update_visible_items(self) -> None:
+        view = self.w.board_page.view
+        visible_rect = view.mapToScene(view.viewport().rect()).boundingRect().adjusted(-200, -200, 200, 200)
+        zoom = view.transform().m11()
+        want_full = zoom >= 0.45
+        new_visible: set[int] = set()
+        for item in self._scene.items(visible_rect):
+            if isinstance(item, BoardImageItem):
+                new_visible.add(id(item))
+                item.set_quality("full" if want_full else "proxy")
+        for item_id in list(self._visible_images - new_visible):
+            for item in self._scene.items():
+                if id(item) == item_id and isinstance(item, BoardImageItem):
+                    item.set_quality("proxy")
+                    break
+        self._visible_images = new_visible
+
+    def undo(self) -> None:
+        if self._history_index <= 0:
+            return
+        self._history_index -= 1
+        payload = json.loads(self._history[self._history_index])
+        self._loading = True
+        self._scene.blockSignals(True)
+        self._scene.clear()
+        self._apply_payload(payload)
+        self._scene.blockSignals(False)
+        self._loading = False
+        self._dirty = True
+        self._update_view_quality()
+        self.update_visible_items()
+
+    def redo(self) -> None:
+        if self._history_index >= len(self._history) - 1:
+            return
+        self._history_index += 1
+        payload = json.loads(self._history[self._history_index])
+        self._loading = True
+        self._scene.blockSignals(True)
+        self._scene.clear()
+        self._apply_payload(payload)
+        self._scene.blockSignals(False)
+        self._loading = False
+        self._dirty = True
+        self._update_view_quality()
+        self.update_visible_items()
+
+    def _build_payload(self) -> dict:
+        data = {"items": []}
+        for item in self._scene.items():
+            kind = item.data(0)
+            if kind == "image":
+                data["items"].append({
+                    "type": "image",
+                    "file": str(item.data(1)),
+                    "x": item.pos().x(),
+                    "y": item.pos().y(),
+                    "scale": item.scale(),
+                })
+            elif kind == "note" and isinstance(item, BoardNoteItem):
+                data["items"].append({
+                    "type": "note",
+                    **item.note_data(),
+                    "x": item.pos().x(),
+                    "y": item.pos().y(),
+                })
+            elif kind == "group" and isinstance(item, BoardGroupItem):
+                members = []
+                for m in item.members():
+                    if m.data(0) == "image":
+                        members.append({"type": "image", "id": str(m.data(1))})
+                    elif m.data(0) == "note" and isinstance(m, BoardNoteItem):
+                        members.append({"type": "note", "id": m.note_id()})
+                if not members:
+                    continue
+                data["items"].append({
+                    "type": "group",
+                    "color": item.color_hex(),
+                    "members": members,
+                })
+        return data
+
+    def _apply_payload(self, payload: dict) -> None:
+        assets_dir = self._project_root / ".skyforge_board_assets" if self._project_root else None
+        image_map: dict[str, QtWidgets.QGraphicsPixmapItem] = {}
+        note_map: dict[str, BoardNoteItem] = {}
+        pending_groups = []
+        for entry in payload.get("items", []):
+            if entry.get("type") == "image" and assets_dir is not None:
+                filename = entry.get("file", "")
+                path = assets_dir / filename
+                item = BoardImageItem(self, path)
+                if item.boundingRect().isNull():
+                    continue
+                item.setFlags(
+                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+                )
+                item.setTransformOriginPoint(item.boundingRect().center())
+                item.setData(0, "image")
+                item.setData(1, filename)
+                item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+                item.setScale(float(entry.get("scale", 1.0)))
+                self._scene.addItem(item)
+                if filename:
+                    image_map[str(filename)] = item
+            elif entry.get("type") == "note":
+                item = BoardNoteItem(entry.get("text", ""))
+                align = entry.get("align", "left")
+                align_flag = QtCore.Qt.AlignmentFlag.AlignHCenter if align == "center" else QtCore.Qt.AlignmentFlag.AlignLeft
+                bg = entry.get("bg", "#99000000")
+                item.set_note_style(int(entry.get("font_size", 12)), align_flag, QtGui.QColor(bg))
+                item.setScale(float(entry.get("scale", 1.0)))
+                item.setData(0, "note")
+                item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+                note_id = entry.get("id") or uuid.uuid4().hex
+                item.set_note_id(str(note_id))
+                self._scene.addItem(item)
+                note_map[item.note_id()] = item
+            elif entry.get("type") == "group":
+                pending_groups.append(entry)
+        for entry in pending_groups:
+            color = QtGui.QColor(entry.get("color", "#4aa3ff"))
+            group = BoardGroupItem(color)
+            group.setData(0, "group")
+            self._scene.addItem(group)
+            for ref in entry.get("members", []):
+                if isinstance(ref, str):
+                    item = image_map.get(str(ref))
+                    if item is not None:
+                        group.add_member(item)
+                    continue
+                if isinstance(ref, dict):
+                    r_type = ref.get("type")
+                    r_id = str(ref.get("id", ""))
+                    if r_type == "image":
+                        item = image_map.get(r_id)
+                        if item is not None:
+                            group.add_member(item)
+                    elif r_type == "note":
+                        item = note_map.get(r_id)
+                        if item is not None:
+                            group.add_member(item)
+            group.update_bounds()
+
+    def _schedule_history_snapshot(self) -> None:
+        if self._loading or self._saving:
+            return
+        if self._history_timer is not None:
+            return
+        self._history_timer = QtCore.QTimer(self.w)
+        self._history_timer.setSingleShot(True)
+        self._history_timer.timeout.connect(self._capture_history_snapshot)
+        self._history_timer.start(250)
+
+    def _capture_history_snapshot(self) -> None:
+        self._history_timer = None
+        payload = self._build_payload()
+        serialized = json.dumps(payload, sort_keys=True)
+        if self._history and self._history[self._history_index] == serialized:
+            return
+        if self._history_index < len(self._history) - 1:
+            self._history = self._history[: self._history_index + 1]
+        self._history.append(serialized)
+        self._history_index = len(self._history) - 1
+
+    def _reset_history(self, payload: dict) -> None:
+        serialized = json.dumps(payload, sort_keys=True)
+        self._history = [serialized]
+        self._history_index = 0
+
+    def _schedule_group_tree_update(self) -> None:
+        if self._group_tree_timer is not None:
+            return
+        self._group_tree_timer = QtCore.QTimer(self.w)
+        self._group_tree_timer.setSingleShot(True)
+        self._group_tree_timer.timeout.connect(self._update_group_tree)
+        self._group_tree_timer.start(200)
+
+    def _update_group_tree(self) -> None:
+        self._group_tree_timer = None
+        tree = self.w.board_page.groups_tree
+        tree.blockSignals(True)
+        tree.clear()
+        self._group_tree_refs = {}
+        groups = self._groups()
+        root_groups = QtWidgets.QTreeWidgetItem(["Groups"])
+        root_groups.setForeground(0, QtGui.QColor("#c6ccd6"))
+        tree.addTopLevelItem(root_groups)
+        for idx, group in enumerate(groups, start=1):
+            title = f"Group {idx}"
+            top = QtWidgets.QTreeWidgetItem([title])
+            top.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("group", idx))
+            top.setForeground(0, QtGui.QColor(group.color_hex()))
+            root_groups.addChild(top)
+            self._group_tree_refs[idx] = group
+            for member in group.members():
+                if member.data(0) == "image":
+                    label = str(member.data(1))
+                    child = QtWidgets.QTreeWidgetItem([label])
+                    child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("image", label))
+                    top.addChild(child)
+                elif member.data(0) == "note" and isinstance(member, BoardNoteItem):
+                    text = member.text_item.toPlainText().strip().replace("\n", " ")
+                    label = f"Note: {text[:24] + ('…' if len(text) > 24 else '')}"
+                    child = QtWidgets.QTreeWidgetItem([label])
+                    child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("note", member.note_id()))
+                    top.addChild(child)
+
+        root_ungrouped = QtWidgets.QTreeWidgetItem(["Ungrouped"])
+        root_ungrouped.setForeground(0, QtGui.QColor("#c6ccd6"))
+        tree.addTopLevelItem(root_ungrouped)
+        for item in self._scene.items():
+            if item.data(0) not in ("image", "note"):
+                continue
+            if self._find_group_for_item(item) is not None:
+                continue
+            if item.data(0) == "image":
+                label = str(item.data(1))
+                child = QtWidgets.QTreeWidgetItem([label])
+                child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("image", label))
+                root_ungrouped.addChild(child)
+            elif item.data(0) == "note" and isinstance(item, BoardNoteItem):
+                text = item.text_item.toPlainText().strip().replace("\n", " ")
+                label = f"Note: {text[:24] + ('…' if len(text) > 24 else '')}"
+                child = QtWidgets.QTreeWidgetItem([label])
+                child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("note", item.note_id()))
+                root_ungrouped.addChild(child)
+
+        tree.expandAll()
+        tree.blockSignals(False)
+
+    def _on_group_tree_clicked(self, item: QtWidgets.QTreeWidgetItem) -> None:
+        info = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if not isinstance(info, tuple):
+            return
+        kind = info[0]
+        if kind == "group":
+            group = self._group_tree_refs.get(int(info[1]))
+            if group is not None:
+                self.select_group_members(group)
+        elif kind == "image":
+            name = str(info[1])
+            for it in self._scene.items():
+                if it.data(0) == "image" and str(it.data(1)) == name:
+                    for sel in self._scene.selectedItems():
+                        sel.setSelected(False)
+                    it.setSelected(True)
+                    break
+        elif kind == "note":
+            note_id = str(info[1])
+            for it in self._scene.items():
+                if it.data(0) == "note" and isinstance(it, BoardNoteItem) and it.note_id() == note_id:
+                    for sel in self._scene.selectedItems():
+                        sel.setSelected(False)
+                    it.setSelected(True)
+                    break
 
     def _notify(self, text: str) -> None:
         self.w.asset_status.setText(text)
