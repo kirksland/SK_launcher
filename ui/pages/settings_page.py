@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtWidgets
 
 from core.settings import discover_houdini_installations, normalize_houdini_exe
+from ui.utils.styles import title_style
 
 
 class SettingsPage(QtWidgets.QWidget):
@@ -25,7 +26,7 @@ class SettingsPage(QtWidgets.QWidget):
         layout.setSpacing(10)
 
         title = QtWidgets.QLabel("Settings")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setStyleSheet(title_style())
         layout.addWidget(title)
 
         form = QtWidgets.QFormLayout()
@@ -77,6 +78,7 @@ class SettingsPage(QtWidgets.QWidget):
         self.settings_houdini_exe = QtWidgets.QLineEdit(houdini_exe)
         self.settings_houdini_exe.setPlaceholderText("Optional: path to houdini.exe")
         form.addRow("Houdini Executable", self.settings_houdini_exe)
+
 
         self._sync_houdini_version_selection()
         self.settings_houdini_version.currentIndexChanged.connect(self._on_houdini_version_changed)

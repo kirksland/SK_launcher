@@ -7,9 +7,15 @@ from PySide6 import QtCore, QtGui
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 BADGE_SVG_PATH = ROOT_DIR / "config" / "icons" / "cloud.svg"
+_THUMB_CACHE: dict[tuple[str, int, int, float], QtGui.QPixmap] = {}
+_PLACEHOLDER_CACHE: dict[tuple[str, int, int], QtGui.QPixmap] = {}
 
 
 def make_placeholder_pixmap(text: str, size: QtCore.QSize) -> QtGui.QPixmap:
+    cache_key = (text, size.width(), size.height())
+    cached = _PLACEHOLDER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     pixmap = QtGui.QPixmap(size)
     pixmap.fill(QtGui.QColor("#2b2f36"))
 
@@ -30,6 +36,7 @@ def make_placeholder_pixmap(text: str, size: QtCore.QSize) -> QtGui.QPixmap:
         painter.drawText(pixmap.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, text)
     painter.end()
 
+    _PLACEHOLDER_CACHE[cache_key] = pixmap
     return pixmap
 
 
@@ -58,6 +65,15 @@ def build_thumbnail_pixmap(project_path: Path, size: QtCore.QSize) -> QtGui.QPix
     if image_path is None:
         return make_placeholder_pixmap("Preview", size)
 
+    try:
+        mtime = image_path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cache_key = (str(image_path), size.width(), size.height(), mtime)
+    cached = _THUMB_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     pixmap = QtGui.QPixmap(str(image_path))
     if pixmap.isNull():
         return make_placeholder_pixmap("Preview", size)
@@ -71,7 +87,9 @@ def build_thumbnail_pixmap(project_path: Path, size: QtCore.QSize) -> QtGui.QPix
     # Center-crop to exact size
     x = max(0, (scaled.width() - size.width()) // 2)
     y = max(0, (scaled.height() - size.height()) // 2)
-    return scaled.copy(x, y, size.width(), size.height())
+    result = scaled.copy(x, y, size.width(), size.height())
+    _THUMB_CACHE[cache_key] = result
+    return result
 
 
 def add_cloud_badge(pixmap: QtGui.QPixmap, badge_path: Optional[Path] = None) -> QtGui.QPixmap:

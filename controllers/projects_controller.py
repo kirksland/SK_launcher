@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.fs import find_hips, find_projects, open_hip
+from core.fs import find_projects, list_hips_with_mtime, open_hip
 from core.settings import DEFAULT_TEMPLATE_HIP
 from core.watchers import update_watcher_paths
 from ui.widgets.project_card import ProjectCard
@@ -36,9 +37,23 @@ class ProjectsController:
         self._project_refresh_timer: Optional[QtCore.QTimer] = None
         self._detail_pinned = False
         self._detail_project_path: Optional[Path] = None
-        self.w.project_detail_tree.itemExpanded.connect(self._on_tree_item_expanded)
+        self._scan_token = 0.0
+        self._dir_cache: Dict[Path, list[tuple[str, bool]]] = {}
+        self._fs_model = QtWidgets.QFileSystemModel(self.w)
+        self._fs_model.setReadOnly(True)
+        self._fs_model.setFilter(
+            QtCore.QDir.Filter.AllDirs
+            | QtCore.QDir.Filter.Files
+            | QtCore.QDir.Filter.NoDotAndDotDot
+        )
+        print("[PROJECTS] Controller init")
+        self.w.project_detail_tree.setModel(self._fs_model)
+        for col in (1, 2, 3):
+            self.w.project_detail_tree.setColumnHidden(col, True)
 
     def refresh_projects(self, *_: object) -> None:
+        self._scan_token = time.time()
+        self._dir_cache.clear()
         current_item = self.w.project_grid.currentItem()
         current_path: Optional[Path] = None
         if current_item is not None:
@@ -291,44 +306,36 @@ class ProjectsController:
         self.w.project_grid.clearSelection()
         self._detail_pinned = False
         self._detail_project_path = None
+        self.w.project_detail_tree.setRootIndex(QtCore.QModelIndex())
 
     def _show_project_detail(self, project_path: Path) -> None:
         self.w.project_detail_panel.setVisible(True)
         self.w.project_detail_title.setText(f"Structure: {project_path.name}")
-        self.w.project_detail_tree.clear()
-
-        root_item = QtWidgets.QTreeWidgetItem([project_path.name])
-        root_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, str(project_path))
-        self.w.project_detail_tree.addTopLevelItem(root_item)
-        self._add_lazy_children(root_item, project_path)
-        root_item.setExpanded(True)
+        root_path = str(project_path)
+        self._fs_model.setRootPath(root_path)
+        root_index = self._fs_model.index(root_path)
+        self.w.project_detail_tree.setRootIndex(root_index)
         if hasattr(self.w, "board_controller"):
             self.w.board_controller.set_project(project_path)
 
-    def _add_lazy_children(self, item: QtWidgets.QTreeWidgetItem, path: Path) -> None:
+    def _scan_dir_entries(self, path: Path) -> list[tuple[str, bool]]:
+        cached = self._dir_cache.get(path)
+        if cached is not None:
+            return cached
+        entries: list[tuple[str, bool]] = []
         try:
-            children = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+            with os.scandir(path) as it:
+                for entry in it:
+                    try:
+                        is_dir = entry.is_dir()
+                    except OSError:
+                        is_dir = False
+                    entries.append((entry.name, is_dir))
         except Exception:
-            return
-        for child in children:
-            child_item = QtWidgets.QTreeWidgetItem([child.name])
-            child_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, str(child))
-            item.addChild(child_item)
-            if child.is_dir():
-                placeholder = QtWidgets.QTreeWidgetItem(["Loading..."])
-                placeholder.setData(0, QtCore.Qt.ItemDataRole.UserRole, None)
-                child_item.addChild(placeholder)
-
-    def _on_tree_item_expanded(self, item: QtWidgets.QTreeWidgetItem) -> None:
-        path_text = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
-        if not path_text:
-            return
-        path = Path(str(path_text))
-        if not path.is_dir():
-            return
-        if item.childCount() == 1 and item.child(0).text(0) == "Loading...":
-            item.takeChild(0)
-            self._add_lazy_children(item, path)
+            entries = []
+        entries.sort(key=lambda e: (not e[1], e[0].lower()))
+        self._dir_cache[path] = entries
+        return entries
 
     def _launch_houdini(self, hip: Path, project_path: Path) -> None:
         if not self.w._houdini_exe:
@@ -387,40 +394,29 @@ class ProjectsController:
             if key not in keep:
                 self.w._project_hip_selection.pop(key, None)
 
+    def _scan_project_hips(
+        self,
+        project_path: Path,
+        cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None,
+    ) -> Tuple[List[Path], float]:
+        cache = cache or self.w._project_cache
+        cached = cache.get(project_path)
+        if cached and cached[0] == self._scan_token:
+            return cached[1], cached[2]
+        hips, latest = list_hips_with_mtime(project_path)
+        cache[project_path] = (self._scan_token, hips, latest)
+        return hips, latest
+
     def _get_project_hips(
         self, project_path: Path, cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None
     ) -> List[Path]:
-        cache = cache or self.w._project_cache
-        try:
-            mtime = project_path.stat().st_mtime
-        except OSError:
-            return []
-
-        cached = cache.get(project_path)
-        if cached and cached[0] == mtime:
-            return cached[1]
-
-        hips = find_hips(project_path)
-        latest = max((p.stat().st_mtime for p in hips), default=0.0)
-        cache[project_path] = (mtime, hips, latest)
+        hips, _latest = self._scan_project_hips(project_path, cache)
         return hips
 
     def _get_project_latest_mtime(
         self, project_path: Path, cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None
     ) -> float:
-        cache = cache or self.w._project_cache
-        try:
-            mtime = project_path.stat().st_mtime
-        except OSError:
-            return 0.0
-
-        cached = cache.get(project_path)
-        if cached and cached[0] == mtime:
-            return cached[2]
-
-        hips = find_hips(project_path)
-        latest = max((p.stat().st_mtime for p in hips), default=mtime)
-        cache[project_path] = (mtime, hips, latest)
+        _hips, latest = self._scan_project_hips(project_path, cache)
         return latest
 
     def prune_cache(self, projects: List[Path], cache: Dict[Path, Tuple[float, List[Path], float]]) -> None:
@@ -430,3 +426,46 @@ class ProjectsController:
         self, project_path: Path, cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None
     ) -> List[Path]:
         return self._get_project_hips(project_path, cache)
+
+
+class _DirScanWorker(QtCore.QObject):
+    entries_ready = QtCore.Signal(object, object)
+    finished = QtCore.Signal()
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+
+    def run(self) -> None:
+        entries: list[tuple[str, bool]] = []
+        try:
+            with os.scandir(self._path) as it:
+                for entry in it:
+                    try:
+                        is_dir = entry.is_dir()
+                    except OSError:
+                        is_dir = False
+                    entries.append((entry.name, is_dir))
+        except Exception:
+            entries = []
+        entries.sort(key=lambda e: (not e[1], e[0].lower()))
+        self.entries_ready.emit(str(self._path), entries)
+        self.finished.emit()
+
+
+class _UiDispatcher(QtCore.QObject):
+    def __init__(self, controller: ProjectsController, parent: Optional[QtCore.QObject] = None) -> None:
+        super().__init__(parent)
+        self._controller = controller
+
+    @QtCore.Slot(object, object)
+    def handle_entries(self, path_text: object, entries: object) -> None:
+        if not isinstance(path_text, str):
+            return
+        if not isinstance(entries, list):
+            return
+        self._controller._on_dir_scan_ready(Path(path_text), entries)
+
+    @QtCore.Slot()
+    def handle_finished(self) -> None:
+        self._controller._on_dir_scan_finished()

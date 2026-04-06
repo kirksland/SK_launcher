@@ -7,6 +7,29 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
+class _GroupsTree(QtWidgets.QTreeWidget):
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.DragOnly)
+        self.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+
+    def mimeData(self, items: list[QtWidgets.QTreeWidgetItem]) -> QtCore.QMimeData:  # type: ignore[override]
+        mime = QtCore.QMimeData()
+        urls: list[QtCore.QUrl] = []
+        for item in items:
+            path_text = item.data(0, QtCore.Qt.ItemDataRole.UserRole + 1)
+            if not path_text:
+                continue
+            urls.append(QtCore.QUrl.fromLocalFile(str(path_text)))
+        if urls:
+            mime.setUrls(urls)
+            mime.setText(urls[0].toLocalFile())
+        return mime
+
+from ui.utils.styles import PALETTE, border_only_style, muted_text_style, subtle_panel_frame_style, title_style, tree_panel_style
+
+
 class BoardView(QtWidgets.QGraphicsView):
     def __init__(self, scene: QtWidgets.QGraphicsScene, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(scene, parent)
@@ -407,11 +430,11 @@ class BoardPage(QtWidgets.QWidget):
         layout.addLayout(header)
 
         title = QtWidgets.QLabel("Board")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setStyleSheet(title_style())
         header.addWidget(title, 0)
 
         self.project_label = QtWidgets.QLabel("No project selected")
-        self.project_label.setStyleSheet("color: #9aa3ad;")
+        self.project_label.setStyleSheet(muted_text_style())
         header.addWidget(self.project_label, 1)
 
         self.grid_toggle = QtWidgets.QToolButton()
@@ -447,23 +470,23 @@ class BoardPage(QtWidgets.QWidget):
         self.scene.setSceneRect(-5000, -5000, 10000, 10000)
         self.scene.setItemIndexMethod(QtWidgets.QGraphicsScene.ItemIndexMethod.NoIndex)
         self.view = BoardView(self.scene, self)
-        self.view.setStyleSheet("border: 1px solid #14171c;")
+        self.view.setStyleSheet(border_only_style())
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         layout.addWidget(splitter, 1)
 
         self.groups_panel = QtWidgets.QFrame()
         self.groups_panel.setFixedWidth(220)
-        self.groups_panel.setStyleSheet("QFrame { background: #191d23; border: 1px solid #14171c; }")
+        self.groups_panel.setStyleSheet(subtle_panel_frame_style(bg_key="app_bg"))
         groups_layout = QtWidgets.QVBoxLayout(self.groups_panel)
         groups_layout.setContentsMargins(8, 8, 8, 8)
         groups_layout.setSpacing(6)
         groups_title = QtWidgets.QLabel("Groups")
-        groups_title.setStyleSheet("color: #c6ccd6; font-weight: bold;")
+        groups_title.setStyleSheet(f"color: {PALETTE['light_text']}; font-weight: bold;")
         groups_layout.addWidget(groups_title, 0)
-        self.groups_tree = QtWidgets.QTreeWidget()
+        self.groups_tree = _GroupsTree()
         self.groups_tree.setHeaderHidden(True)
-        self.groups_tree.setStyleSheet("QTreeWidget { background: #191d23; border: none; }")
+        self.groups_tree.setStyleSheet(tree_panel_style(bg_key="app_bg"))
         self.groups_tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.groups_tree.customContextMenuRequested.connect(self._on_groups_tree_menu)
         groups_layout.addWidget(self.groups_tree, 1)
@@ -485,7 +508,7 @@ class BoardPage(QtWidgets.QWidget):
         self.hint_label = QtWidgets.QLabel(
             "Tip: Right-click for add/group, drag items, wheel to zoom, Ctrl+drag to scale, middle mouse to pan, Del to remove."
         )
-        self.hint_label.setStyleSheet("color: #9aa3ad;")
+        self.hint_label.setStyleSheet(muted_text_style())
         footer.addWidget(self.hint_label, 1)
 
     def handle_external_drop(self, event: QtGui.QDropEvent) -> None:

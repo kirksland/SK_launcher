@@ -4,7 +4,37 @@ from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
 
+from ui.utils.styles import (
+    PALETTE,
+    border_only_style,
+    muted_text_style,
+    panel_style,
+    tool_button_dark_style,
+    title_style,
+)
+
 from video.player import VideoController
+
+
+class _AssetVersionsList(QtWidgets.QListWidget):
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.DragOnly)
+        self.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+
+    def mimeData(self, items: list[QtWidgets.QListWidgetItem]) -> QtCore.QMimeData:  # type: ignore[override]
+        mime = QtCore.QMimeData()
+        urls: list[QtCore.QUrl] = []
+        for item in items:
+            path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if not path_text:
+                continue
+            urls.append(QtCore.QUrl.fromLocalFile(str(path_text)))
+        if urls:
+            mime.setUrls(urls)
+            mime.setText(urls[0].toLocalFile())
+        return mime
 
 
 class AssetManagerPage(QtWidgets.QWidget):
@@ -24,7 +54,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         overview_layout.addLayout(server_header)
 
         server_title = QtWidgets.QLabel("Asset Manager")
-        server_title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        server_title.setStyleSheet(title_style())
         server_header.addWidget(server_title, 0)
 
         server_header.addStretch(1)
@@ -43,7 +73,7 @@ class AssetManagerPage(QtWidgets.QWidget):
 
         self.asset_path_label = QtWidgets.QLabel()
         self.asset_path_label.setText("Asset Manager")
-        self.asset_path_label.setStyleSheet("color: #9aa3ad; font-size: 11px;")
+        self.asset_path_label.setStyleSheet(muted_text_style(size_px=11))
         overview_layout.addWidget(self.asset_path_label)
 
         self.asset_grid = QtWidgets.QListWidget()
@@ -70,7 +100,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         details_header.addWidget(self.asset_back_btn, 0)
 
         self.asset_details_title = QtWidgets.QLabel("Project")
-        self.asset_details_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        self.asset_details_title.setStyleSheet(title_style(size_px=16))
         details_header.addWidget(self.asset_details_title, 0)
 
         details_header.addStretch(1)
@@ -84,7 +114,7 @@ class AssetManagerPage(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        work_panel.setStyleSheet("border: 1px solid #14171c;")
+        work_panel.setStyleSheet(border_only_style())
         col_work = QtWidgets.QVBoxLayout(work_panel)
         details_split.addWidget(work_panel)
 
@@ -101,10 +131,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_open_folder_btn = QtWidgets.QToolButton()
         self.asset_open_folder_btn.setText("Open Folder")
         self.asset_open_folder_btn.setAutoRaise(True)
-        self.asset_open_folder_btn.setStyleSheet(
-            "QToolButton { background: #2b2f36; border: 1px solid #14171c; padding: 3px 8px; }"
-            "QToolButton:hover { background: #323741; }"
-        )
+        self.asset_open_folder_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
         search_row.addWidget(self.asset_open_folder_btn, 0)
 
         self.asset_work_tabs = QtWidgets.QTabWidget()
@@ -165,7 +192,7 @@ class AssetManagerPage(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        preview_panel.setStyleSheet("border: 1px solid #14171c;")
+        preview_panel.setStyleSheet(border_only_style())
         col_preview = QtWidgets.QVBoxLayout(preview_panel)
         details_split.addWidget(preview_panel)
 
@@ -178,7 +205,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         col_preview.addWidget(preview_label)
 
         preview_container = QtWidgets.QFrame()
-        preview_container.setStyleSheet("background: #2b2f36; border: 1px solid #14171c;")
+        preview_container.setStyleSheet(panel_style())
         preview_container.setFixedHeight(200)
         preview_container.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -201,18 +228,12 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_prev_btn = QtWidgets.QToolButton()
         self.asset_prev_btn.setText("<")
         self.asset_prev_btn.setAutoRaise(True)
-        self.asset_prev_btn.setStyleSheet(
-            "QToolButton { background: #2b2f36; border: 1px solid #14171c; padding: 2px 8px; }"
-            "QToolButton:hover { background: #323741; }"
-        )
+        self.asset_prev_btn.setStyleSheet(tool_button_dark_style(padding="2px 8px"))
 
         self.asset_next_btn = QtWidgets.QToolButton()
         self.asset_next_btn.setText(">")
         self.asset_next_btn.setAutoRaise(True)
-        self.asset_next_btn.setStyleSheet(
-            "QToolButton { background: #2b2f36; border: 1px solid #14171c; padding: 2px 8px; }"
-            "QToolButton:hover { background: #323741; }"
-        )
+        self.asset_next_btn.setStyleSheet(tool_button_dark_style(padding="2px 8px"))
 
         self.asset_preview_label = QtWidgets.QLabel("0/0")
         self.asset_preview_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -242,7 +263,9 @@ class AssetManagerPage(QtWidgets.QWidget):
         col_preview.addWidget(video_label)
 
         self.asset_video_box = QtWidgets.QFrame()
-        self.asset_video_box.setStyleSheet("background: #1b1f26; border: 1px solid #14171c;")
+        self.asset_video_box.setStyleSheet(
+            f"background: #1b1f26; border: 1px solid {PALETTE['border']};"
+        )
         self.asset_video_layout = QtWidgets.QVBoxLayout(self.asset_video_box)
         self.asset_video_box.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -269,10 +292,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_fullscreen_btn = QtWidgets.QToolButton()
         self.asset_fullscreen_btn.setText("Full")
         self.asset_fullscreen_btn.setAutoRaise(True)
-        self.asset_fullscreen_btn.setStyleSheet(
-            "QToolButton { background: #2b2f36; border: 1px solid #14171c; padding: 2px 6px; }"
-            "QToolButton:hover { background: #323741; }"
-        )
+        self.asset_fullscreen_btn.setStyleSheet(tool_button_dark_style(padding="2px 6px"))
         controls.addWidget(self.asset_fullscreen_btn, 0)
         self.asset_video_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.asset_video_slider.setRange(0, 0)
@@ -286,7 +306,7 @@ class AssetManagerPage(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        details_panel.setStyleSheet("border: 1px solid #14171c;")
+        details_panel.setStyleSheet(border_only_style())
         col_details = QtWidgets.QVBoxLayout(details_panel)
         details_split.addWidget(details_panel)
 
@@ -307,7 +327,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_context_combo.setCurrentText("All")
         versions_row.addWidget(self.asset_context_combo, 0)
         col_details.addLayout(versions_row)
-        self.asset_versions_list = QtWidgets.QListWidget()
+        self.asset_versions_list = _AssetVersionsList()
         col_details.addWidget(self.asset_versions_list, 1)
 
         history_label = QtWidgets.QLabel("History")

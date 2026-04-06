@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
 
+from ui.utils.styles import panel_style, title_style
+
 
 class ClientPage(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -12,7 +14,7 @@ class ClientPage(QtWidgets.QWidget):
         layout.addLayout(header)
 
         title = QtWidgets.QLabel("Client Catalog")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setStyleSheet(title_style())
         header.addWidget(title, 0)
         header.addStretch(1)
 
@@ -27,7 +29,7 @@ class ClientPage(QtWidgets.QWidget):
         body.addWidget(self.client_list, 0)
 
         right_panel = QtWidgets.QFrame()
-        right_panel.setStyleSheet("background: #2b2f36; border: 1px solid #14171c;")
+        right_panel.setStyleSheet(panel_style())
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         body.addWidget(right_panel, 1)
 

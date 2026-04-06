@@ -77,3 +77,44 @@ def project_card_version_combo_style() -> str:
         "padding: 2px 15px 2px 10px;"
         "}"
     )
+
+
+def title_style(size_px: int = 18) -> str:
+    return f"font-size: {size_px}px; font-weight: bold;"
+
+
+def muted_text_style(size_px: int | None = None) -> str:
+    if size_px is None:
+        return f"color: {PALETTE['muted']};"
+    return f"color: {PALETTE['muted']}; font-size: {size_px}px;"
+
+
+def panel_style(bg_key: str = "panel_bg") -> str:
+    return f"background: {PALETTE[bg_key]}; border: 1px solid {PALETTE['border']};"
+
+
+def border_only_style() -> str:
+    return f"border: 1px solid {PALETTE['border']};"
+
+
+def subtle_panel_frame_style(bg_key: str = "app_bg") -> str:
+    return f"QFrame {{ background: {PALETTE[bg_key]}; border: 1px solid {PALETTE['border']}; }}"
+
+
+def tree_panel_style(bg_key: str = "app_bg") -> str:
+    return f"QTreeWidget {{ background: {PALETTE[bg_key]}; border: none; }}"
+
+
+def tool_button_style(padding: str = "4px", radius: int = 4) -> str:
+    return f"QToolButton {{ padding: {padding}; border-radius: {radius}px; }}"
+
+
+def tool_button_dark_style(padding: str = "2px 6px") -> str:
+    return (
+        "QToolButton {"
+        f"background: {PALETTE['panel_bg']};"
+        f"border: 1px solid {PALETTE['border']};"
+        f"padding: {padding};"
+        "}"
+        "QToolButton:hover { background: #323741; }"
+    )

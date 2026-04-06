@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
+
+from ui.utils.styles import PALETTE, panel_style, title_style, tool_button_style
+
+
+class _ProjectDetailTree(QtWidgets.QTreeView):
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.DragOnly)
+        self.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
 
 
 class ProjectsPage(QtWidgets.QWidget):
@@ -17,7 +27,7 @@ class ProjectsPage(QtWidgets.QWidget):
         header.addLayout(title_block, 1)
 
         title = QtWidgets.QLabel("Projects")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setStyleSheet(title_style())
         title_block.addWidget(title)
 
         self.path_label = QtWidgets.QLabel()
@@ -66,7 +76,7 @@ class ProjectsPage(QtWidgets.QWidget):
 
         self.detail_panel = QtWidgets.QFrame()
         self.detail_panel.setMinimumWidth(260)
-        self.detail_panel.setStyleSheet("background: #2b2f36; border: 1px solid #14171c;")
+        self.detail_panel.setStyleSheet(panel_style())
 
         detail_layout = QtWidgets.QVBoxLayout(self.detail_panel)
         title_row = QtWidgets.QHBoxLayout()
@@ -87,8 +97,8 @@ class ProjectsPage(QtWidgets.QWidget):
         self.detail_open_btn.setIcon(folder_icon)
         self.detail_open_btn.setAutoRaise(True)
         self.detail_open_btn.setStyleSheet(
-            "QToolButton { padding: 4px; border-radius: 4px; }"
-            "QToolButton:hover { background: rgba(255,255,255,30); }"
+            tool_button_style(padding="4px", radius=4)
+            + "QToolButton:hover { background: rgba(255,255,255,30); }"
         )
         toolbar.addWidget(self.detail_open_btn)
         for icon_type, tip in (
@@ -100,14 +110,13 @@ class ProjectsPage(QtWidgets.QWidget):
             btn.setToolTip(tip)
             btn.setEnabled(False)
             btn.setAutoRaise(True)
-            btn.setStyleSheet(
-                "QToolButton { padding: 4px; border-radius: 4px; }"
-            )
+            btn.setStyleSheet(tool_button_style(padding="4px", radius=4))
             toolbar.addWidget(btn)
         toolbar.addStretch(1)
 
-        self.detail_tree = QtWidgets.QTreeWidget()
+        self.detail_tree = _ProjectDetailTree()
         self.detail_tree.setHeaderHidden(True)
+        self.detail_tree.setUniformRowHeights(True)
         detail_layout.addWidget(self.detail_tree, 1)
         self.detail_panel.setVisible(False)
         splitter.addWidget(self.detail_panel)
@@ -128,6 +137,3 @@ class ProjectsPage(QtWidgets.QWidget):
 
         self.status = QtWidgets.QLabel("")
         footer.addWidget(self.status, 1)
-
-    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
-        return super().eventFilter(watched, event)

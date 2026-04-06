@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
+import ctypes
 
 from core.settings import (
     DEFAULT_ASSET_SCHEMA,
@@ -22,7 +23,7 @@ from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
 from controllers.board_controller import BoardController
 from ui.widgets.project_card import ProjectCard
-from ui.utils.styles import PALETTE, app_stylesheet
+from ui.utils.styles import PALETTE, app_stylesheet, tool_button_dark_style
 
 APP_TITLE = "Skyforge Launcher"
 TEST_PIPELINE_ROOT = Path(__file__).resolve().parent / "projects" / "test_pipeline"
@@ -95,6 +96,48 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self._houdini_exe,
         )
         self.pages.addWidget(self.settings_page)
+
+        # Global media controls (bottom-right)
+        self.media_group = QtWidgets.QFrame()
+        self.media_group.setStyleSheet(
+            "QFrame {"
+            "background: #23272e;"
+            "border: 1px solid #14171c;"
+            "border-radius: 10px;"
+            "}"
+        )
+        group_layout = QtWidgets.QHBoxLayout(self.media_group)
+        group_layout.setContentsMargins(10, 6, 10, 6)
+        group_layout.setSpacing(6)
+
+        self.media_label = QtWidgets.QLabel("Media")
+        self.media_label.setStyleSheet(f"color: {PALETTE['muted']};")
+        self.media_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter)
+        music_icon = QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaVolume)
+        self.media_label.setPixmap(music_icon.pixmap(16, 16))
+        self.media_label.setToolTip("Global media controls")
+        group_layout.addWidget(self.media_label)
+
+        self.media_prev_btn = QtWidgets.QToolButton()
+        self.media_prev_btn.setIcon(QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaSkipBackward))
+        self.media_prev_btn.setAutoRaise(True)
+        self.media_prev_btn.setToolTip("Previous")
+        self.media_prev_btn.setStyleSheet(tool_button_dark_style(padding="4px 8px"))
+        group_layout.addWidget(self.media_prev_btn)
+
+        self.media_play_btn = QtWidgets.QToolButton()
+        self.media_play_btn.setIcon(QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaPlay))
+        self.media_play_btn.setAutoRaise(True)
+        self.media_play_btn.setToolTip("Play / Pause")
+        self.media_play_btn.setStyleSheet(tool_button_dark_style(padding="4px 8px"))
+        group_layout.addWidget(self.media_play_btn)
+
+        self.media_next_btn = QtWidgets.QToolButton()
+        self.media_next_btn.setIcon(QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaSkipForward))
+        self.media_next_btn.setAutoRaise(True)
+        self.media_next_btn.setToolTip("Next")
+        self.media_next_btn.setStyleSheet(tool_button_dark_style(padding="4px 8px"))
+        group_layout.addWidget(self.media_next_btn)
 
         self.sidebar = QtWidgets.QFrame()
         self.sidebar.setFixedWidth(240)
@@ -319,10 +362,42 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.project_controller.setup_project_watcher()
         self.asset_controller.setup_asset_watcher()
 
+        self.media_prev_btn.clicked.connect(self._media_prev)
+        self.media_play_btn.clicked.connect(self._media_play_pause)
+        self.media_next_btn.clicked.connect(self._media_next)
+
+        status = self.statusBar()
+        status.setStyleSheet("QStatusBar { background: #1f2329; color: #9aa3ad; }")
+        status.addPermanentWidget(self.media_group, 0)
+
+
     @staticmethod
     def _to_houdini_path(text: str) -> str:
         # Houdini references are happier with forward slashes, even on Windows.
         return text.replace("\\", "/")
+
+    @staticmethod
+    def _send_media_key(vk_code: int) -> None:
+        try:
+            user32 = ctypes.windll.user32
+            user32.keybd_event(vk_code, 0, 0, 0)
+            QtCore.QThread.msleep(20)
+            user32.keybd_event(vk_code, 0, 2, 0)
+        except Exception as exc:
+            print(f"[MEDIA] Failed to send key {vk_code}: {exc}")
+
+    def _media_play_pause(self) -> None:
+        # VK_MEDIA_PLAY_PAUSE = 0xB3
+        self._send_media_key(0xB3)
+
+    def _media_next(self) -> None:
+        # VK_MEDIA_NEXT_TRACK = 0xB0
+        self._send_media_key(0xB0)
+
+    def _media_prev(self) -> None:
+        # VK_MEDIA_PREV_TRACK = 0xB1
+        self._send_media_key(0xB1)
+
 
     def save_settings_from_ui(self) -> None:
         projects_dir = self.settings_projects_dir.text().strip()
@@ -427,7 +502,10 @@ def main() -> None:
         app.exec()
     except Exception:
         log_path = Path(__file__).resolve().parent / "launcher_error.log"
-        log_path.write_text(traceback.format_exc(), encoding="utf-8")
+        try:
+            log_path.write_text(traceback.format_exc(), encoding="utf-8")
+        except Exception:
+            print(traceback.format_exc())
         raise
 
 

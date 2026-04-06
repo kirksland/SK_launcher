@@ -81,7 +81,6 @@ class ProjectCard(QtWidgets.QWidget):
         self._hips = hips
         self._variants = group_hip_variants(self._hips)
         self._current_base: Optional[str] = None
-        self._thumb_size = thumb_size
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)

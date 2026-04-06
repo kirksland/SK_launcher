@@ -18,5 +18,11 @@ if not exist "%PYTHON%" (
 )
 
 echo [INFO] Launching...
-start "" "%PYTHONW%" "%MAIN%"
-exit /b 0
+echo -----------------------------
+"%PYTHON%" "%MAIN%"
+set "EXITCODE=%ERRORLEVEL%"
+if not "%EXITCODE%"=="0" (
+  echo [ERROR] Launcher exited with code %EXITCODE%
+  pause
+)
+exit /b %EXITCODE%

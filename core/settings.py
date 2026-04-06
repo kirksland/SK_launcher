@@ -43,7 +43,11 @@ def load_settings() -> Dict[str, object]:
     except Exception:
         return _default_settings_with_latest_houdini()
     merged = DEFAULT_SETTINGS.copy()
-    merged.update({k: v for k, v in data.items() if isinstance(v, (str, bool))})
+    merged.update({
+        k: v
+        for k, v in data.items()
+        if isinstance(v, (str, bool, int, float, list, dict))
+    })
     if isinstance(data.get("asset_manager_projects"), list):
         merged["asset_manager_projects"] = data["asset_manager_projects"]
     if isinstance(data.get("asset_schema"), dict):

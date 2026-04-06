@@ -13,12 +13,32 @@ def find_projects(projects_dir: Path) -> List[Path]:
     return sorted([p for p in projects_dir.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
 
 
+def list_hips_with_mtime(project_dir: Path) -> Tuple[List[Path], float]:
+    hips_with_mtime: List[Tuple[Path, float]] = []
+    latest = 0.0
+    try:
+        entries = list(project_dir.iterdir())
+    except Exception:
+        return [], 0.0
+    for path in entries:
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in HIP_EXTS:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        hips_with_mtime.append((path, mtime))
+        if mtime > latest:
+            latest = mtime
+    hips_with_mtime.sort(key=lambda item: item[1], reverse=True)
+    return [p for p, _ in hips_with_mtime], latest
+
+
 def find_hips(project_dir: Path) -> List[Path]:
-    hips: List[Path] = []
-    for path in project_dir.iterdir():
-        if path.is_file() and path.suffix.lower() in HIP_EXTS:
-            hips.append(path)
-    return sorted(hips, key=lambda p: p.stat().st_mtime, reverse=True)
+    hips, _latest = list_hips_with_mtime(project_dir)
+    return hips
 
 
 def open_hip(path: Path) -> None:
