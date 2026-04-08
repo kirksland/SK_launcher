@@ -73,6 +73,7 @@ class ProjectCard(QtWidgets.QWidget):
         thumb_size: QtCore.QSize,
         hips: List[Path],
         show_cloud_badge: bool = False,
+        show_alert_badge: bool = False,
         selected_hip: Optional[Path] = None,
         parent: Optional[QtWidgets.QWidget] = None,
     ) -> None:
@@ -99,6 +100,19 @@ class ProjectCard(QtWidgets.QWidget):
             pixmap = add_cloud_badge(pixmap)
         thumbnail.setPixmap(pixmap)
         thumb_layout.addWidget(thumbnail, 0, 0)
+
+        self._alert_dot = QtWidgets.QFrame()
+        self._alert_dot.setFixedSize(10, 10)
+        self._alert_dot.setStyleSheet(
+            "background: #e03b3b; border-radius: 5px; border: 1px solid #ffffff; margin: 4px;"
+        )
+        self._alert_dot.setVisible(show_alert_badge)
+        thumb_layout.addWidget(
+            self._alert_dot,
+            0,
+            0,
+            QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft,
+        )
 
         self.title_button = QtWidgets.QToolButton()
         self.title_button.setText(project_path.name)
@@ -133,7 +147,6 @@ class ProjectCard(QtWidgets.QWidget):
         )
 
         if not self._variants:
-            self.title_button.setEnabled(False)
             self.version_combo.setVisible(False)
         else:
             self._build_variant_menu()
@@ -141,6 +154,9 @@ class ProjectCard(QtWidgets.QWidget):
                 first_base = next(iter(self._variants.keys()))
                 self._set_current_base(first_base)
             self.version_combo.currentTextChanged.connect(self._emit_selection_changed)
+
+    def set_alert_visible(self, visible: bool) -> None:
+        self._alert_dot.setVisible(bool(visible))
 
     def _emit_selection_changed(self) -> None:
         hip = self.selected_hip()

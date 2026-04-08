@@ -10,6 +10,15 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from video.player import VideoController, VideoPreviewLabel
+
+try:
+    import cv2  # type: ignore
+except Exception:  # pragma: no cover - optional video backend
+    cv2 = None  # type: ignore
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 class _PopupOutsideCloseFilter(QtCore.QObject):
@@ -249,6 +258,89 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
             painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
 
 
+class BoardVideoItem(QtWidgets.QGraphicsItem):
+    def __init__(
+        self,
+        controller: "BoardController",
+        path: Path,
+        parent: Optional[QtWidgets.QGraphicsItem] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._controller = controller
+        self._path = path
+        self._thumb_dim = 512
+        self._pixmap = controller._get_video_thumbnail(path, self._thumb_dim)
+        if self._pixmap is None or self._pixmap.isNull():
+            self._pixmap = controller._build_media_placeholder("VIDEO", path.name)
+        self._rect = QtCore.QRectF(0, 0, float(self._pixmap.width()), float(self._pixmap.height()))
+        self.setTransformOriginPoint(self._rect.center())
+
+    def file_name(self) -> str:
+        return self._path.name
+
+    def boundingRect(self) -> QtCore.QRectF:  # type: ignore[override]
+        return self._rect
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        if self._pixmap is None or self._pixmap.isNull():
+            return
+        painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
+            pen = QtGui.QPen(QtGui.QColor("#c6ccd6"), 1.5, QtCore.Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
+
+
+class BoardSequenceItem(QtWidgets.QGraphicsItem):
+    def __init__(
+        self,
+        controller: "BoardController",
+        dir_path: Path,
+        parent: Optional[QtWidgets.QGraphicsItem] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._controller = controller
+        self._dir_path = dir_path
+        self._thumb_dim = 512
+        self._pixmap = controller._get_sequence_thumbnail(dir_path, self._thumb_dim)
+        if self._pixmap is None or self._pixmap.isNull():
+            self._pixmap = controller._build_media_placeholder("SEQ", dir_path.name)
+        self._rect = QtCore.QRectF(0, 0, float(self._pixmap.width()), float(self._pixmap.height()))
+        self.setTransformOriginPoint(self._rect.center())
+
+    def dir_name(self) -> str:
+        return self._dir_path.name
+
+    def dir_path(self) -> Path:
+        return self._dir_path
+
+    def boundingRect(self) -> QtCore.QRectF:  # type: ignore[override]
+        return self._rect
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        if self._pixmap is None or self._pixmap.isNull():
+            return
+        painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
+            pen = QtGui.QPen(QtGui.QColor("#c6ccd6"), 1.5, QtCore.Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
+
+
 class BoardGroupItem(QtWidgets.QGraphicsRectItem):
     def __init__(self, color: QtGui.QColor, parent: Optional[QtWidgets.QGraphicsItem] = None) -> None:
         super().__init__(parent)
@@ -335,6 +427,116 @@ class BoardGroupItem(QtWidgets.QGraphicsRectItem):
         painter.restore()
 
 
+class _SequencePlayerDialog(QtWidgets.QDialog):
+    def __init__(self, dir_path: Path, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Sequence: {dir_path.name}")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.resize(860, 540)
+        self._dir_path = dir_path
+        self._frames = self._collect_frames(dir_path)
+        self._frame_index = 0
+        self._playing = False
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self._advance)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        self._status = QtWidgets.QLabel("")
+        self._status.setStyleSheet("color: #9aa3ad;")
+        layout.addWidget(self._status, 0)
+
+        self._preview = VideoPreviewLabel()
+        self._preview.setStyleSheet("color: #9aa3ad;")
+        layout.addWidget(self._preview, 1)
+
+        controls = QtWidgets.QHBoxLayout()
+        layout.addLayout(controls, 0)
+
+        self._play_btn = QtWidgets.QPushButton("Play")
+        controls.addWidget(self._play_btn, 0)
+        self._play_btn.clicked.connect(self._toggle_play)
+
+        self._slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._slider.setRange(0, max(0, len(self._frames) - 1))
+        self._slider.valueChanged.connect(self._on_slider)
+        controls.addWidget(self._slider, 1)
+
+        fps_label = QtWidgets.QLabel("FPS")
+        controls.addWidget(fps_label, 0)
+        self._fps_spin = QtWidgets.QSpinBox()
+        self._fps_spin.setRange(1, 60)
+        self._fps_spin.setValue(24)
+        self._fps_spin.valueChanged.connect(self._on_fps_changed)
+        controls.addWidget(self._fps_spin, 0)
+
+        if not self._frames:
+            self._status.setText("No frames found in directory.")
+        else:
+            self._status.setText(f"{len(self._frames)} frames")
+            self._show_frame(0)
+
+    @staticmethod
+    def _collect_frames(dir_path: Path) -> list[Path]:
+        if not dir_path.exists() or not dir_path.is_dir():
+            return []
+        frames = [p for p in dir_path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
+        return sorted(frames, key=lambda p: p.name)
+
+    def _on_slider(self, value: int) -> None:
+        self._frame_index = value
+        self._show_frame(value)
+
+    def _toggle_play(self) -> None:
+        if not self._frames:
+            return
+        if self._playing:
+            self._timer.stop()
+            self._playing = False
+            self._play_btn.setText("Play")
+        else:
+            interval = int(1000 / max(1, self._fps_spin.value()))
+            self._timer.start(max(interval, 1))
+            self._playing = True
+            self._play_btn.setText("Pause")
+
+    def _on_fps_changed(self) -> None:
+        if self._playing:
+            interval = int(1000 / max(1, self._fps_spin.value()))
+            self._timer.start(max(interval, 1))
+
+    def _advance(self) -> None:
+        if not self._frames:
+            return
+        self._frame_index = (self._frame_index + 1) % len(self._frames)
+        self._slider.blockSignals(True)
+        self._slider.setValue(self._frame_index)
+        self._slider.blockSignals(False)
+        self._show_frame(self._frame_index)
+
+    def _show_frame(self, index: int) -> None:
+        if not self._frames:
+            return
+        if index < 0 or index >= len(self._frames):
+            return
+        path = self._frames[index]
+        pixmap = QtGui.QPixmap(str(path))
+        if pixmap.isNull():
+            return
+        max_dim = 1920
+        if pixmap.width() > max_dim or pixmap.height() > max_dim:
+            pixmap = pixmap.scaled(
+                max_dim,
+                max_dim,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+        self._preview.set_base_pixmap(pixmap)
+        self._status.setText(f"{path.name} ({index + 1}/{len(self._frames)})")
+
+
 class BoardController:
     def __init__(self, window: QtWidgets.QMainWindow) -> None:
         self.w = window
@@ -344,6 +546,8 @@ class BoardController:
         self._saving = False
         self._last_save_ts = 0.0
         self._pixmap_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
+        self._video_thumb_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
+        self._sequence_thumb_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
         self._max_display_dim = 2048
         self._low_quality = False
         self._visible_images: set[int] = set()
@@ -357,6 +561,8 @@ class BoardController:
         self._apply_queue: deque[dict] = deque()
         self._apply_pending_groups: list[dict] = []
         self._apply_image_map: dict[str, QtWidgets.QGraphicsPixmapItem] = {}
+        self._apply_video_map: dict[str, QtWidgets.QGraphicsItem] = {}
+        self._apply_sequence_map: dict[str, QtWidgets.QGraphicsItem] = {}
         self._apply_note_map: dict[str, BoardNoteItem] = {}
         self._apply_payload_ref: Optional[dict] = None
         self._apply_phase = "idle"
@@ -376,6 +582,8 @@ class BoardController:
         self._project_root = project_root
         enabled = project_root is not None
         self.w.board_add_image_btn.setEnabled(enabled)
+        if hasattr(self.w, "board_add_video_btn"):
+            self.w.board_add_video_btn.setEnabled(enabled)
         self.w.board_save_btn.setEnabled(enabled)
         self.w.board_load_btn.setEnabled(enabled)
         self.w.board_fit_btn.setEnabled(enabled)
@@ -508,6 +716,170 @@ class BoardController:
             return
         self.add_image_from_path(dest, scene_pos=scene_pos)
 
+    def add_video(self) -> None:
+        if not self._project_root:
+            self._notify("Select a project first.")
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self.w,
+            "Add Video",
+            str(self._project_root),
+            "Videos (*.mp4 *.mov *.avi *.mkv *.webm)",
+        )
+        if not path:
+            return
+        self.add_video_from_path(Path(path))
+
+    def add_video_from_path(
+        self, src: Path, scene_pos: Optional[QtCore.QPointF] = None
+    ) -> Optional[QtWidgets.QGraphicsItem]:
+        if not self._project_root:
+            print("[BOARD] No project root set")
+            return None
+        if not src.is_file():
+            print(f"[BOARD] Not a file: {src}")
+            return None
+        assets_dir = self._project_root / ".skyforge_board_assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        dest = assets_dir / src.name
+        print(f"[BOARD] Import video: {src} -> {dest}")
+        if src.resolve() != dest.resolve():
+            try:
+                shutil.copy2(src, dest)
+            except Exception as exc:
+                print(f"[BOARD] Copy failed: {exc}")
+                self._notify(f"Failed to copy video:\n{exc}")
+                return None
+        item = BoardVideoItem(self, dest)
+        if item.boundingRect().isNull():
+            self._notify("Failed to load video thumbnail.")
+            return None
+        item.setFlags(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+        )
+        item.setTransformOriginPoint(item.boundingRect().center())
+        item.setData(0, "video")
+        item.setData(1, dest.name)
+        if scene_pos is None:
+            scene_pos = self._scene.sceneRect().center()
+        item.setPos(scene_pos)
+        logical_w = item.boundingRect().width()
+        if logical_w > 600:
+            scale = 600 / max(1.0, logical_w)
+            item.setScale(scale)
+        self._scene.addItem(item)
+        self._dirty = True
+        self._update_view_quality()
+        self._schedule_history_snapshot()
+        return item
+
+    def add_sequence(self) -> None:
+        if not self._project_root:
+            self._notify("Select a project first.")
+            return
+        dir_path = QtWidgets.QFileDialog.getExistingDirectory(
+            self.w,
+            "Add Image Sequence",
+            str(self._project_root),
+        )
+        if not dir_path:
+            return
+        self.add_sequence_from_dir(Path(dir_path))
+
+    def add_sequence_from_dir(
+        self, dir_path: Path, scene_pos: Optional[QtCore.QPointF] = None
+    ) -> Optional[QtWidgets.QGraphicsItem]:
+        if not self._project_root:
+            print("[BOARD] No project root set")
+            return None
+        if not dir_path.exists() or not dir_path.is_dir():
+            print(f"[BOARD] Not a directory: {dir_path}")
+            return None
+        frames = self._sequence_frame_paths(dir_path)
+        if not frames:
+            self._notify("No image frames found in directory.")
+            return None
+        item = BoardSequenceItem(self, dir_path)
+        if item.boundingRect().isNull():
+            self._notify("Failed to load sequence thumbnail.")
+            return None
+        item.setFlags(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+        )
+        item.setTransformOriginPoint(item.boundingRect().center())
+        item.setData(0, "sequence")
+        item.setData(1, self._relative_to_project(dir_path))
+        if scene_pos is None:
+            scene_pos = self._scene.sceneRect().center()
+        item.setPos(scene_pos)
+        logical_w = item.boundingRect().width()
+        if logical_w > 600:
+            scale = 600 / max(1.0, logical_w)
+            item.setScale(scale)
+        self._scene.addItem(item)
+        self._dirty = True
+        self._update_view_quality()
+        self._schedule_history_snapshot()
+        return item
+
+    def convert_video_to_sequence(self, item: QtWidgets.QGraphicsItem) -> None:
+        if item.data(0) != "video":
+            return
+        if cv2 is None:
+            self._notify("OpenCV not available for video conversion.")
+            return
+        if not self._project_root:
+            self._notify("Select a project first.")
+            return
+        filename = str(item.data(1))
+        video_path = self._project_root / ".skyforge_board_assets" / filename
+        if not video_path.exists():
+            self._notify("Video file not found.")
+            return
+        out_dir = self._project_root / ".skyforge_board_assets" / f"{video_path.stem}_seq"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self._notify("Converting video to sequence...")
+        if not self._extract_video_frames(video_path, out_dir):
+            self._notify("Failed to convert video to sequence.")
+            return
+        scene_pos = item.pos()
+        scale = item.scale()
+        group = self._find_group_for_item(item)
+        self._scene.removeItem(item)
+        seq_item = self.add_sequence_from_dir(out_dir, scene_pos=scene_pos)
+        if seq_item is not None:
+            seq_item.setScale(scale)
+            if group is not None:
+                group.add_member(seq_item)
+                group.update_bounds()
+        self._dirty = True
+        self._schedule_history_snapshot()
+
+    def _extract_video_frames(self, video_path: Path, out_dir: Path) -> bool:
+        try:
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                cap.release()
+                return False
+            idx = 0
+            stem = video_path.stem
+            while True:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                frame_name = f"{stem}_{idx:04d}.png"
+                frame_path = out_dir / frame_name
+                cv2.imwrite(str(frame_path), frame)
+                idx += 1
+            cap.release()
+            return idx > 0
+        except Exception:
+            return False
+
     def add_note(self) -> None:
         self.add_note_at(None)
 
@@ -529,10 +901,10 @@ class BoardController:
         items = [
             i
             for i in self._scene.selectedItems()
-            if isinstance(i, (BoardImageItem, BoardNoteItem))
+            if isinstance(i, (BoardImageItem, BoardNoteItem, BoardVideoItem, BoardSequenceItem))
         ]
         if not items:
-            self._notify("Select images to group.")
+            self._notify("Select items to group.")
             return
         color = QtWidgets.QColorDialog.getColor(QtGui.QColor("#4aa3ff"), self.w, "Group color")
         if not color.isValid():
@@ -573,7 +945,7 @@ class BoardController:
                 return
 
     def handle_item_drop(self, items: list[QtWidgets.QGraphicsItem]) -> None:
-        moved = [i for i in items if isinstance(i, (BoardImageItem, BoardNoteItem))]
+        moved = [i for i in items if isinstance(i, (BoardImageItem, BoardNoteItem, BoardVideoItem, BoardSequenceItem))]
         if not moved:
             return
         groups = self._groups()
@@ -622,7 +994,7 @@ class BoardController:
         for item in self._scene.selectedItems():
             if item is group:
                 continue
-            if item.data(0) in ("image", "note"):
+            if item.data(0) in ("image", "note", "video", "sequence"):
                 group.add_member(item)
         group.update_bounds()
         self._dirty = True
@@ -652,7 +1024,11 @@ class BoardController:
     def layout_selection_grid(self) -> None:
         items = [i for i in self._scene.selectedItems() if isinstance(i, QtWidgets.QGraphicsItem)]
         if not items:
-            items = [i for i in self._scene.items() if isinstance(i, BoardImageItem)]
+            items = [
+                i
+                for i in self._scene.items()
+                if isinstance(i, (BoardImageItem, BoardVideoItem, BoardSequenceItem))
+            ]
         if not items:
             self._notify("Select items to layout.")
             return
@@ -745,10 +1121,14 @@ class BoardController:
         self._apply_queue.clear()
         self._apply_pending_groups = []
         self._apply_image_map = {}
+        self._apply_video_map = {}
+        self._apply_sequence_map = {}
         self._apply_note_map = {}
         self._apply_payload_ref = payload
         notes: list[dict] = []
         images: list[dict] = []
+        videos: list[dict] = []
+        sequences: list[dict] = []
         groups: list[dict] = []
         for entry in payload.get("items", []):
             if isinstance(entry, dict):
@@ -757,11 +1137,19 @@ class BoardController:
                     notes.append(entry)
                 elif kind == "image":
                     images.append(entry)
+                elif kind == "video":
+                    videos.append(entry)
+                elif kind == "sequence":
+                    sequences.append(entry)
                 elif kind == "group":
                     groups.append(entry)
         for entry in notes:
             self._apply_queue.append(entry)
         for entry in images:
+            self._apply_queue.append(entry)
+        for entry in videos:
+            self._apply_queue.append(entry)
+        for entry in sequences:
             self._apply_queue.append(entry)
         self._apply_pending_groups = groups
         self._apply_phase = "items"
@@ -798,6 +1186,44 @@ class BoardController:
                 self._scene.addItem(item)
                 if filename:
                     self._apply_image_map[str(filename)] = item
+            elif entry.get("type") == "video" and assets_dir is not None:
+                filename = entry.get("file", "")
+                path = assets_dir / filename
+                item = BoardVideoItem(self, path)
+                if item.boundingRect().isNull():
+                    continue
+                item.setFlags(
+                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+                )
+                item.setTransformOriginPoint(item.boundingRect().center())
+                item.setData(0, "video")
+                item.setData(1, filename)
+                item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+                item.setScale(float(entry.get("scale", 1.0)))
+                self._scene.addItem(item)
+                if filename:
+                    self._apply_video_map[str(filename)] = item
+            elif entry.get("type") == "sequence":
+                dir_text = str(entry.get("dir", ""))
+                dir_path = self._resolve_project_path(dir_text)
+                item = BoardSequenceItem(self, dir_path)
+                if item.boundingRect().isNull():
+                    continue
+                item.setFlags(
+                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+                )
+                item.setTransformOriginPoint(item.boundingRect().center())
+                item.setData(0, "sequence")
+                item.setData(1, dir_text)
+                item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+                item.setScale(float(entry.get("scale", 1.0)))
+                self._scene.addItem(item)
+                if dir_text:
+                    self._apply_sequence_map[str(dir_text)] = item
             elif entry.get("type") == "note":
                 item = BoardNoteItem(entry.get("text", ""))
                 align = entry.get("align", "left")
@@ -835,6 +1261,14 @@ class BoardController:
                     r_id = str(ref.get("id", ""))
                     if r_type == "image":
                         item = self._apply_image_map.get(r_id)
+                        if item is not None:
+                            group.add_member(item)
+                    elif r_type == "video":
+                        item = self._apply_video_map.get(r_id)
+                        if item is not None:
+                            group.add_member(item)
+                    elif r_type == "sequence":
+                        item = self._apply_sequence_map.get(r_id)
                         if item is not None:
                             group.add_member(item)
                     elif r_type == "note":
@@ -977,6 +1411,75 @@ class BoardController:
         dialog.activateWindow()
         QtCore.QTimer.singleShot(0, text_edit.setFocus)
 
+    def open_media_item(self, item: QtWidgets.QGraphicsItem) -> None:
+        kind = item.data(0)
+        if kind == "video":
+            if not self._project_root:
+                self._notify("Select a project first.")
+                return
+            filename = str(item.data(1))
+            path = self._project_root / ".skyforge_board_assets" / filename
+            if not path.exists():
+                self._notify("Video file not found.")
+                return
+            self._open_video_dialog(path)
+        elif kind == "sequence":
+            dir_text = str(item.data(1))
+            dir_path = self._resolve_project_path(dir_text)
+            if not dir_path.exists():
+                self._notify("Sequence directory not found.")
+                return
+            self._open_sequence_dialog(dir_path)
+
+    def _open_video_dialog(self, path: Path) -> None:
+        dialog = QtWidgets.QDialog(self.w)
+        dialog.setWindowTitle(f"Video: {path.name}")
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.resize(860, 540)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        status = QtWidgets.QLabel("")
+        status.setStyleSheet("color: #9aa3ad;")
+        layout.addWidget(status, 0)
+
+        preview_label = QtWidgets.QLabel(path.name)
+        preview_label.setStyleSheet("color: #c6ccd6; font-weight: bold;")
+
+        preview_widget = QtWidgets.QLabel("")
+        backend_pref = getattr(self.w, "_video_backend_pref", "auto")
+        controller = VideoController(
+            backend_pref,
+            status_label=status,
+            preview_label=preview_label,
+            preview_widget=preview_widget,
+            parent=dialog,
+        )
+        dialog._video_controller = controller  # type: ignore[attr-defined]
+        layout.addWidget(controller.widget, 1)
+
+        controls = QtWidgets.QHBoxLayout()
+        play_btn = QtWidgets.QPushButton("Play")
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        slider.setRange(0, 0)
+        controls.addWidget(play_btn, 0)
+        controls.addWidget(slider, 1)
+        layout.addLayout(controls)
+
+        controller.bind_controls(play_btn, slider)
+        controller.play_path(path)
+
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _open_sequence_dialog(self, dir_path: Path) -> None:
+        dialog = _SequencePlayerDialog(dir_path, parent=self.w)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def _on_scene_changed(self) -> None:
         if self._loading:
             return
@@ -1027,9 +1530,123 @@ class BoardController:
             return fallback
         return QtCore.QSize(1, 1)
 
+    def _build_media_placeholder(self, label: str, subtitle: str) -> QtGui.QPixmap:
+        size = QtCore.QSize(320, 180)
+        pixmap = QtGui.QPixmap(size)
+        pixmap.fill(QtGui.QColor("#22262d"))
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#3a404a"), 2))
+        painter.drawRoundedRect(pixmap.rect().adjusted(2, 2, -2, -2), 10, 10)
+        painter.setPen(QtGui.QColor("#d6d9df"))
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSize(20)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect().adjusted(0, -10, 0, -10), QtCore.Qt.AlignmentFlag.AlignCenter, label)
+        painter.setPen(QtGui.QColor("#9aa3ad"))
+        font.setBold(False)
+        font.setPointSize(9)
+        painter.setFont(font)
+        painter.drawText(
+            pixmap.rect().adjusted(12, 120, -12, -12),
+            QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.TextFlag.TextWordWrap,
+            subtitle,
+        )
+        painter.end()
+        return pixmap
+
+    def _get_video_thumbnail(self, path: Path, max_dim: int) -> QtGui.QPixmap:
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            return self._build_media_placeholder("VIDEO", path.name)
+        key = (path, max_dim)
+        cached = self._video_thumb_cache.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        if cv2 is None:
+            return self._build_media_placeholder("VIDEO", path.name)
+        pixmap = QtGui.QPixmap()
+        try:
+            cap = cv2.VideoCapture(str(path))
+            if not cap.isOpened():
+                cap.release()
+                return self._build_media_placeholder("VIDEO", path.name)
+            ok, frame = cap.read()
+            cap.release()
+            if ok and frame is not None:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb.shape
+                bytes_per_line = ch * w
+                image = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+                pixmap = QtGui.QPixmap.fromImage(image)
+        except Exception:
+            pixmap = QtGui.QPixmap()
+        if pixmap.isNull():
+            pixmap = self._build_media_placeholder("VIDEO", path.name)
+        else:
+            if pixmap.width() > max_dim or pixmap.height() > max_dim:
+                pixmap = pixmap.scaled(
+                    max_dim,
+                    max_dim,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+        self._video_thumb_cache[key] = (mtime, pixmap)
+        return pixmap
+
+    def _sequence_frame_paths(self, dir_path: Path) -> list[Path]:
+        if not dir_path.exists() or not dir_path.is_dir():
+            return []
+        frames = [p for p in dir_path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
+        return sorted(frames, key=lambda p: p.name)
+
+    def _get_sequence_thumbnail(self, dir_path: Path, max_dim: int) -> QtGui.QPixmap:
+        try:
+            mtime = dir_path.stat().st_mtime
+        except Exception:
+            return self._build_media_placeholder("SEQ", dir_path.name)
+        key = (dir_path, max_dim)
+        cached = self._sequence_thumb_cache.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        frames = self._sequence_frame_paths(dir_path)
+        if not frames:
+            return self._build_media_placeholder("SEQ", dir_path.name)
+        pixmap = self._get_display_pixmap(frames[0], max_dim)
+        if pixmap.isNull():
+            pixmap = self._build_media_placeholder("SEQ", dir_path.name)
+        self._sequence_thumb_cache[key] = (mtime, pixmap)
+        return pixmap
+
+    def _is_video_file(self, path: Path) -> bool:
+        return path.is_file() and path.suffix.lower() in VIDEO_EXTS
+
+    def _is_image_file(self, path: Path) -> bool:
+        return path.is_file() and path.suffix.lower() in IMAGE_EXTS
+
+    def _relative_to_project(self, path: Path) -> str:
+        if self._project_root is None:
+            return str(path)
+        try:
+            return str(path.relative_to(self._project_root))
+        except Exception:
+            return str(path)
+
+    def _resolve_project_path(self, path_text: str) -> Path:
+        p = Path(path_text)
+        if p.is_absolute() or self._project_root is None:
+            return p
+        return self._project_root / p
+
     def _update_view_quality(self) -> None:
         view = self.w.board_page.view
-        item_count = sum(1 for i in self._scene.items() if i.data(0) in ("image", "note", "group"))
+        item_count = sum(
+            1
+            for i in self._scene.items()
+            if i.data(0) in ("image", "note", "video", "sequence", "group")
+        )
         low_quality = item_count >= 200
         if low_quality == self._low_quality:
             return
@@ -1104,6 +1721,22 @@ class BoardController:
                     "y": item.pos().y(),
                     "scale": item.scale(),
                 })
+            elif kind == "video":
+                data["items"].append({
+                    "type": "video",
+                    "file": str(item.data(1)),
+                    "x": item.pos().x(),
+                    "y": item.pos().y(),
+                    "scale": item.scale(),
+                })
+            elif kind == "sequence":
+                data["items"].append({
+                    "type": "sequence",
+                    "dir": str(item.data(1)),
+                    "x": item.pos().x(),
+                    "y": item.pos().y(),
+                    "scale": item.scale(),
+                })
             elif kind == "note" and isinstance(item, BoardNoteItem):
                 data["items"].append({
                     "type": "note",
@@ -1116,6 +1749,10 @@ class BoardController:
                 for m in item.members():
                     if m.data(0) == "image":
                         members.append({"type": "image", "id": str(m.data(1))})
+                    elif m.data(0) == "video":
+                        members.append({"type": "video", "id": str(m.data(1))})
+                    elif m.data(0) == "sequence":
+                        members.append({"type": "sequence", "id": str(m.data(1))})
                     elif m.data(0) == "note" and isinstance(m, BoardNoteItem):
                         members.append({"type": "note", "id": m.note_id()})
                 if not members:
@@ -1130,6 +1767,8 @@ class BoardController:
     def _apply_payload(self, payload: dict) -> None:
         assets_dir = self._project_root / ".skyforge_board_assets" if self._project_root else None
         image_map: dict[str, QtWidgets.QGraphicsPixmapItem] = {}
+        video_map: dict[str, QtWidgets.QGraphicsItem] = {}
+        sequence_map: dict[str, QtWidgets.QGraphicsItem] = {}
         note_map: dict[str, BoardNoteItem] = {}
         pending_groups = []
         for entry in payload.get("items", []):
@@ -1152,6 +1791,44 @@ class BoardController:
                 self._scene.addItem(item)
                 if filename:
                     image_map[str(filename)] = item
+            elif entry.get("type") == "video" and assets_dir is not None:
+                filename = entry.get("file", "")
+                path = assets_dir / filename
+                item = BoardVideoItem(self, path)
+                if item.boundingRect().isNull():
+                    continue
+                item.setFlags(
+                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+                )
+                item.setTransformOriginPoint(item.boundingRect().center())
+                item.setData(0, "video")
+                item.setData(1, filename)
+                item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+                item.setScale(float(entry.get("scale", 1.0)))
+                self._scene.addItem(item)
+                if filename:
+                    video_map[str(filename)] = item
+            elif entry.get("type") == "sequence":
+                dir_text = str(entry.get("dir", ""))
+                dir_path = self._resolve_project_path(dir_text)
+                item = BoardSequenceItem(self, dir_path)
+                if item.boundingRect().isNull():
+                    continue
+                item.setFlags(
+                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+                    | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+                )
+                item.setTransformOriginPoint(item.boundingRect().center())
+                item.setData(0, "sequence")
+                item.setData(1, dir_text)
+                item.setPos(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+                item.setScale(float(entry.get("scale", 1.0)))
+                self._scene.addItem(item)
+                if dir_text:
+                    sequence_map[str(dir_text)] = item
             elif entry.get("type") == "note":
                 item = BoardNoteItem(entry.get("text", ""))
                 align = entry.get("align", "left")
@@ -1183,6 +1860,14 @@ class BoardController:
                     r_id = str(ref.get("id", ""))
                     if r_type == "image":
                         item = image_map.get(r_id)
+                        if item is not None:
+                            group.add_member(item)
+                    elif r_type == "video":
+                        item = video_map.get(r_id)
+                        if item is not None:
+                            group.add_member(item)
+                    elif r_type == "sequence":
+                        item = sequence_map.get(r_id)
                         if item is not None:
                             group.add_member(item)
                     elif r_type == "note":
@@ -1255,6 +1940,28 @@ class BoardController:
                             str(assets_dir / label),
                         )
                     top.addChild(child)
+                elif member.data(0) == "video":
+                    label = str(member.data(1))
+                    child = QtWidgets.QTreeWidgetItem([f"Video: {label}"])
+                    child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("video", label))
+                    if assets_dir is not None and label:
+                        child.setData(
+                            0,
+                            QtCore.Qt.ItemDataRole.UserRole + 1,
+                            str(assets_dir / label),
+                        )
+                    top.addChild(child)
+                elif member.data(0) == "sequence":
+                    seq_key = str(member.data(1))
+                    seq_path = self._resolve_project_path(seq_key)
+                    child = QtWidgets.QTreeWidgetItem([f"Seq: {seq_path.name}"])
+                    child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("sequence", seq_key))
+                    child.setData(
+                        0,
+                        QtCore.Qt.ItemDataRole.UserRole + 1,
+                        str(seq_path),
+                    )
+                    top.addChild(child)
                 elif member.data(0) == "note" and isinstance(member, BoardNoteItem):
                     text = member.text_item.toPlainText().strip().replace("\n", " ")
                     label = f"Note: {text[:24] + ('…' if len(text) > 24 else '')}"
@@ -1266,7 +1973,7 @@ class BoardController:
         root_ungrouped.setForeground(0, QtGui.QColor("#c6ccd6"))
         tree.addTopLevelItem(root_ungrouped)
         for item in self._scene.items():
-            if item.data(0) not in ("image", "note"):
+            if item.data(0) not in ("image", "note", "video", "sequence"):
                 continue
             if self._find_group_for_item(item) is not None:
                 continue
@@ -1280,6 +1987,28 @@ class BoardController:
                         QtCore.Qt.ItemDataRole.UserRole + 1,
                         str(assets_dir / label),
                     )
+                root_ungrouped.addChild(child)
+            elif item.data(0) == "video":
+                label = str(item.data(1))
+                child = QtWidgets.QTreeWidgetItem([f"Video: {label}"])
+                child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("video", label))
+                if assets_dir is not None and label:
+                    child.setData(
+                        0,
+                        QtCore.Qt.ItemDataRole.UserRole + 1,
+                        str(assets_dir / label),
+                    )
+                root_ungrouped.addChild(child)
+            elif item.data(0) == "sequence":
+                seq_key = str(item.data(1))
+                seq_path = self._resolve_project_path(seq_key)
+                child = QtWidgets.QTreeWidgetItem([f"Seq: {seq_path.name}"])
+                child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("sequence", seq_key))
+                child.setData(
+                    0,
+                    QtCore.Qt.ItemDataRole.UserRole + 1,
+                    str(seq_path),
+                )
                 root_ungrouped.addChild(child)
             elif item.data(0) == "note" and isinstance(item, BoardNoteItem):
                 text = item.text_item.toPlainText().strip().replace("\n", " ")
@@ -1296,7 +2025,7 @@ class BoardController:
         if self._syncing_tree_selection:
             return
         tree = self.w.board_page.groups_tree
-        selected = [i for i in self._scene.selectedItems() if i.data(0) in ("image", "note")]
+        selected = [i for i in self._scene.selectedItems() if i.data(0) in ("image", "note", "video", "sequence")]
         if not selected:
             tree.blockSignals(True)
             tree.clearSelection()
@@ -1305,6 +2034,10 @@ class BoardController:
         item = selected[0]
         if item.data(0) == "image":
             target = ("image", str(item.data(1)))
+        elif item.data(0) == "video":
+            target = ("video", str(item.data(1)))
+        elif item.data(0) == "sequence":
+            target = ("sequence", str(item.data(1)))
         elif item.data(0) == "note" and isinstance(item, BoardNoteItem):
             target = ("note", item.note_id())
         else:
@@ -1343,6 +2076,22 @@ class BoardController:
             name = str(info[1])
             for it in self._scene.items():
                 if it.data(0) == "image" and str(it.data(1)) == name:
+                    for sel in self._scene.selectedItems():
+                        sel.setSelected(False)
+                    it.setSelected(True)
+                    break
+        elif kind == "video":
+            name = str(info[1])
+            for it in self._scene.items():
+                if it.data(0) == "video" and str(it.data(1)) == name:
+                    for sel in self._scene.selectedItems():
+                        sel.setSelected(False)
+                    it.setSelected(True)
+                    break
+        elif kind == "sequence":
+            key = str(info[1])
+            for it in self._scene.items():
+                if it.data(0) == "sequence" and str(it.data(1)) == key:
                     for sel in self._scene.selectedItems():
                         sel.setSelected(False)
                     it.setSelected(True)

@@ -27,5 +27,25 @@
     ]
   },
   "project_tree_batch_size": 20,
-  "project_tree_batch_delay_ms": 24
+  "project_tree_batch_delay_ms": 24,
+  "client_sync_roots": {
+    "newProject2": [
+      "abc",
+      "audio",
+      "comp",
+      "desk",
+      "flip",
+      "geo",
+      "hda",
+      "render",
+      "scripts",
+      "sim",
+      "tex",
+      "video"
+    ],
+    "test_pipeline": [
+      "assets",
+      "shots"
+    ]
+  }
 }

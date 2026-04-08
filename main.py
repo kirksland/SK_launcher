@@ -206,6 +206,18 @@ class LauncherWindow(QtWidgets.QMainWindow):
         if len(nav_buttons) > 4:
             nav_buttons[4].clicked.connect(lambda: self.pages.setCurrentIndex(4))
 
+        self._nav_clients_btn = nav_buttons[3] if len(nav_buttons) > 3 else None
+        self._nav_clients_label = "Clients"
+        self._nav_clients_badge: Optional[QtWidgets.QFrame] = None
+        if self._nav_clients_btn is not None:
+            badge = QtWidgets.QFrame(self._nav_clients_btn)
+            badge.setFixedSize(8, 8)
+            badge.setStyleSheet("background: #e03b3b; border-radius: 4px;")
+            badge.setVisible(False)
+            self._nav_clients_badge = badge
+            self._nav_clients_btn.installEventFilter(self)
+            self._position_clients_badge()
+
         self.path_label = self.projects_page.path_label
         self.browse_btn = self.projects_page.browse_btn
         self.refresh_btn = self.projects_page.refresh_btn
@@ -269,6 +281,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.board_project_label = self.board_page.project_label
         self.board_add_image_btn = self.board_page.add_image_btn
+        self.board_add_video_btn = self.board_page.add_video_btn
         self.board_auto_layout_btn = self.board_page.auto_layout_btn
         self.board_fit_btn = self.board_page.fit_btn
         self.board_save_btn = self.board_page.save_btn
@@ -278,10 +291,25 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.client_refresh_btn = self.client_page.refresh_btn
         self.client_list = self.client_page.client_list
-        self.client_preview = self.client_page.client_preview
         self.client_info = self.client_page.client_info
         self.client_bind_btn = self.client_page.bind_btn
         self.client_status = self.client_page.status
+        self.client_sync_status = self.client_page.client_sync_status
+        self.client_sync_local_path = self.client_page.client_sync_local_path
+        self.client_sync_server_path = self.client_page.client_sync_server_path
+        self.client_tree = self.client_page.client_tree
+        self.client_sync_push_list = self.client_page.client_sync_push_list
+        self.client_sync_pull_list = self.client_page.client_sync_pull_list
+        self.client_sync_conflicts_list = self.client_page.client_sync_conflicts_list
+        self.client_sync_preview_btn = self.client_page.client_sync_preview_btn
+        self.client_sync_pull_btn = self.client_page.client_sync_pull_btn
+        self.client_sync_push_btn = self.client_page.client_sync_push_btn
+        self.client_sync_btn = self.client_page.client_sync_btn
+        self.client_sync_open_btn = self.client_page.client_sync_open_btn
+        self.client_sync_baseline_btn = self.client_page.client_sync_baseline_btn
+        self.client_conflict_keep_local_btn = self.client_page.client_conflict_keep_local_btn
+        self.client_conflict_keep_server_btn = self.client_page.client_conflict_keep_server_btn
+        self.client_conflict_keep_both_btn = self.client_page.client_conflict_keep_both_btn
 
         self.settings_projects_dir = self.settings_page.settings_projects_dir
         self.settings_server_dir = self.settings_page.settings_server_dir
@@ -342,8 +370,24 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.client_refresh_btn.clicked.connect(self.client_controller.refresh_client_catalog)
         self.client_bind_btn.clicked.connect(self.client_controller.clone_client_project)
         self.client_list.itemClicked.connect(self.client_controller.on_client_project_selected)
+        self.client_sync_preview_btn.clicked.connect(self.client_controller.preview_client_project)
+        self.client_sync_pull_btn.clicked.connect(self.client_controller.pull_client_project)
+        self.client_sync_push_btn.clicked.connect(self.client_controller.push_client_project)
+        self.client_sync_btn.clicked.connect(self.client_controller.sync_client_project)
+        self.client_sync_open_btn.clicked.connect(self.client_controller.open_local_project_folder)
+        self.client_sync_baseline_btn.clicked.connect(self.client_controller.save_sync_baseline)
+        self.client_conflict_keep_local_btn.clicked.connect(
+            lambda: self.client_controller.resolve_conflicts("local")
+        )
+        self.client_conflict_keep_server_btn.clicked.connect(
+            lambda: self.client_controller.resolve_conflicts("server")
+        )
+        self.client_conflict_keep_both_btn.clicked.connect(
+            lambda: self.client_controller.resolve_conflicts("both")
+        )
 
         self.board_add_image_btn.clicked.connect(self.board_controller.add_image)
+        self.board_add_video_btn.clicked.connect(self.board_controller.add_video)
         self.board_auto_layout_btn.clicked.connect(self.board_controller.layout_selection_grid)
         self.board_fit_btn.clicked.connect(self.board_controller.fit_view)
         self.board_save_btn.clicked.connect(self.board_controller.save_board)
@@ -397,6 +441,28 @@ class LauncherWindow(QtWidgets.QMainWindow):
     def _media_prev(self) -> None:
         # VK_MEDIA_PREV_TRACK = 0xB1
         self._send_media_key(0xB1)
+
+    def set_clients_badge(self, enabled: bool) -> None:
+        if self._nav_clients_btn is None or self._nav_clients_badge is None:
+            return
+        self._nav_clients_badge.setVisible(bool(enabled))
+        self._position_clients_badge()
+
+    def _position_clients_badge(self) -> None:
+        if self._nav_clients_btn is None or self._nav_clients_badge is None:
+            return
+        x = max(0, self._nav_clients_btn.width() - 14)
+        y = 8
+        self._nav_clients_badge.move(x, y)
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if obj is self._nav_clients_btn and event.type() in (
+            QtCore.QEvent.Type.Resize,
+            QtCore.QEvent.Type.Show,
+            QtCore.QEvent.Type.Move,
+        ):
+            self._position_clients_badge()
+        return super().eventFilter(obj, event)
 
 
     def save_settings_from_ui(self) -> None:

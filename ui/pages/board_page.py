@@ -116,7 +116,7 @@ class BoardView(QtWidgets.QGraphicsView):
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self._move_start_positions = {id(i): i.pos() for i in self.scene().selectedItems()}
         if event.button() == QtCore.Qt.MouseButton.LeftButton and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
-            items = [i for i in self.scene().selectedItems() if i.data(0) in ("image", "note")]
+            items = [i for i in self.scene().selectedItems() if i.data(0) in ("image", "note", "video", "sequence")]
             if items:
                 self._scaling = True
                 self._scale_items = list(items)
@@ -221,7 +221,11 @@ class BoardView(QtWidgets.QGraphicsView):
         item = items_at[0] if items_at else None
         note_item = None
         group_item = None
+        media_item = None
         while item is not None:
+            if item.data(0) in ("video", "sequence"):
+                media_item = item
+                break
             if item.data(0) == "note":
                 note_item = item
                 break
@@ -233,6 +237,12 @@ class BoardView(QtWidgets.QGraphicsView):
             controller = self._resolve_controller()
             if controller is not None and hasattr(controller, "select_group_members"):
                 controller.select_group_members(group_item)
+                event.accept()
+                return
+        if media_item is not None:
+            controller = self._resolve_controller()
+            if controller is not None and hasattr(controller, "open_media_item"):
+                controller.open_media_item(media_item)
                 event.accept()
                 return
         if note_item is not None:
@@ -267,12 +277,19 @@ class BoardView(QtWidgets.QGraphicsView):
         selected = self.scene().selectedItems()
         selected_kinds = {getattr(i, "data", lambda _k: None)(0) for i in selected}
         has_group = "group" in selected_kinds
-        selected_items = [i for i in selected if getattr(i, "data", lambda _k: None)(0) in ("image", "note")]
+        selected_items = [i for i in selected if getattr(i, "data", lambda _k: None)(0) in ("image", "note", "video", "sequence")]
         has_group_members = bool(selected_items)
         can_group = len(selected_items) >= 2
+        single_video = len(selected_items) == 1 and selected_items[0].data(0) == "video"
 
         add_image = menu.addAction("Add Image...")
+        add_video = menu.addAction("Add Video...")
+        add_sequence = menu.addAction("Add Image Sequence...")
         add_note = menu.addAction("Add Note")
+        if single_video:
+            convert_video = menu.addAction("Convert Video To Sequence")
+        else:
+            convert_video = None
         if can_group:
             add_group = menu.addAction("Group Selection")
         else:
@@ -289,8 +306,14 @@ class BoardView(QtWidgets.QGraphicsView):
         action = menu.exec(global_pos)
         if action == add_image and hasattr(controller, "add_image"):
             controller.add_image()
+        elif action == add_video and hasattr(controller, "add_video"):
+            controller.add_video()
+        elif action == add_sequence and hasattr(controller, "add_sequence"):
+            controller.add_sequence()
         elif action == add_note and hasattr(controller, "add_note_at"):
             controller.add_note_at(self.mapToScene(view_pos))
+        elif convert_video is not None and action == convert_video and hasattr(controller, "convert_video_to_sequence"):
+            controller.convert_video_to_sequence(selected_items[0])
         elif add_group is not None and action == add_group and hasattr(controller, "add_group"):
             controller.add_group()
         elif action == auto_layout and hasattr(controller, "layout_selection_grid"):
@@ -456,6 +479,8 @@ class BoardPage(QtWidgets.QWidget):
 
         self.add_image_btn = QtWidgets.QPushButton("Add Image")
         header.addWidget(self.add_image_btn, 0)
+        self.add_video_btn = QtWidgets.QPushButton("Add Video")
+        header.addWidget(self.add_video_btn, 0)
         self.auto_layout_btn = QtWidgets.QPushButton("Auto Layout")
         header.addWidget(self.auto_layout_btn, 0)
         self.auto_layout_btn.setToolTip("Auto layout (Pinterest / masonry)")
@@ -534,13 +559,24 @@ class BoardPage(QtWidgets.QWidget):
             local_path = Path(url.toLocalFile())
             print(f"[BOARD] URL -> {local_path}")
             if local_path.is_file():
-                item = controller.add_image_from_path(local_path, scene_pos=scene_pos)
+                item = None
+                if hasattr(controller, "_is_video_file") and controller._is_video_file(local_path):
+                    if hasattr(controller, "add_video_from_path"):
+                        item = controller.add_video_from_path(local_path, scene_pos=scene_pos)
+                elif hasattr(controller, "_is_image_file") and controller._is_image_file(local_path):
+                    item = controller.add_image_from_path(local_path, scene_pos=scene_pos)
                 if item is not None:
                     controller.try_add_item_to_group(item, scene_pos)
                     handled = True
             else:
                 if local_path.exists() and local_path.is_dir():
-                    print(f"[BOARD] Drop is a directory, ignored: {local_path}")
+                    if hasattr(controller, "add_sequence_from_dir"):
+                        item = controller.add_sequence_from_dir(local_path, scene_pos=scene_pos)
+                        if item is not None:
+                            controller.try_add_item_to_group(item, scene_pos)
+                            handled = True
+                    else:
+                        print(f"[BOARD] Drop is a directory, ignored: {local_path}")
                     continue
                 if url.isValid() and url.scheme().lower().startswith("http"):
                     controller.add_image_from_url(str(url.toString()), scene_pos=scene_pos)
