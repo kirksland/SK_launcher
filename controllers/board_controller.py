@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import json
 import time
 import uuid
 import shutil
 import urllib.request
+import hashlib
 from collections import deque
 from pathlib import Path
 from typing import Optional
@@ -17,7 +19,14 @@ try:
 except Exception:  # pragma: no cover - optional video backend
     cv2 = None  # type: ignore
 
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+try:  # Optional OpenEXR header access for channels/metadata.
+    import OpenEXR  # type: ignore
+    import Imath  # type: ignore
+except Exception:  # pragma: no cover - optional exr backend
+    OpenEXR = None  # type: ignore
+    Imath = None  # type: ignore
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".exr"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
@@ -99,6 +108,176 @@ class _VideoToSequenceWorker(QtCore.QObject):
 
     def cancel(self) -> None:
         self._cancel = True
+
+
+class _ExrInfoWorker(QtCore.QObject):
+    finished = QtCore.Signal(bool, object, object, object)
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        try:
+            if OpenEXR is not None:
+                exr = OpenEXR.InputFile(str(self._path))
+                header = exr.header()
+                channels = sorted(list(header.get("channels", {}).keys()))
+                dw = header.get("dataWindow")
+                size = None
+                if dw is not None:
+                    w = int(dw.max.x - dw.min.x + 1)
+                    h = int(dw.max.y - dw.min.y + 1)
+                    size = QtCore.QSize(w, h)
+                note = "Channels from OpenEXR header."
+                self.finished.emit(True, channels, size, note)
+                return
+            if cv2 is None:
+                self.finished.emit(False, [], None, "OpenEXR/OpenCV not available.")
+                return
+            img = cv2.imread(str(self._path), cv2.IMREAD_UNCHANGED)
+            if img is None:
+                self.finished.emit(False, [], None, "Failed to read EXR.")
+                return
+            channels = []
+            if img.ndim == 2:
+                channels = ["Y"]
+            elif img.shape[2] == 1:
+                channels = ["Y"]
+            elif img.shape[2] == 3:
+                channels = ["B", "G", "R"]
+            elif img.shape[2] == 4:
+                channels = ["B", "G", "R", "A"]
+            else:
+                channels = [f"C{i}" for i in range(int(img.shape[2]))]
+            size = QtCore.QSize(int(img.shape[1]), int(img.shape[0]))
+            note = "Channels inferred via OpenCV (order may be BGR)."
+            self.finished.emit(True, channels, size, note)
+        except Exception as exc:
+            self.finished.emit(False, [], None, str(exc))
+
+
+class _ExrChannelPreviewWorker(QtCore.QObject):
+    finished = QtCore.Signal(bool, str, object, object)
+
+    def __init__(self, path: Path, channel: str) -> None:
+        super().__init__()
+        self._path = path
+        self._channel = channel
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        if OpenEXR is None or Imath is None:
+            self.finished.emit(False, self._channel, None, "OpenEXR not available.")
+            return
+        try:
+            import numpy as np  # type: ignore
+        except Exception:
+            self.finished.emit(False, self._channel, None, "NumPy not available.")
+            return
+        try:
+            exr = OpenEXR.InputFile(str(self._path))
+            header = exr.header()
+            dw = header.get("dataWindow")
+            if dw is None:
+                self.finished.emit(False, None, "Missing dataWindow.")
+                return
+            w = int(dw.max.x - dw.min.x + 1)
+            h = int(dw.max.y - dw.min.y + 1)
+            pt = Imath.PixelType(Imath.PixelType.FLOAT)
+            raw = exr.channel(self._channel, pt)
+            arr = np.frombuffer(raw, dtype=np.float32)
+            if arr.size != w * h:
+                self.finished.emit(False, None, "Channel size mismatch.")
+                return
+            img = arr.reshape((h, w))
+            valid = np.isfinite(img)
+            if not valid.any():
+                self.finished.emit(False, None, "Channel has no finite values.")
+                return
+            min_v = float(np.min(img[valid]))
+            max_v = float(np.max(img[valid]))
+            if max_v - min_v < 1e-8:
+                norm = np.zeros_like(img, dtype=np.float32)
+            else:
+                norm = (img - min_v) / (max_v - min_v)
+            norm = np.clip(norm, 0.0, 1.0)
+            img8 = (norm * 255.0).astype(np.uint8)
+            rgb = np.stack([img8, img8, img8], axis=-1)
+            payload = (int(rgb.shape[1]), int(rgb.shape[0]), rgb.tobytes())
+            self.finished.emit(True, self._channel, payload, None)
+        except Exception as exc:
+            self.finished.emit(False, self._channel, None, str(exc))
+
+
+class _VideoSegmentWorker(QtCore.QObject):
+    progress = QtCore.Signal(int, int)
+    finished = QtCore.Signal(bool, object, object)
+
+    def __init__(self, video_path: Path, out_dir: Path, start_frame: int, end_frame: int) -> None:
+        super().__init__()
+        self._video_path = video_path
+        self._out_dir = out_dir
+        self._start = max(0, int(start_frame))
+        self._end = max(self._start, int(end_frame))
+        self._cancel = False
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        if cv2 is None:
+            self.finished.emit(False, None, "OpenCV not available.")
+            return
+        try:
+            cap = cv2.VideoCapture(str(self._video_path))
+            if not cap.isOpened():
+                cap.release()
+                self.finished.emit(False, None, "Failed to open video.")
+                return
+            cap.set(1, self._start)  # CAP_PROP_POS_FRAMES
+            idx = 0
+            total = max(1, self._end - self._start + 1)
+            stem = self._video_path.stem
+            while True:
+                if self._cancel:
+                    cap.release()
+                    self.finished.emit(False, None, "Export cancelled.")
+                    return
+                pos = int(cap.get(1) or 0)
+                if pos > self._end:
+                    break
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                frame_name = f"{stem}_{self._start + idx:04d}.png"
+                frame_path = self._out_dir / frame_name
+                cv2.imwrite(str(frame_path), frame)
+                idx += 1
+                self.progress.emit(idx, total)
+            cap.release()
+            if idx <= 0:
+                self.finished.emit(False, None, "No frames exported.")
+                return
+            self.finished.emit(True, self._out_dir, None)
+        except Exception as exc:
+            self.finished.emit(False, None, str(exc))
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+
+class _UiBridge(QtCore.QObject):
+    def __init__(self, controller: "BoardController") -> None:
+        super().__init__(controller.w)
+        self._controller = controller
+
+    @QtCore.Slot(bool, object, object, object)
+    def on_exr_info_finished(self, success: bool, channels_obj: object, size_obj: object, note_obj: object) -> None:
+        self._controller._handle_exr_info_finished(success, channels_obj, size_obj, note_obj)
+
+    @QtCore.Slot(bool, str, object, object)
+    def on_exr_preview_finished(self, success: bool, channel: str, payload: object, error: object) -> None:
+        self._controller._handle_exr_preview_finished(success, channel, payload, error)
 
 
 class _PopupOutsideCloseFilter(QtCore.QObject):
@@ -645,6 +824,7 @@ class BoardController:
         self._pixmap_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
         self._video_thumb_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
         self._sequence_thumb_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
+        self._thumb_cache_dir: Optional[Path] = None
         self._max_display_dim = 2048
         self._low_quality = False
         self._visible_images: set[int] = set()
@@ -667,10 +847,32 @@ class BoardController:
         self._convert_thread: Optional[QtCore.QThread] = None
         self._convert_worker: Optional[_VideoToSequenceWorker] = None
         self._convert_dialog: Optional[QtWidgets.QProgressDialog] = None
+        self._edit_video_controller: Optional[VideoController] = None
+        self._edit_seq_frames: list[Path] = []
+        self._edit_seq_dir: Optional[Path] = None
+        self._edit_video_path: Optional[Path] = None
+        self._edit_video_total: int = 0
+        self._edit_video_playhead: int = 0
+        self._edit_video_clips: list[tuple[int, int]] = []
+        self._edit_selected_clip: int = -1
+        self._edit_exr_path: Optional[Path] = None
+        self._edit_exr_channels: list[str] = []
+        self._edit_exr_thread: Optional[QtCore.QThread] = None
+        self._edit_exr_worker: Optional[_ExrChannelPreviewWorker] = None
+        self._ui_bridge = _UiBridge(self)
+        self._segment_thread: Optional[QtCore.QThread] = None
+        self._segment_worker: Optional[_VideoSegmentWorker] = None
+        self._segment_dialog: Optional[QtWidgets.QProgressDialog] = None
         self._scene = self.w.board_page.scene
         self._scene.changed.connect(self._on_scene_changed)
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
         self.w.board_page.groups_tree.itemClicked.connect(self._on_group_tree_clicked)
+        self.w.board_page.edit_sequence_slider.valueChanged.connect(self._on_edit_sequence_slider)
+        self.w.board_page.edit_timeline.playheadChanged.connect(self._on_edit_timeline_playhead)
+        self.w.board_page.edit_timeline.selectedClipChanged.connect(self._on_edit_timeline_selected)
+        self.w.board_page.edit_timeline_split_btn.clicked.connect(self._split_edit_clip)
+        self.w.board_page.edit_timeline_export_btn.clicked.connect(self._export_edit_clip)
+        self.w.board_page.edit_exr_channel_combo.currentTextChanged.connect(self._on_edit_exr_channel_changed)
 
     def set_project(self, project_root: Optional[Path]) -> None:
         if project_root is None and self._project_root is not None:
@@ -707,7 +909,7 @@ class BoardController:
             self.w,
             "Add Image",
             str(self._project_root),
-            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.exr)",
         )
         if not path:
             return
@@ -1615,14 +1817,27 @@ class BoardController:
             if not path.exists():
                 self._notify("Video file not found.")
                 return
-            self._open_video_dialog(path)
+            self._show_edit_panel_for_video(path)
         elif kind == "sequence":
             dir_text = str(item.data(1))
             dir_path = self._resolve_project_path(dir_text)
             if not dir_path.exists():
                 self._notify("Sequence directory not found.")
                 return
-            self._open_sequence_dialog(dir_path)
+            self._show_edit_panel_for_sequence(dir_path)
+
+    def open_image_item(self, item: QtWidgets.QGraphicsItem) -> None:
+        if item.data(0) != "image":
+            return
+        if not self._project_root:
+            self._notify("Select a project first.")
+            return
+        filename = str(item.data(1))
+        path = self._project_root / ".skyforge_board_assets" / filename
+        if not path.exists():
+            self._notify("Image file not found.")
+            return
+        self._show_edit_panel_for_image(path)
 
     def _open_video_dialog(self, path: Path) -> None:
         dialog = QtWidgets.QDialog(self.w)
@@ -1667,11 +1882,354 @@ class BoardController:
         dialog.raise_()
         dialog.activateWindow()
 
-    def _open_sequence_dialog(self, dir_path: Path) -> None:
-        dialog = _SequencePlayerDialog(dir_path, parent=self.w)
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+    def _show_edit_panel_for_video(self, path: Path) -> None:
+        info = [
+            f"Type: Video",
+            f"Name: {path.name}",
+            f"Path: {path}",
+        ]
+        self.w.board_page.set_edit_panel_content(
+            "Edit Mode: Video",
+            info,
+            list_items=None,
+            footer="Edit/export options will appear here.",
+        )
+        self._ensure_edit_video_controller()
+        if self._edit_video_controller is not None:
+            self.w.board_page.show_edit_preview_video()
+            self._edit_video_controller.preview_first_frame(path)
+            self._edit_video_controller.play_path(path)
+        self._init_edit_video_timeline(path)
+
+    def _show_edit_panel_for_sequence(self, dir_path: Path) -> None:
+        frames = self._sequence_frame_paths(dir_path)
+        info = [
+            "Type: Sequence",
+            f"Name: {dir_path.name}",
+            f"Frames: {len(frames)}",
+            f"Path: {dir_path}",
+        ]
+        self.w.board_page.set_edit_panel_content(
+            "Edit Mode: Sequence",
+            info,
+            list_items=None,
+            footer="Edit/export options will appear here.",
+        )
+        self._edit_seq_frames = frames
+        self._edit_seq_dir = dir_path
+        if frames:
+            first = frames[0]
+            pixmap = self._get_display_pixmap(first, max_dim=1024)
+            self.w.board_page.show_edit_preview_sequence(
+                pixmap,
+                label=f"{first.name} (1/{len(frames)})",
+            )
+            self.w.board_page.edit_sequence_slider.blockSignals(True)
+            self.w.board_page.edit_sequence_slider.setRange(0, max(0, len(frames) - 1))
+            self.w.board_page.edit_sequence_slider.setValue(0)
+            self.w.board_page.edit_sequence_slider.blockSignals(False)
+        else:
+            placeholder = self._build_media_placeholder("SEQ", dir_path.name)
+            self.w.board_page.show_edit_preview_sequence(placeholder, label="No frames found.")
+            self.w.board_page.edit_sequence_slider.setRange(0, 0)
+
+    def _show_edit_panel_for_image(self, path: Path) -> None:
+        size = self._get_image_size(path)
+        info = [
+            "Type: Image",
+            f"Name: {path.name}",
+            f"Size: {size.width()} x {size.height()}",
+            f"Path: {path}",
+        ]
+        preview = self._get_display_pixmap(path, max_dim=1024)
+        self.w.board_page.show_edit_preview_image(preview)
+        if path.suffix.lower() == ".exr":
+            self._edit_exr_path = path
+            self._edit_exr_channels = []
+            self.w.board_page.set_exr_channel_row_visible(True)
+            self.w.board_page.set_edit_panel_content(
+                "Edit Mode: EXR",
+                info,
+                list_items=["Loading channels..."],
+                footer="Channels and metadata will appear here.",
+            )
+            self._load_exr_channels_into_panel(path)
+        else:
+            self._edit_exr_path = None
+            self._edit_exr_channels = []
+            self.w.board_page.set_exr_channel_row_visible(False)
+            self.w.board_page.set_edit_panel_content(
+                "Edit Mode: Image",
+                info,
+                list_items=None,
+                footer="Edit/export options will appear here.",
+            )
+
+    def _ensure_edit_video_controller(self) -> None:
+        if self._edit_video_controller is not None:
+            return
+        backend_pref = getattr(self.w, "_video_backend_pref", "auto")
+        status_label = self.w.board_page.edit_video_status
+        preview_label = QtWidgets.QLabel("Video")
+        preview_widget = QtWidgets.QLabel("")
+        controller = VideoController(
+            backend_pref,
+            status_label=status_label,
+            preview_label=preview_label,
+            preview_widget=preview_widget,
+            parent=self.w.board_page,
+        )
+        self._edit_video_controller = controller
+        host_layout = self.w.board_page.edit_video_host_layout
+        host_layout.addWidget(controller.widget)
+        controller.bind_controls(
+            self.w.board_page.edit_video_play_btn,
+            self.w.board_page.edit_video_slider,
+        )
+
+    def _init_edit_video_timeline(self, path: Path) -> None:
+        self._edit_video_path = path
+        self._edit_video_playhead = 0
+        total = 0
+        if cv2 is not None:
+            try:
+                cap = cv2.VideoCapture(str(path))
+                if cap.isOpened():
+                    total = int(cap.get(7) or 0)  # CAP_PROP_FRAME_COUNT
+                cap.release()
+            except Exception:
+                total = 0
+        self._edit_video_total = max(0, total)
+        if self._edit_video_total <= 0:
+            self._edit_video_clips = []
+            self._edit_selected_clip = -1
+            self.w.board_page.edit_timeline.set_data(0, [], 0)
+            self.w.board_page.edit_timeline_split_btn.setEnabled(False)
+            self.w.board_page.edit_timeline_export_btn.setEnabled(False)
+            self.w.board_page.edit_video_status.setText("Timeline unavailable (no frame count).")
+            return
+        self._edit_video_clips = [(0, self._edit_video_total - 1)]
+        self._edit_selected_clip = 0
+        self.w.board_page.edit_timeline.set_data(
+            self._edit_video_total,
+            self._edit_video_clips,
+            self._edit_video_playhead,
+        )
+        self.w.board_page.edit_timeline.set_selected_clip(self._edit_selected_clip)
+        self.w.board_page.edit_timeline_split_btn.setEnabled(True)
+        self.w.board_page.edit_timeline_export_btn.setEnabled(True)
+
+    def _on_edit_timeline_playhead(self, frame: int) -> None:
+        self._edit_video_playhead = max(0, min(int(frame), max(0, self._edit_video_total - 1)))
+        if self._edit_video_controller is not None:
+            self._edit_video_controller.seek_frame(self._edit_video_playhead)
+        if hasattr(self.w.board_page, "edit_timeline_frame_label"):
+            self.w.board_page.edit_timeline_frame_label.setText(f"Frame: {self._edit_video_playhead}")
+
+    def _on_edit_timeline_selected(self, index: int) -> None:
+        self._edit_selected_clip = int(index)
+
+    def _find_clip_at_playhead(self) -> Optional[int]:
+        for idx, (start, end) in enumerate(self._edit_video_clips):
+            if start <= self._edit_video_playhead <= end:
+                return idx
+        return None
+
+    def _split_edit_clip(self) -> None:
+        if not self._edit_video_clips:
+            return
+        idx = self._edit_selected_clip if self._edit_selected_clip >= 0 else self._find_clip_at_playhead()
+        if idx is None:
+            return
+        start, end = self._edit_video_clips[idx]
+        ph = self._edit_video_playhead
+        if ph <= start or ph >= end:
+            return
+        left = (start, ph)
+        right = (ph + 1, end)
+        self._edit_video_clips[idx:idx + 1] = [left, right]
+        self._edit_selected_clip = idx
+        self.w.board_page.edit_timeline.set_data(
+            self._edit_video_total,
+            self._edit_video_clips,
+            self._edit_video_playhead,
+        )
+
+    def _export_edit_clip(self) -> None:
+        if self._edit_video_path is None or not self._edit_video_clips:
+            return
+        idx = self._edit_selected_clip if self._edit_selected_clip >= 0 else self._find_clip_at_playhead()
+        if idx is None:
+            return
+        start, end = self._edit_video_clips[idx]
+        if self._segment_thread is not None:
+            self._notify("Export already running.")
+            return
+        if not self._project_root:
+            self._notify("Select a project first.")
+            return
+        assets_dir = self._project_root / ".skyforge_board_assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = assets_dir / f"{self._edit_video_path.stem}_seg_{start}_{end}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        dialog = QtWidgets.QProgressDialog("Exporting segment...", "Cancel", 0, 100, self.w)
+        dialog.setWindowTitle("Export Segment")
+        dialog.setMinimumDuration(200)
+        dialog.setValue(0)
+        dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        self._segment_dialog = dialog
+
+        worker = _VideoSegmentWorker(self._edit_video_path, out_dir, start, end)
+        thread = QtCore.QThread(self.w)
+        worker.moveToThread(thread)
+
+        def _on_progress(current: int, total: int) -> None:
+            if self._segment_dialog is None:
+                return
+            percent = int((current / max(1, total)) * 100)
+            self._segment_dialog.setValue(min(100, max(0, percent)))
+            self._segment_dialog.setLabelText(f"Exporting frames... {current}/{total}")
+            QtWidgets.QApplication.processEvents()
+
+        def _on_finished(success: bool, out_path: object, error: object) -> None:
+            if self._segment_dialog is not None:
+                self._segment_dialog.reset()
+                self._segment_dialog = None
+            self._segment_thread = None
+            self._segment_worker = None
+            if not success:
+                self._notify(str(error or "Export failed."))
+                return
+            if isinstance(out_path, Path):
+                item = self.add_sequence_from_dir(out_path)
+                if item is not None:
+                    self._notify("Segment exported as sequence.")
+            else:
+                self._notify("Export completed.")
+
+        def _on_cancel() -> None:
+            if self._segment_worker is not None:
+                self._segment_worker.cancel()
+
+        dialog.canceled.connect(_on_cancel)
+        worker.progress.connect(_on_progress)
+        worker.finished.connect(_on_finished)
+        worker.finished.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(worker.deleteLater)
+
+        self._segment_thread = thread
+        self._segment_worker = worker
+        thread.start()
+
+    def _on_edit_sequence_slider(self, value: int) -> None:
+        if not self._edit_seq_frames:
+            return
+        idx = max(0, min(value, len(self._edit_seq_frames) - 1))
+        frame = self._edit_seq_frames[idx]
+        pixmap = self._get_display_pixmap(frame, max_dim=1024)
+        self.w.board_page.show_edit_preview_sequence(
+            pixmap,
+            label=f"{frame.name} ({idx + 1}/{len(self._edit_seq_frames)})",
+        )
+
+    def _load_exr_channels_into_panel(self, path: Path) -> None:
+        worker = _ExrInfoWorker(path)
+        thread = QtCore.QThread(self.w)
+        worker.moveToThread(thread)
+        self.w.board_page._edit_exr_thread = thread  # type: ignore[attr-defined]
+        self.w.board_page._edit_exr_worker = worker  # type: ignore[attr-defined]
+        worker.finished.connect(self._ui_bridge.on_exr_info_finished)
+        worker.finished.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _on_edit_exr_channel_changed(self, channel: str) -> None:
+        if not channel:
+            return
+        self._queue_exr_channel_preview(channel)
+
+    def _handle_exr_info_finished(
+        self, success: bool, channels_obj: object, size_obj: object, note_obj: object
+    ) -> None:
+        if self._edit_exr_path is None:
+            return
+        path = self._edit_exr_path
+        channels = channels_obj if isinstance(channels_obj, list) else []
+        size = size_obj if isinstance(size_obj, QtCore.QSize) else None
+        note = str(note_obj or "")
+        info_lines = [
+            "Type: EXR",
+            f"Name: {path.name}",
+        ]
+        if size is not None:
+            info_lines.append(f"Size: {size.width()} x {size.height()}")
+        info_lines.append(f"Path: {path}")
+        footer = note or "Channels"
+        if success and channels:
+            self._edit_exr_channels = [str(c) for c in channels]
+            self.w.board_page.set_exr_channels(self._edit_exr_channels)
+            self.w.board_page.set_edit_panel_content(
+                "Edit Mode: EXR",
+                info_lines,
+                list_items=[str(c) for c in channels],
+                footer=footer,
+            )
+            self._queue_exr_channel_preview(self._edit_exr_channels[0])
+        elif success:
+            self.w.board_page.set_edit_panel_content(
+                "Edit Mode: EXR",
+                info_lines,
+                list_items=["No channels found."],
+                footer=footer,
+            )
+        else:
+            self._edit_exr_channels = []
+            self.w.board_page.set_exr_channels([])
+            self.w.board_page.set_edit_panel_content(
+                "Edit Mode: EXR",
+                info_lines,
+                list_items=["Failed to read EXR."],
+                footer=str(note_obj or "Failed to read EXR."),
+            )
+
+    def _handle_exr_preview_finished(
+        self, success: bool, channel: str, payload: object, error: object
+    ) -> None:
+        if success and isinstance(payload, tuple) and len(payload) == 3:
+            w, h, raw = payload
+            if isinstance(w, int) and isinstance(h, int) and isinstance(raw, (bytes, bytearray)):
+                bytes_per_line = w * 3
+                qimage = QtGui.QImage(raw, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+                pixmap = QtGui.QPixmap.fromImage(qimage.copy())
+                self.w.board_page.show_edit_preview_image(pixmap, label=f"Channel: {channel}")
+                return
+        msg = str(error or "Failed to render channel.")
+        self.w.board_page.edit_footer.setText(msg)
+
+    def _queue_exr_channel_preview(self, channel: str) -> None:
+        if self._edit_exr_path is None:
+            return
+        if self._edit_exr_thread is not None:
+            try:
+                self._edit_exr_thread.quit()
+            except Exception:
+                pass
+        worker = _ExrChannelPreviewWorker(self._edit_exr_path, channel)
+        thread = QtCore.QThread(self.w)
+        worker.moveToThread(thread)
+        self._edit_exr_thread = thread
+        self._edit_exr_worker = worker
+        worker.finished.connect(self._ui_bridge.on_exr_preview_finished)
+        worker.finished.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
 
     def _on_scene_changed(self) -> None:
         if self._loading:
@@ -1700,6 +2258,8 @@ class BoardController:
         if cached and cached[0] == mtime:
             return cached[1]
         pixmap = QtGui.QPixmap(str(path))
+        if pixmap.isNull() and path.suffix.lower() == ".exr":
+            pixmap = self._get_exr_pixmap(path, max_dim)
         if not pixmap.isNull():
             if pixmap.width() > max_dim or pixmap.height() > max_dim:
                 pixmap = pixmap.scaled(
@@ -1711,7 +2271,109 @@ class BoardController:
         self._pixmap_cache[key] = (mtime, pixmap)
         return pixmap
 
+    def _get_thumb_cache_dir(self) -> Optional[Path]:
+        if self._thumb_cache_dir is not None:
+            return self._thumb_cache_dir
+        if self._project_root is None:
+            return None
+        cache_dir = self._project_root / ".skyforge_cache" / "exr_thumbs"
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return None
+        self._thumb_cache_dir = cache_dir
+        return cache_dir
+
+    def _exr_cache_key(self, path: Path, max_dim: int) -> Optional[Path]:
+        cache_dir = self._get_thumb_cache_dir()
+        if cache_dir is None:
+            return None
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        key_src = f"{path.resolve()}|{mtime:.6f}|{max_dim}"
+        key = hashlib.sha1(key_src.encode("utf-8")).hexdigest()
+        return cache_dir / f"{key}.png"
+
+    def _get_exr_pixmap(self, path: Path, max_dim: int) -> QtGui.QPixmap:
+        cache_path = self._exr_cache_key(path, max_dim)
+        if cache_path is not None and cache_path.exists():
+            cached = QtGui.QPixmap(str(cache_path))
+            if not cached.isNull():
+                return cached
+        if cv2 is None:
+            return self._build_media_placeholder("EXR", f"{path.name}\n(OpenCV missing)")
+        if not os.environ.get("OPENCV_IO_ENABLE_OPENEXR"):
+            return self._build_media_placeholder("EXR", "OpenEXR codec disabled")
+        try:
+            import numpy as np  # type: ignore
+        except Exception:
+            return self._build_media_placeholder("EXR", path.name)
+        try:
+            img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        except Exception:
+            img = None
+        if img is None:
+            return self._build_media_placeholder("EXR", "Failed to read EXR")
+        if img.ndim == 2:
+            img = np.stack([img, img, img], axis=-1)
+        if img.ndim == 3 and img.shape[2] == 1:
+            img = np.repeat(img, 3, axis=2)
+        if img.ndim == 3 and img.shape[2] >= 3:
+            img = img[:, :, :3]
+        # Normalize to 8-bit for display.
+        if img.dtype != np.uint8:
+            img_f = img.astype(np.float32)
+            max_val = float(np.nanmax(img_f)) if img_f.size else 1.0
+            if max_val <= 1.0:
+                img_f = img_f * 255.0
+            else:
+                img_f = (img_f / max_val) * 255.0
+            img = np.clip(img_f, 0, 255).astype(np.uint8)
+        # OpenCV uses BGR; convert to RGB for Qt.
+        try:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        except Exception:
+            pass
+        h, w = img.shape[:2]
+        bytes_per_line = img.shape[2] * w
+        qimage = QtGui.QImage(img.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+        pixmap = QtGui.QPixmap.fromImage(qimage.copy())
+        if pixmap.width() > max_dim or pixmap.height() > max_dim:
+            pixmap = pixmap.scaled(
+                max_dim,
+                max_dim,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+        if cache_path is not None:
+            try:
+                pixmap.save(str(cache_path), "PNG")
+            except Exception:
+                pass
+        return pixmap
+
     def _get_image_size(self, path: Path, fallback: Optional[QtCore.QSize] = None) -> QtCore.QSize:
+        if path.suffix.lower() == ".exr":
+            if OpenEXR is not None:
+                try:
+                    exr = OpenEXR.InputFile(str(path))
+                    header = exr.header()
+                    dw = header.get("dataWindow")
+                    if dw is not None:
+                        w = int(dw.max.x - dw.min.x + 1)
+                        h = int(dw.max.y - dw.min.y + 1)
+                        return QtCore.QSize(w, h)
+                except Exception:
+                    pass
+            if cv2 is not None:
+                try:
+                    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+                    if img is not None:
+                        return QtCore.QSize(int(img.shape[1]), int(img.shape[0]))
+                except Exception:
+                    pass
         try:
             reader = QtGui.QImageReader(str(path))
             size = reader.size()

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
 import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 import ctypes
+
+# Enable OpenEXR codec in OpenCV when available (portable across project moves).
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
 from core.settings import (
     DEFAULT_ASSET_SCHEMA,
@@ -139,45 +143,35 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.media_next_btn.setStyleSheet(tool_button_dark_style(padding="4px 8px"))
         group_layout.addWidget(self.media_next_btn)
 
-        self.sidebar = QtWidgets.QFrame()
-        self.sidebar.setFixedWidth(240)
-        self.sidebar.setStyleSheet(
-            "QFrame {"
-            "background: #1f2329;"
-            "border-left: 1px solid #0f1216;"
-            "}"
-        )
-        outer.addWidget(self.sidebar, 0)
-
-        side_layout = QtWidgets.QVBoxLayout(self.sidebar)
-        side_layout.setContentsMargins(16, 18, 16, 18)
-        side_layout.setSpacing(12)
-
-        side_title = QtWidgets.QLabel("SKYFORGE")
-        side_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
-        title_font = QtGui.QFont()
-        title_font.setBold(True)
-        title_font.setPointSize(20)
-        side_title.setFont(title_font)
-        side_title.setStyleSheet(f"color: {PALETTE['light_text']};")
-        side_layout.addWidget(side_title)
-
-        side_sub = QtWidgets.QLabel("Launcher")
-        side_sub.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
-        sub_font = QtGui.QFont()
-        sub_font.setPointSize(14)
-        side_sub.setFont(sub_font)
-        side_sub.setStyleSheet(f"color: {PALETTE['muted']};")
-        side_layout.addWidget(side_sub)
-
-        side_layout.addSpacing(18)
-
-        side_layout.addStretch(1)
-
         nav_labels = ["Projects", "Asset Manager", "Board", "Clients", "Settings"]
         nav_buttons: List[QtWidgets.QToolButton] = []
         nav_font = QtGui.QFont()
-        nav_font.setPointSize(18)
+        nav_font.setPointSize(14)
+
+        bottom_bar = QtWidgets.QFrame()
+        bottom_bar.setStyleSheet(
+            "QFrame {"
+            "background: #1f2329;"
+            "border-top: 1px solid #0f1216;"
+            "}"
+        )
+        bottom_layout = QtWidgets.QHBoxLayout(bottom_bar)
+        bottom_layout.setContentsMargins(12, 8, 12, 8)
+        bottom_layout.setSpacing(8)
+        layout.addWidget(bottom_bar, 0)
+
+        brand = QtWidgets.QLabel("SKYFORGE LAUNCHER")
+        brand.setStyleSheet(f"color: {PALETTE['muted']}; font-weight: bold;")
+        bottom_layout.addWidget(brand, 0)
+
+        bottom_layout.addSpacing(8)
+
+        nav_container = QtWidgets.QFrame()
+        nav_row = QtWidgets.QHBoxLayout(nav_container)
+        nav_row.setContentsMargins(0, 0, 0, 0)
+        nav_row.setSpacing(6)
+        bottom_layout.addWidget(nav_container, 1)
+
         for label in nav_labels:
             btn = QtWidgets.QToolButton()
             btn.setText(label)
@@ -185,14 +179,15 @@ class LauncherWindow(QtWidgets.QMainWindow):
             btn.setAutoRaise(True)
             btn.setFont(nav_font)
             btn.setStyleSheet(
-                "QToolButton { color: #c6ccd6; padding: 12px 14px; text-align: left; }"
+                "QToolButton { color: #c6ccd6; padding: 6px 10px; }"
                 "QToolButton:hover { background: rgba(255,255,255,30); }"
             )
-            btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
-            side_layout.addWidget(btn)
+            btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
+            nav_row.addWidget(btn)
             nav_buttons.append(btn)
 
-        side_layout.addStretch(1)
+        bottom_layout.addStretch(1)
+        bottom_layout.addWidget(self.media_group, 0)
 
         # Wire nav
         if nav_buttons:
@@ -412,7 +407,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         status = self.statusBar()
         status.setStyleSheet("QStatusBar { background: #1f2329; color: #9aa3ad; }")
-        status.addPermanentWidget(self.media_group, 0)
 
 
     @staticmethod

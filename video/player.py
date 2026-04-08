@@ -221,6 +221,14 @@ class VideoController:
             if ok:
                 self._show_cv_frame(frame)
 
+    def seek_frame(self, frame_index: int) -> None:
+        if self._video_backend == "qt" and self._player:
+            ms = int(max(0, frame_index) * 1000 / max(self._cv_fps, 1.0))
+            self._player.setPosition(ms)
+            return
+        if self._video_backend == "opencv":
+            self.seek(int(frame_index))
+
     def _build_widget(self) -> QtWidgets.QWidget:
         global QtMultimedia, QtMultimediaWidgets
 
