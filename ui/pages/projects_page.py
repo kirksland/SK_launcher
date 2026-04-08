@@ -13,6 +13,7 @@ class _ProjectDetailTree(QtWidgets.QTreeView):
         self.setDragEnabled(True)
         self.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.DragOnly)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
 
 
 class ProjectsPage(QtWidgets.QWidget):
@@ -69,8 +70,13 @@ class ProjectsPage(QtWidgets.QWidget):
         self.project_grid.setMovement(QtWidgets.QListView.Movement.Static)
         self.project_grid.setSpacing(16)
         self.project_grid.setIconSize(QtCore.QSize(200, 130))
-        self.project_grid.setGridSize(QtCore.QSize(230, 240))
+        self.project_grid.setGridSize(QtCore.QSize(230, 200))
         self.project_grid.setWordWrap(True)
+        self.project_grid.setStyleSheet(
+            "QListWidget::item { background: transparent; border: none; }"
+            "QListWidget::item:selected { background: transparent; border: none; }"
+            "QListWidget::item:hover { background: transparent; border: none; }"
+        )
 
         splitter.addWidget(self.project_grid)
 

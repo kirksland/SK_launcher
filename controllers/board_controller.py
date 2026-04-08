@@ -21,6 +21,86 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
+def _draw_corner_badge(painter: QtGui.QPainter, label: str, color: QtGui.QColor) -> None:
+    painter.save()
+    font = painter.font()
+    font.setPointSize(9)
+    font.setBold(True)
+    painter.setFont(font)
+    fm = painter.fontMetrics()
+    pad_x = 6
+    pad_y = 3
+    text_w = fm.horizontalAdvance(label)
+    text_h = fm.height()
+    rect = QtCore.QRectF(
+        8,
+        8,
+        text_w + pad_x * 2,
+        text_h + pad_y * 2,
+    )
+    bg = QtGui.QColor(color)
+    bg.setAlpha(min(230, bg.alpha() + 40))
+    painter.setPen(QtCore.Qt.PenStyle.NoPen)
+    painter.setBrush(bg)
+    painter.drawRoundedRect(rect, 6, 6)
+    painter.setPen(QtGui.QColor("#0f1216"))
+    painter.drawText(
+        rect.adjusted(pad_x, pad_y, -pad_x, -pad_y),
+        QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignHCenter,
+        label,
+    )
+    painter.restore()
+
+
+class _VideoToSequenceWorker(QtCore.QObject):
+    progress = QtCore.Signal(int, int)
+    finished = QtCore.Signal(bool, object, object)
+
+    def __init__(self, video_path: Path, out_dir: Path) -> None:
+        super().__init__()
+        self._video_path = video_path
+        self._out_dir = out_dir
+        self._cancel = False
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        if cv2 is None:
+            self.finished.emit(False, None, "OpenCV not available for video conversion.")
+            return
+        try:
+            cap = cv2.VideoCapture(str(self._video_path))
+            if not cap.isOpened():
+                cap.release()
+                self.finished.emit(False, None, "Failed to open video.")
+                return
+            total = int(cap.get(getattr(cv2, "CAP_PROP_FRAME_COUNT", 7)) or 0)
+            idx = 0
+            stem = self._video_path.stem
+            while True:
+                if self._cancel:
+                    cap.release()
+                    self.finished.emit(False, None, "Conversion cancelled.")
+                    return
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                frame_name = f"{stem}_{idx:04d}.png"
+                frame_path = self._out_dir / frame_name
+                cv2.imwrite(str(frame_path), frame)
+                idx += 1
+                self.progress.emit(idx, total)
+            cap.release()
+            if idx <= 0:
+                self.finished.emit(False, None, "No frames extracted.")
+                return
+            self.finished.emit(True, self._out_dir, None)
+        except Exception as exc:
+            self.finished.emit(False, None, str(exc))
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+
 class _PopupOutsideCloseFilter(QtCore.QObject):
     def __init__(self, dialog: QtWidgets.QDialog, on_close) -> None:
         super().__init__(dialog)
@@ -250,6 +330,11 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
         if self._pixmap is None or self._pixmap.isNull():
             return
         painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        border_pen = QtGui.QPen(QtGui.QColor(74, 163, 255, 140), 2)
+        border_pen.setCosmetic(True)
+        painter.setPen(border_pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
         if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
             pen = QtGui.QPen(QtGui.QColor("#c6ccd6"), 1.5, QtCore.Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
@@ -290,6 +375,12 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
         if self._pixmap is None or self._pixmap.isNull():
             return
         painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        border_pen = QtGui.QPen(QtGui.QColor(242, 193, 78, 140), 2)
+        border_pen.setCosmetic(True)
+        painter.setPen(border_pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
+        _draw_corner_badge(painter, "VID", QtGui.QColor(242, 193, 78, 220))
         if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
             pen = QtGui.QPen(QtGui.QColor("#c6ccd6"), 1.5, QtCore.Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
@@ -333,6 +424,12 @@ class BoardSequenceItem(QtWidgets.QGraphicsItem):
         if self._pixmap is None or self._pixmap.isNull():
             return
         painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        border_pen = QtGui.QPen(QtGui.QColor(90, 200, 165, 160), 2)
+        border_pen.setCosmetic(True)
+        painter.setPen(border_pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
+        _draw_corner_badge(painter, "SEQ", QtGui.QColor(90, 200, 165, 220))
         if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
             pen = QtGui.QPen(QtGui.QColor("#c6ccd6"), 1.5, QtCore.Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
@@ -567,6 +664,9 @@ class BoardController:
         self._apply_payload_ref: Optional[dict] = None
         self._apply_phase = "idle"
         self._apply_base_label: Optional[str] = None
+        self._convert_thread: Optional[QtCore.QThread] = None
+        self._convert_worker: Optional[_VideoToSequenceWorker] = None
+        self._convert_dialog: Optional[QtWidgets.QProgressDialog] = None
         self._scene = self.w.board_page.scene
         self._scene.changed.connect(self._on_scene_changed)
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
@@ -775,6 +875,49 @@ class BoardController:
         self._schedule_history_snapshot()
         return item
 
+    def add_paths_from_selection(
+        self, paths: list[Path], scene_pos: Optional[QtCore.QPointF] = None
+    ) -> None:
+        if not self._project_root:
+            self._notify("Select a project first.")
+            return
+        if not paths:
+            return
+        if scene_pos is None:
+            scene_pos = self._scene.sceneRect().center()
+        added = 0
+        added_images: list[BoardImageItem] = []
+        offset = QtCore.QPointF(30.0, 30.0)
+        current_pos = QtCore.QPointF(scene_pos)
+        for path in paths:
+            item = None
+            if path.is_file():
+                if self._is_video_file(path):
+                    item = self.add_video_from_path(path, scene_pos=current_pos)
+                elif self._is_image_file(path):
+                    item = self.add_image_from_path(path, scene_pos=current_pos)
+                    if isinstance(item, BoardImageItem):
+                        added_images.append(item)
+            elif path.exists() and path.is_dir():
+                item = self.add_sequence_from_dir(path, scene_pos=current_pos)
+            if item is not None:
+                added += 1
+                current_pos = QtCore.QPointF(current_pos.x() + offset.x(), current_pos.y() + offset.y())
+        if added == 0:
+            self._notify("No supported media found in selection.")
+            return
+        if added_images:
+            prev_selected = list(self._scene.selectedItems())
+            for sel in prev_selected:
+                sel.setSelected(False)
+            for img in added_images:
+                img.setSelected(True)
+            self.layout_selection_grid()
+            for img in added_images:
+                img.setSelected(False)
+            for sel in prev_selected:
+                sel.setSelected(True)
+
     def add_sequence(self) -> None:
         if not self._project_root:
             self._notify("Select a project first.")
@@ -829,11 +972,11 @@ class BoardController:
     def convert_video_to_sequence(self, item: QtWidgets.QGraphicsItem) -> None:
         if item.data(0) != "video":
             return
-        if cv2 is None:
-            self._notify("OpenCV not available for video conversion.")
-            return
         if not self._project_root:
             self._notify("Select a project first.")
+            return
+        if self._convert_thread is not None:
+            self._notify("A conversion is already running.")
             return
         filename = str(item.data(1))
         video_path = self._project_root / ".skyforge_board_assets" / filename
@@ -843,21 +986,71 @@ class BoardController:
         out_dir = self._project_root / ".skyforge_board_assets" / f"{video_path.stem}_seq"
         out_dir.mkdir(parents=True, exist_ok=True)
         self._notify("Converting video to sequence...")
-        if not self._extract_video_frames(video_path, out_dir):
-            self._notify("Failed to convert video to sequence.")
-            return
-        scene_pos = item.pos()
-        scale = item.scale()
-        group = self._find_group_for_item(item)
-        self._scene.removeItem(item)
-        seq_item = self.add_sequence_from_dir(out_dir, scene_pos=scene_pos)
-        if seq_item is not None:
-            seq_item.setScale(scale)
-            if group is not None:
-                group.add_member(seq_item)
-                group.update_bounds()
-        self._dirty = True
-        self._schedule_history_snapshot()
+
+        dialog = QtWidgets.QProgressDialog("Converting video...", "Cancel", 0, 100, self.w)
+        dialog.setWindowTitle("Video Conversion")
+        dialog.setMinimumDuration(200)
+        dialog.setValue(0)
+        dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        self._convert_dialog = dialog
+
+        worker = _VideoToSequenceWorker(video_path, out_dir)
+        thread = QtCore.QThread(self.w)
+        worker.moveToThread(thread)
+
+        def _on_progress(current: int, total: int) -> None:
+            if self._convert_dialog is None:
+                return
+            if total > 0:
+                percent = int((current / max(1, total)) * 100)
+                self._convert_dialog.setValue(min(100, max(0, percent)))
+                self._convert_dialog.setLabelText(f"Extracting frames... {current}/{total}")
+            else:
+                self._convert_dialog.setValue(min(100, current % 100))
+                self._convert_dialog.setLabelText(f"Extracting frames... {current}")
+            QtWidgets.QApplication.processEvents()
+
+        def _on_finished(success: bool, out_path: object, error: object) -> None:
+            if self._convert_dialog is not None:
+                self._convert_dialog.reset()
+                self._convert_dialog = None
+            self._convert_thread = None
+            self._convert_worker = None
+            if not success:
+                self._notify(str(error or "Conversion failed."))
+                return
+            if not isinstance(out_path, Path):
+                self._notify("Conversion failed.")
+                return
+            scene_pos = item.pos()
+            scale = item.scale()
+            group = self._find_group_for_item(item)
+            self._scene.removeItem(item)
+            seq_item = self.add_sequence_from_dir(out_path, scene_pos=scene_pos)
+            if seq_item is not None:
+                seq_item.setScale(scale)
+                if group is not None:
+                    group.add_member(seq_item)
+                    group.update_bounds()
+            self._dirty = True
+            self._schedule_history_snapshot()
+            self._notify("Video converted to sequence.")
+
+        def _on_cancel() -> None:
+            if self._convert_worker is not None:
+                self._convert_worker.cancel()
+
+        dialog.canceled.connect(_on_cancel)
+        worker.progress.connect(_on_progress)
+        worker.finished.connect(_on_finished)
+        worker.finished.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(worker.deleteLater)
+
+        self._convert_thread = thread
+        self._convert_worker = worker
+        thread.start()
 
     def _extract_video_frames(self, video_path: Path, out_dir: Path) -> bool:
         try:

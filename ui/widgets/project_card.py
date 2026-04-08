@@ -84,8 +84,8 @@ class ProjectCard(QtWidgets.QWidget):
         self._current_base: Optional[str] = None
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 2)
+        layout.setSpacing(2)
 
         thumb_container = QtWidgets.QWidget()
         thumb_container.setFixedSize(thumb_size)
@@ -134,6 +134,11 @@ class ProjectCard(QtWidgets.QWidget):
 
         layout.addWidget(thumb_container, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
+        self.selected_hip_label = QtWidgets.QLabel("")
+        self.selected_hip_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.selected_hip_label.setStyleSheet("color: #c6ccd6; font-size: 11px;")
+        layout.addWidget(self.selected_hip_label, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
+
         self.version_combo = _HipVersionCombo()
         self.version_combo.setFixedWidth(86)
         self.version_combo.setStyleSheet(project_card_version_combo_style())
@@ -148,6 +153,7 @@ class ProjectCard(QtWidgets.QWidget):
 
         if not self._variants:
             self.version_combo.setVisible(False)
+            self._update_selected_hip_label()
         else:
             self._build_variant_menu()
             if not self._apply_selected_hip(selected_hip):
@@ -159,6 +165,7 @@ class ProjectCard(QtWidgets.QWidget):
         self._alert_dot.setVisible(bool(visible))
 
     def _emit_selection_changed(self) -> None:
+        self._update_selected_hip_label()
         hip = self.selected_hip()
         if hip is not None:
             self.selection_changed.emit(self)
@@ -192,6 +199,7 @@ class ProjectCard(QtWidgets.QWidget):
         entries = self._variants.get(base, [])
         for label, _path in entries:
             self.version_combo.addItem(label)
+        self._update_selected_hip_label()
         if emit:
             self._emit_selection_changed()
 
@@ -223,3 +231,12 @@ class ProjectCard(QtWidgets.QWidget):
             if entry_label == label:
                 return path
         return entries[0][1]
+
+    def _update_selected_hip_label(self) -> None:
+        hip = self.selected_hip()
+        if hip is None:
+            label = ""
+        else:
+            label = hip.stem
+        if self.selected_hip_label.text() != label:
+            self.selected_hip_label.setText(label)

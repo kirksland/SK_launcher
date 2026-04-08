@@ -68,8 +68,13 @@ class ClientPage(QtWidgets.QWidget):
         self.client_list.setMovement(QtWidgets.QListView.Movement.Static)
         self.client_list.setSpacing(16)
         self.client_list.setIconSize(QtCore.QSize(200, 130))
-        self.client_list.setGridSize(QtCore.QSize(230, 240))
+        self.client_list.setGridSize(QtCore.QSize(230, 200))
         self.client_list.setWordWrap(True)
+        self.client_list.setStyleSheet(
+            "QListWidget::item { background: transparent; border: none; }"
+            "QListWidget::item:selected { background: transparent; border: none; }"
+            "QListWidget::item:hover { background: transparent; border: none; }"
+        )
         body.addWidget(self.client_list, 0)
 
         right_panel = QtWidgets.QFrame()
@@ -182,11 +187,22 @@ class ClientPage(QtWidgets.QWidget):
 
         self.client_sync_push_list = QtWidgets.QListWidget()
         self.client_sync_pull_list = QtWidgets.QListWidget()
+        for lst in (self.client_sync_push_list, self.client_sync_pull_list):
+            lst.setStyleSheet(
+                "QListWidget::item { background: transparent; border: none; }"
+                "QListWidget::item:selected { background: transparent; border: none; }"
+                "QListWidget::item:hover { background: transparent; border: none; }"
+            )
         changes_grid.addWidget(self.client_sync_push_list, 1, 0)
         changes_grid.addWidget(self.client_sync_pull_list, 1, 1)
 
         conflicts_header, self.client_conflicts_dot = self._label_with_dot("Conflicts")
         self.client_sync_conflicts_list = QtWidgets.QListWidget()
+        self.client_sync_conflicts_list.setStyleSheet(
+            "QListWidget::item { background: transparent; border: none; }"
+            "QListWidget::item:selected { background: transparent; border: none; }"
+            "QListWidget::item:hover { background: transparent; border: none; }"
+        )
         changes_grid.addWidget(conflicts_header, 2, 0, 1, 2)
         changes_grid.addWidget(self.client_sync_conflicts_list, 3, 0, 1, 2)
 

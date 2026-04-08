@@ -82,8 +82,13 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_grid.setMovement(QtWidgets.QListView.Movement.Static)
         self.asset_grid.setSpacing(16)
         self.asset_grid.setIconSize(QtCore.QSize(200, 130))
-        self.asset_grid.setGridSize(QtCore.QSize(230, 240))
+        self.asset_grid.setGridSize(QtCore.QSize(230, 200))
         self.asset_grid.setWordWrap(True)
+        self.asset_grid.setStyleSheet(
+            "QListWidget::item { background: transparent; border: none; }"
+            "QListWidget::item:selected { background: transparent; border: none; }"
+            "QListWidget::item:hover { background: transparent; border: none; }"
+        )
         self.asset_grid.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         overview_layout.addWidget(self.asset_grid, 1)
 

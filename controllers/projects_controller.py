@@ -50,6 +50,9 @@ class ProjectsController:
         self.w.project_detail_tree.setModel(self._fs_model)
         for col in (1, 2, 3):
             self.w.project_detail_tree.setColumnHidden(col, True)
+        self.w.project_detail_tree.customContextMenuRequested.connect(
+            self._on_project_detail_context_menu
+        )
 
     def refresh_projects(self, *_: object) -> None:
         self._scan_token = time.time()
@@ -317,6 +320,44 @@ class ProjectsController:
         self.w.project_detail_tree.setRootIndex(root_index)
         if hasattr(self.w, "board_controller"):
             self.w.board_controller.set_project(project_path)
+
+    def _on_project_detail_context_menu(self, pos: QtCore.QPoint) -> None:
+        tree = self.w.project_detail_tree
+        index = tree.indexAt(pos)
+        if index.isValid() and not tree.selectionModel().isSelected(index):
+            tree.setCurrentIndex(index)
+        menu = QtWidgets.QMenu(tree)
+        send_action = menu.addAction("Send To Board")
+        action = menu.exec(tree.viewport().mapToGlobal(pos))
+        if action != send_action:
+            return
+        selection = tree.selectionModel()
+        if selection is None:
+            return
+        rows = selection.selectedRows(0)
+        if not rows:
+            return
+        paths: list[Path] = []
+        seen: set[Path] = set()
+        model = tree.model()
+        for row in rows:
+            if model is None:
+                continue
+            try:
+                path_text = model.filePath(row)  # type: ignore[attr-defined]
+            except Exception:
+                path_text = None
+            if not path_text:
+                continue
+            path = Path(str(path_text))
+            if path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+        if not paths:
+            return
+        if hasattr(self.w, "board_controller"):
+            self.w.board_controller.add_paths_from_selection(paths)
 
     def _scan_dir_entries(self, path: Path) -> list[tuple[str, bool]]:
         cached = self._dir_cache.get(path)
