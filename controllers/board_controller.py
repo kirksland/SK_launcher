@@ -27,6 +27,7 @@ except Exception:  # pragma: no cover - optional exr backend
     Imath = None  # type: ignore
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".exr"}
+PIC_EXTS = {".pic", ".picnc"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
@@ -161,10 +162,12 @@ class _ExrInfoWorker(QtCore.QObject):
 class _ExrChannelPreviewWorker(QtCore.QObject):
     finished = QtCore.Signal(bool, str, object, object)
 
-    def __init__(self, path: Path, channel: str) -> None:
+    def __init__(self, path: Path, channel: str, gamma: float, srgb: bool) -> None:
         super().__init__()
         self._path = path
         self._channel = channel
+        self._gamma = max(0.1, float(gamma))
+        self._srgb = bool(srgb)
 
     @QtCore.Slot()
     def run(self) -> None:
@@ -181,20 +184,42 @@ class _ExrChannelPreviewWorker(QtCore.QObject):
             header = exr.header()
             dw = header.get("dataWindow")
             if dw is None:
-                self.finished.emit(False, None, "Missing dataWindow.")
+                self.finished.emit(False, self._channel, None, "Missing dataWindow.")
                 return
             w = int(dw.max.x - dw.min.x + 1)
             h = int(dw.max.y - dw.min.y + 1)
             pt = Imath.PixelType(Imath.PixelType.FLOAT)
-            raw = exr.channel(self._channel, pt)
-            arr = np.frombuffer(raw, dtype=np.float32)
-            if arr.size != w * h:
-                self.finished.emit(False, None, "Channel size mismatch.")
-                return
-            img = arr.reshape((h, w))
+            channel = self._channel
+            prefix = ""
+            if channel.endswith(".RGB") or channel.endswith(".RGBA"):
+                prefix = channel.rsplit(".", 1)[0]
+                channel = channel.rsplit(".", 1)[1]
+            if channel in ("RGB", "RGBA"):
+                def read_chan(name: str) -> np.ndarray:
+                    try:
+                        raw_c = exr.channel(name, pt)
+                        arr_c = np.frombuffer(raw_c, dtype=np.float32)
+                        return arr_c.reshape((h, w))
+                    except Exception:
+                        return np.zeros((h, w), dtype=np.float32)
+
+                def name_for(suffix: str) -> str:
+                    return f"{prefix}.{suffix}" if prefix else suffix
+
+                r = read_chan(name_for("R"))
+                g = read_chan(name_for("G"))
+                b = read_chan(name_for("B"))
+                img = np.stack([r, g, b], axis=-1)
+            else:
+                raw = exr.channel(self._channel, pt)
+                arr = np.frombuffer(raw, dtype=np.float32)
+                if arr.size != w * h:
+                    self.finished.emit(False, self._channel, None, "Channel size mismatch.")
+                    return
+                img = arr.reshape((h, w))
             valid = np.isfinite(img)
             if not valid.any():
-                self.finished.emit(False, None, "Channel has no finite values.")
+                self.finished.emit(False, self._channel, None, "Channel has no finite values.")
                 return
             min_v = float(np.min(img[valid]))
             max_v = float(np.max(img[valid]))
@@ -203,8 +228,13 @@ class _ExrChannelPreviewWorker(QtCore.QObject):
             else:
                 norm = (img - min_v) / (max_v - min_v)
             norm = np.clip(norm, 0.0, 1.0)
-            img8 = (norm * 255.0).astype(np.uint8)
-            rgb = np.stack([img8, img8, img8], axis=-1)
+            if self._srgb:
+                norm = np.power(norm, 1.0 / self._gamma, where=norm > 0)
+            if norm.ndim == 2:
+                img8 = (norm * 255.0).astype(np.uint8)
+                rgb = np.stack([img8, img8, img8], axis=-1)
+            else:
+                rgb = (norm * 255.0).astype(np.uint8)
             payload = (int(rgb.shape[1]), int(rgb.shape[0]), rgb.tobytes())
             self.finished.emit(True, self._channel, payload, None)
         except Exception as exc:
@@ -850,6 +880,9 @@ class BoardController:
         self._edit_video_controller: Optional[VideoController] = None
         self._edit_seq_frames: list[Path] = []
         self._edit_seq_dir: Optional[Path] = None
+        self._edit_seq_playing: bool = False
+        self._edit_seq_timer: Optional[QtCore.QTimer] = None
+        self._edit_seq_fps: int = 24
         self._edit_video_path: Optional[Path] = None
         self._edit_video_total: int = 0
         self._edit_video_playhead: int = 0
@@ -859,6 +892,8 @@ class BoardController:
         self._edit_exr_channels: list[str] = []
         self._edit_exr_thread: Optional[QtCore.QThread] = None
         self._edit_exr_worker: Optional[_ExrChannelPreviewWorker] = None
+        self._edit_exr_gamma: float = 2.2
+        self._edit_exr_srgb: bool = True
         self._ui_bridge = _UiBridge(self)
         self._segment_thread: Optional[QtCore.QThread] = None
         self._segment_worker: Optional[_VideoSegmentWorker] = None
@@ -868,11 +903,15 @@ class BoardController:
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
         self.w.board_page.groups_tree.itemClicked.connect(self._on_group_tree_clicked)
         self.w.board_page.edit_sequence_slider.valueChanged.connect(self._on_edit_sequence_slider)
+        self.w.board_page.edit_sequence_play_btn.clicked.connect(self._toggle_edit_sequence_play)
+        self.w.board_page.edit_sequence_timeline.playheadChanged.connect(self._on_edit_sequence_timeline_playhead)
         self.w.board_page.edit_timeline.playheadChanged.connect(self._on_edit_timeline_playhead)
         self.w.board_page.edit_timeline.selectedClipChanged.connect(self._on_edit_timeline_selected)
         self.w.board_page.edit_timeline_split_btn.clicked.connect(self._split_edit_clip)
         self.w.board_page.edit_timeline_export_btn.clicked.connect(self._export_edit_clip)
-        self.w.board_page.edit_exr_channel_combo.currentTextChanged.connect(self._on_edit_exr_channel_changed)
+        self.w.board_page.edit_exr_channel_combo.currentIndexChanged.connect(self._on_edit_exr_channel_changed)
+        self.w.board_page.edit_exr_gamma_slider.valueChanged.connect(self._on_edit_exr_gamma_changed)
+        self.w.board_page.edit_exr_srgb_check.toggled.connect(self._on_edit_exr_gamma_changed)
 
     def set_project(self, project_root: Optional[Path]) -> None:
         if project_root is None and self._project_root is not None:
@@ -1077,6 +1116,70 @@ class BoardController:
         self._schedule_history_snapshot()
         return item
 
+    def _find_iconvert(self) -> Optional[Path]:
+        houdini_exe = getattr(self.w, "_houdini_exe", "")
+        if not houdini_exe:
+            return None
+        houdini_path = Path(str(houdini_exe))
+        if not houdini_path.exists():
+            return None
+        iconvert = houdini_path.with_name("iconvert.exe")
+        if iconvert.exists():
+            return iconvert
+        return None
+
+    def convert_picnc_interactive(self, src_path: Optional[Path] = None) -> None:
+        iconvert = self._find_iconvert()
+        if iconvert is None:
+            self._notify("iconvert.exe not found. Set Houdini path in Settings.")
+            return
+        if src_path is None:
+            src_path_str, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self.w,
+                "Select PICNC",
+                "",
+                "Houdini PIC (*.picnc *.pic)",
+            )
+            if not src_path_str:
+                return
+            src_path = Path(src_path_str)
+        choice = QtWidgets.QMessageBox.question(
+            self.w,
+            "Convert PICNC",
+            "Choose output format:",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        # Yes = JPG, No = EXR
+        ext = "jpg" if choice == QtWidgets.QMessageBox.StandardButton.Yes else "exr"
+        default_dir = None
+        if self._project_root is not None:
+            default_dir = self._project_root / ".skyforge_board_assets" / ".converted"
+        default_name = src_path.stem + f".{ext}"
+        if default_dir is not None:
+            try:
+                default_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                default_dir = None
+        default_path = str(default_dir / default_name) if default_dir is not None else default_name
+        out_path_str, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self.w,
+            "Save Converted File",
+            default_path,
+            "Images (*.jpg *.jpeg *.exr)",
+        )
+        if not out_path_str:
+            return
+        out_path = Path(out_path_str)
+        try:
+            import subprocess
+            subprocess.check_call([str(iconvert), str(src_path), str(out_path)])
+        except Exception as exc:
+            self._notify(f"iconvert failed:\n{exc}")
+            return
+        self._notify(f"Converted: {out_path.name}")
+        if out_path.suffix.lower() in IMAGE_EXTS:
+            self.add_image_from_path(out_path)
+
     def add_paths_from_selection(
         self, paths: list[Path], scene_pos: Optional[QtCore.QPointF] = None
     ) -> None:
@@ -1100,6 +1203,8 @@ class BoardController:
                     item = self.add_image_from_path(path, scene_pos=current_pos)
                     if isinstance(item, BoardImageItem):
                         added_images.append(item)
+                elif self._is_pic_file(path):
+                    self.convert_picnc_interactive(path)
             elif path.exists() and path.is_dir():
                 item = self.add_sequence_from_dir(path, scene_pos=current_pos)
             if item is not None:
@@ -1917,6 +2022,11 @@ class BoardController:
         )
         self._edit_seq_frames = frames
         self._edit_seq_dir = dir_path
+        if self._edit_seq_timer is None:
+            self._edit_seq_timer = QtCore.QTimer(self.w)
+            self._edit_seq_timer.timeout.connect(self._advance_edit_sequence_frame)
+        self._edit_seq_playing = False
+        self.w.board_page.edit_sequence_play_btn.setText("Play")
         if frames:
             first = frames[0]
             pixmap = self._get_display_pixmap(first, max_dim=1024)
@@ -1928,10 +2038,14 @@ class BoardController:
             self.w.board_page.edit_sequence_slider.setRange(0, max(0, len(frames) - 1))
             self.w.board_page.edit_sequence_slider.setValue(0)
             self.w.board_page.edit_sequence_slider.blockSignals(False)
+            self.w.board_page.edit_sequence_timeline.set_data(len(frames), [(0, len(frames) - 1)], 0)
+            self.w.board_page.edit_sequence_frame_label.setText("Frame: 0")
         else:
             placeholder = self._build_media_placeholder("SEQ", dir_path.name)
             self.w.board_page.show_edit_preview_sequence(placeholder, label="No frames found.")
             self.w.board_page.edit_sequence_slider.setRange(0, 0)
+            self.w.board_page.edit_sequence_timeline.set_data(0, [], 0)
+            self.w.board_page.edit_sequence_frame_label.setText("Frame: 0")
 
     def _show_edit_panel_for_image(self, path: Path) -> None:
         size = self._get_image_size(path)
@@ -1947,6 +2061,9 @@ class BoardController:
             self._edit_exr_path = path
             self._edit_exr_channels = []
             self.w.board_page.set_exr_channel_row_visible(True)
+            self.w.board_page.set_exr_gamma_label(self._edit_exr_gamma)
+            self.w.board_page.edit_exr_srgb_check.setChecked(self._edit_exr_srgb)
+            self.w.board_page.edit_exr_gamma_slider.setValue(int(self._edit_exr_gamma * 10))
             self.w.board_page.set_edit_panel_content(
                 "Edit Mode: EXR",
                 info,
@@ -2134,6 +2251,37 @@ class BoardController:
             pixmap,
             label=f"{frame.name} ({idx + 1}/{len(self._edit_seq_frames)})",
         )
+        self.w.board_page.edit_sequence_frame_label.setText(f"Frame: {idx}")
+        self.w.board_page.edit_sequence_timeline.set_playhead(idx)
+
+    def _on_edit_sequence_timeline_playhead(self, frame: int) -> None:
+        if not self._edit_seq_frames:
+            return
+        idx = max(0, min(int(frame), len(self._edit_seq_frames) - 1))
+        self.w.board_page.edit_sequence_slider.blockSignals(True)
+        self.w.board_page.edit_sequence_slider.setValue(idx)
+        self.w.board_page.edit_sequence_slider.blockSignals(False)
+        self._on_edit_sequence_slider(idx)
+
+    def _toggle_edit_sequence_play(self) -> None:
+        if not self._edit_seq_frames or self._edit_seq_timer is None:
+            return
+        if self._edit_seq_playing:
+            self._edit_seq_timer.stop()
+            self._edit_seq_playing = False
+            self.w.board_page.edit_sequence_play_btn.setText("Play")
+        else:
+            interval = int(1000 / max(1, self._edit_seq_fps))
+            self._edit_seq_timer.start(max(1, interval))
+            self._edit_seq_playing = True
+            self.w.board_page.edit_sequence_play_btn.setText("Pause")
+
+    def _advance_edit_sequence_frame(self) -> None:
+        if not self._edit_seq_frames:
+            return
+        current = self.w.board_page.edit_sequence_slider.value()
+        nxt = (current + 1) % len(self._edit_seq_frames)
+        self.w.board_page.edit_sequence_slider.setValue(nxt)
 
     def _load_exr_channels_into_panel(self, path: Path) -> None:
         worker = _ExrInfoWorker(path)
@@ -2148,10 +2296,70 @@ class BoardController:
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _on_edit_exr_channel_changed(self, channel: str) -> None:
+    @staticmethod
+    def _build_exr_channel_options(channels: list[str]) -> tuple[list[tuple[str, str]], Optional[str]]:
+        clean = [str(c) for c in channels]
+        lower_map = {c.lower(): c for c in clean}
+        groups: dict[str, set[str]] = {}
+        for ch in clean:
+            if "." in ch:
+                prefix, suffix = ch.rsplit(".", 1)
+            else:
+                prefix, suffix = "", ch
+            suffix_up = suffix.upper()
+            if suffix_up in ("R", "G", "B", "A"):
+                groups.setdefault(prefix, set()).add(suffix_up)
+        options: list[tuple[str, str]] = []
+        default_value: Optional[str] = None
+
+        def add_option(label: str, value: str) -> None:
+            nonlocal default_value
+            options.append((label, value))
+            if default_value is None:
+                default_value = value
+
+        # Prefer beauty in root group
+        root = groups.get("", set())
+        if {"R", "G", "B"}.issubset(root):
+            add_option("Beauty (RGB)", "RGB")
+            if "A" in root:
+                add_option("Beauty (RGBA)", "RGBA")
+
+        # Other groups
+        for prefix, chans in sorted(groups.items()):
+            if prefix == "":
+                continue
+            if {"R", "G", "B"}.issubset(chans):
+                add_option(f"{prefix} (RGB)", f"{prefix}.RGB")
+                if "A" in chans:
+                    add_option(f"{prefix} (RGBA)", f"{prefix}.RGBA")
+
+        # Raw channels
+        for ch in clean:
+            add_option(ch, ch)
+
+        # Default to beauty if available
+        for label, value in options:
+            if value in ("RGB", "RGBA"):
+                default_value = value
+                break
+        return options, default_value
+
+    def _on_edit_exr_channel_changed(self, _index: int) -> None:
+        channel = self.w.board_page.current_exr_channel_value()
         if not channel:
             return
         self._queue_exr_channel_preview(channel)
+
+    def _on_edit_exr_gamma_changed(self, *_: object) -> None:
+        self._edit_exr_gamma = self.w.board_page.current_exr_gamma()
+        self._edit_exr_srgb = self.w.board_page.current_exr_srgb_enabled()
+        self.w.board_page.set_exr_gamma_label(self._edit_exr_gamma)
+        if self._edit_exr_path is None:
+            return
+        channel = self.w.board_page.current_exr_channel_value()
+        if channel:
+            self._queue_exr_channel_preview(channel)
 
     def _handle_exr_info_finished(
         self, success: bool, channels_obj: object, size_obj: object, note_obj: object
@@ -2172,14 +2380,25 @@ class BoardController:
         footer = note or "Channels"
         if success and channels:
             self._edit_exr_channels = [str(c) for c in channels]
-            self.w.board_page.set_exr_channels(self._edit_exr_channels)
+            options, default_value = self._build_exr_channel_options(self._edit_exr_channels)
+            self.w.board_page.set_exr_channels(options)
             self.w.board_page.set_edit_panel_content(
                 "Edit Mode: EXR",
                 info_lines,
                 list_items=[str(c) for c in channels],
                 footer=footer,
             )
-            self._queue_exr_channel_preview(self._edit_exr_channels[0])
+            if default_value is None and self._edit_exr_channels:
+                default_value = self._edit_exr_channels[0]
+            if default_value:
+                # Set combo selection to default
+                combo = self.w.board_page.edit_exr_channel_combo
+                idx = combo.findData(default_value)
+                if idx < 0:
+                    idx = combo.findText(default_value)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+                self._queue_exr_channel_preview(default_value)
         elif success:
             self.w.board_page.set_edit_panel_content(
                 "Edit Mode: EXR",
@@ -2219,7 +2438,7 @@ class BoardController:
                 self._edit_exr_thread.quit()
             except Exception:
                 pass
-        worker = _ExrChannelPreviewWorker(self._edit_exr_path, channel)
+        worker = _ExrChannelPreviewWorker(self._edit_exr_path, channel, self._edit_exr_gamma, self._edit_exr_srgb)
         thread = QtCore.QThread(self.w)
         worker.moveToThread(thread)
         self._edit_exr_thread = thread
@@ -2480,6 +2699,9 @@ class BoardController:
 
     def _is_image_file(self, path: Path) -> bool:
         return path.is_file() and path.suffix.lower() in IMAGE_EXTS
+
+    def _is_pic_file(self, path: Path) -> bool:
+        return path.is_file() and path.suffix.lower() in PIC_EXTS
 
     def _relative_to_project(self, path: Path) -> str:
         if self._project_root is None:

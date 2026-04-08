@@ -36,6 +36,12 @@ class LauncherWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_TITLE)
+        icon_dir = Path(__file__).resolve().parent / "config"
+        icon_path = icon_dir / "newForge4_256.ico"
+        if not icon_path.exists():
+            icon_path = icon_dir / "newForge4.ico"
+        if icon_path.exists():
+            self.setWindowIcon(QtGui.QIcon(str(icon_path)))
         self.resize(1280, 620)
 
         self.settings = load_settings()
@@ -64,9 +70,13 @@ class LauncherWindow(QtWidgets.QMainWindow):
         central.setStyleSheet(app_stylesheet())
         self.setCentralWidget(central)
         outer = QtWidgets.QHBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         main_panel = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(main_panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         outer.addWidget(main_panel, 1)
 
         self.pages = QtWidgets.QStackedWidget()
@@ -77,6 +87,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         from ui.pages.server_page import AssetManagerPage
         from ui.pages.settings_page import SettingsPage
         from ui.pages.board_page import BoardPage
+        from ui.pages.dev_page import DevPage
 
         self.projects_page = ProjectsPage(self.projects_dir)
         self.pages.addWidget(self.projects_page)
@@ -100,6 +111,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self._houdini_exe,
         )
         self.pages.addWidget(self.settings_page)
+
+        self.dev_page = DevPage(parent=self)
+        self.pages.addWidget(self.dev_page)
 
         # Global media controls (bottom-right)
         self.media_group = QtWidgets.QFrame()
@@ -143,12 +157,13 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.media_next_btn.setStyleSheet(tool_button_dark_style(padding="4px 8px"))
         group_layout.addWidget(self.media_next_btn)
 
-        nav_labels = ["Projects", "Asset Manager", "Board", "Clients", "Settings"]
+        nav_labels = ["Projects", "Asset Manager", "Board", "Clients", "Settings", "Dev"]
         nav_buttons: List[QtWidgets.QToolButton] = []
         nav_font = QtGui.QFont()
         nav_font.setPointSize(14)
 
         bottom_bar = QtWidgets.QFrame()
+        bottom_bar.setFixedHeight(48)
         bottom_bar.setStyleSheet(
             "QFrame {"
             "background: #1f2329;"
@@ -156,21 +171,14 @@ class LauncherWindow(QtWidgets.QMainWindow):
             "}"
         )
         bottom_layout = QtWidgets.QHBoxLayout(bottom_bar)
-        bottom_layout.setContentsMargins(12, 8, 12, 8)
-        bottom_layout.setSpacing(8)
+        bottom_layout.setContentsMargins(10, 4, 10, 4)
+        bottom_layout.setSpacing(10)
         layout.addWidget(bottom_bar, 0)
-
-        brand = QtWidgets.QLabel("SKYFORGE LAUNCHER")
-        brand.setStyleSheet(f"color: {PALETTE['muted']}; font-weight: bold;")
-        bottom_layout.addWidget(brand, 0)
-
-        bottom_layout.addSpacing(8)
 
         nav_container = QtWidgets.QFrame()
         nav_row = QtWidgets.QHBoxLayout(nav_container)
         nav_row.setContentsMargins(0, 0, 0, 0)
         nav_row.setSpacing(6)
-        bottom_layout.addWidget(nav_container, 1)
 
         for label in nav_labels:
             btn = QtWidgets.QToolButton()
@@ -187,6 +195,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
             nav_buttons.append(btn)
 
         bottom_layout.addStretch(1)
+        bottom_layout.addWidget(nav_container, 0)
+        bottom_layout.addStretch(1)
         bottom_layout.addWidget(self.media_group, 0)
 
         # Wire nav
@@ -200,6 +210,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
             nav_buttons[3].clicked.connect(lambda: self.pages.setCurrentIndex(3))
         if len(nav_buttons) > 4:
             nav_buttons[4].clicked.connect(lambda: self.pages.setCurrentIndex(4))
+        if len(nav_buttons) > 5:
+            nav_buttons[5].clicked.connect(lambda: self.pages.setCurrentIndex(5))
 
         self._nav_clients_btn = nav_buttons[3] if len(nav_buttons) > 3 else None
         self._nav_clients_label = "Clients"
@@ -315,6 +327,16 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings_houdini_exe = self.settings_page.settings_houdini_exe
         self.settings_save_btn = self.settings_page.settings_save_btn
 
+        self.dev_add_box_btn = self.dev_page.add_box_btn
+        self.dev_status = self.dev_page.status
+        self.dev_silent_check = self.dev_page.silent_check
+        self.dev_picnc_input = self.dev_page.picnc_input
+        self.dev_picnc_browse_btn = self.dev_page.picnc_browse_btn
+        self.dev_picnc_out_combo = self.dev_page.picnc_out_combo
+        self.dev_picnc_out_dir = self.dev_page.picnc_out_dir
+        self.dev_picnc_out_browse_btn = self.dev_page.picnc_out_browse_btn
+        self.dev_picnc_convert_btn = self.dev_page.picnc_convert_btn
+
         self._asset_shot_size_map = {
             "Small": QtCore.QSize(140, 84),
             "Medium": QtCore.QSize(180, 110),
@@ -389,6 +411,10 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.board_load_btn.clicked.connect(self.board_controller.load_board)
 
         self.settings_save_btn.clicked.connect(self.save_settings_from_ui)
+        self.dev_add_box_btn.clicked.connect(self._dev_add_box_in_houdini)
+        self.dev_picnc_browse_btn.clicked.connect(self._dev_browse_picnc)
+        self.dev_picnc_out_browse_btn.clicked.connect(self._dev_browse_picnc_output)
+        self.dev_picnc_convert_btn.clicked.connect(self._dev_convert_picnc)
 
         self.asset_controller.apply_asset_shots_size(self.asset_shots_size.currentText(), refresh=False)
 
@@ -407,6 +433,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         status = self.statusBar()
         status.setStyleSheet("QStatusBar { background: #1f2329; color: #9aa3ad; }")
+        status.setSizeGripEnabled(False)
+        status.hide()
 
 
     @staticmethod
@@ -549,10 +577,155 @@ class LauncherWindow(QtWidgets.QMainWindow):
     def _warn(self, message: str) -> None:
         QtWidgets.QMessageBox.warning(self, APP_TITLE, message)
 
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
+        try:
+            if hasattr(self, "board_controller") and self.board_controller is not None:
+                self.board_controller.save_board()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+    def _dev_add_box_in_houdini(self) -> None:
+        import subprocess
+        import tempfile
+        import os
+
+        houdini_exe = self._houdini_exe
+        if not houdini_exe:
+            self.dev_status.setText("Houdini executable not set in Settings.")
+            return
+        houdini_path = Path(houdini_exe)
+        if not houdini_path.exists():
+            self.dev_status.setText("Houdini executable path is invalid.")
+            return
+        hython = houdini_path.with_name("hython.exe")
+        if not hython.exists():
+            self.dev_status.setText("hython.exe not found next to Houdini.")
+            return
+
+        running = False
+        try:
+            out = subprocess.check_output(["tasklist"], text=True, stderr=subprocess.STDOUT)
+            for name in ("houdini.exe", "houdinifx.exe", "houdiniindie.exe"):
+                if name.lower() in out.lower():
+                    running = True
+                    break
+        except Exception:
+            pass
+
+        temp_dir = Path(tempfile.gettempdir()) / "skyforge_dev"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        hip_path = temp_dir / "dev_box.hipnc"
+        script = (
+            "import hou\n"
+            "obj = hou.node('/obj')\n"
+            "geo = obj.createNode('geo', 'dev_box')\n"
+            "for c in geo.children():\n"
+            "    c.destroy()\n"
+            "box = geo.createNode('box', 'box1')\n"
+            "box.setDisplayFlag(True)\n"
+            "box.setRenderFlag(True)\n"
+            "geo.layoutChildren()\n"
+            f"hou.hipFile.save(r'''{hip_path}''')\n"
+        )
+        try:
+            subprocess.check_call([str(hython), "-c", script])
+        except Exception as exc:
+            self.dev_status.setText(f"Failed to run hython: {exc}")
+            return
+
+        if not self.dev_silent_check.isChecked():
+            if not running:
+                confirm = QtWidgets.QMessageBox.question(
+                    self,
+                    APP_TITLE,
+                    "Houdini is not running. Open Houdini to view the test Box?",
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                )
+                if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+                    self.dev_status.setText("Test Box created (silent).")
+                    return
+            try:
+                subprocess.Popen([str(houdini_path), str(hip_path)])
+            except Exception as exc:
+                self.dev_status.setText(f"Failed to launch Houdini: {exc}")
+                return
+            self.dev_status.setText("Opened Houdini with a test Box.")
+        else:
+            self.dev_status.setText("Test Box created (silent).")
+
+    def _dev_browse_picnc(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select PICNC",
+            "",
+            "Houdini PIC (*.picnc *.pic)",
+        )
+        if path:
+            self.dev_picnc_input.setText(path)
+
+    def _dev_browse_picnc_output(self) -> None:
+        directory = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Folder",
+            "",
+        )
+        if directory:
+            self.dev_picnc_out_dir.setText(directory)
+
+    def _dev_convert_picnc(self) -> None:
+        import subprocess
+        import tempfile
+
+        source = self.dev_picnc_input.text().strip()
+        if not source:
+            self.dev_status.setText("Select a .picnc first.")
+            return
+        src_path = Path(source)
+        if not src_path.exists():
+            self.dev_status.setText("Source file not found.")
+            return
+        houdini_exe = self._houdini_exe
+        if not houdini_exe:
+            self.dev_status.setText("Houdini executable not set in Settings.")
+            return
+        houdini_path = Path(houdini_exe)
+        if not houdini_path.exists():
+            self.dev_status.setText("Houdini executable path is invalid.")
+            return
+        iconvert = houdini_path.with_name("iconvert.exe")
+        if not iconvert.exists():
+            self.dev_status.setText("iconvert.exe not found next to Houdini.")
+            return
+        ext = self.dev_picnc_out_combo.currentText().strip().lower()
+        if ext not in ("jpg", "exr"):
+            ext = "jpg"
+        out_dir_text = self.dev_picnc_out_dir.text().strip()
+        out_dir = Path(out_dir_text) if out_dir_text else Path(tempfile.gettempdir()) / "skyforge_dev"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{src_path.stem}.{ext}"
+        try:
+            subprocess.check_call([str(iconvert), str(src_path), str(out_path)])
+        except Exception as exc:
+            self.dev_status.setText(f"iconvert failed: {exc}")
+            return
+        self.dev_status.setText(f"Converted to: {out_path}")
+
 
 def main() -> None:
     try:
+        try:
+            # Ensure Windows uses the correct icon in titlebar/taskbar.
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Skyforge.Launcher")
+        except Exception:
+            pass
         app = QtWidgets.QApplication([])
+        icon_dir = Path(__file__).resolve().parent / "config"
+        icon_path = icon_dir / "newForge4_256.ico"
+        if not icon_path.exists():
+            icon_path = icon_dir / "newForge4.ico"
+        if icon_path.exists():
+            app.setWindowIcon(QtGui.QIcon(str(icon_path)))
         app_font = app.font()
         if app_font.pointSize() <= 0:
             app_font.setPointSize(10)

@@ -69,6 +69,8 @@ class BoardView(QtWidgets.QGraphicsView):
         self._scale_overlays: list[QtWidgets.QGraphicsRectItem] = []
         self._scale_start_center = QtCore.QPointF()
         self._scale_start_dist = 1.0
+        self._scale_min_dist = 40.0
+        self._scale_group_mode = False
         self._scale_start_value = 1.0
         self._move_start_positions: dict[int, QtCore.QPointF] = {}
         self._rubberband_add = False
@@ -128,25 +130,7 @@ class BoardView(QtWidgets.QGraphicsView):
         if event.button() == QtCore.Qt.MouseButton.LeftButton and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
             items = [i for i in self.scene().selectedItems() if i.data(0) in ("image", "note", "video", "sequence")]
             if items:
-                self._scaling = True
-                self._scale_items = list(items)
-                center = QtCore.QPointF()
-                for item in self._scale_items:
-                    center += item.sceneBoundingRect().center()
-                center /= max(1, len(self._scale_items))
-                self._scale_start_center = center
-                self._scale_start_dist = max(1.0, QtCore.QLineF(center, self.mapToScene(event.pos())).length())
-                self._scale_start_values = []
-                self._scale_start_positions = []
-                for item in self._scale_items:
-                    self._scale_start_values.append(item.scale())
-                    self._scale_start_positions.append(item.pos())
-                    overlay = QtWidgets.QGraphicsRectItem(item.sceneBoundingRect())
-                    overlay.setPen(QtGui.QPen(QtGui.QColor("#c6ccd6"), 1, QtCore.Qt.PenStyle.DashLine))
-                    overlay.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-                    overlay.setZValue(10_000)
-                    self.scene().addItem(overlay)
-                    self._scale_overlays.append(overlay)
+                self._begin_scale(event, items)
                 event.accept()
                 return
         if event.button() == QtCore.Qt.MouseButton.MiddleButton:
@@ -160,19 +144,7 @@ class BoardView(QtWidgets.QGraphicsView):
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if getattr(self, "_scaling", False):
-            current_dist = max(
-                1.0,
-                QtCore.QLineF(self._scale_start_center, self.mapToScene(event.pos())).length(),
-            )
-            factor = current_dist / max(1.0, self._scale_start_dist)
-            for idx, item in enumerate(self._scale_items):
-                start_scale = self._scale_start_values[idx] if idx < len(self._scale_start_values) else item.scale()
-                start_pos = self._scale_start_positions[idx] if idx < len(self._scale_start_positions) else item.pos()
-                item.setScale(max(0.05, min(8.0, start_scale * factor)))
-                offset = start_pos - self._scale_start_center
-                item.setPos(self._scale_start_center + offset * factor)
-                if idx < len(self._scale_overlays):
-                    self._scale_overlays[idx].setRect(item.sceneBoundingRect())
+            self._update_scale(event)
             event.accept()
             return
         if self._panning:
@@ -304,6 +276,7 @@ class BoardView(QtWidgets.QGraphicsView):
         add_video = menu.addAction("Add Video...")
         add_sequence = menu.addAction("Add Image Sequence...")
         add_note = menu.addAction("Add Note")
+        convert_picnc = menu.addAction("Convert PICNC...")
         if single_video:
             convert_video = menu.addAction("Convert Video To Sequence")
         else:
@@ -330,6 +303,8 @@ class BoardView(QtWidgets.QGraphicsView):
             controller.add_sequence()
         elif action == add_note and hasattr(controller, "add_note_at"):
             controller.add_note_at(self.mapToScene(view_pos))
+        elif action == convert_picnc and hasattr(controller, "convert_picnc_interactive"):
+            controller.convert_picnc_interactive()
         elif convert_video is not None and action == convert_video and hasattr(controller, "convert_video_to_sequence"):
             controller.convert_video_to_sequence(selected_items[0])
         elif add_group is not None and action == add_group and hasattr(controller, "add_group"):
@@ -428,6 +403,76 @@ class BoardView(QtWidgets.QGraphicsView):
         controller = getattr(parent, "_controller", None)
         if controller is not None and hasattr(controller, "update_visible_items"):
             controller.update_visible_items()
+
+    def _begin_scale(self, event: QtGui.QMouseEvent, items: list[QtWidgets.QGraphicsItem]) -> None:
+        self._scaling = True
+        self._scale_items = list(items)
+        cursor_pos = self.mapToScene(event.pos())
+
+        # Prefer bounds of the item under cursor if it's selected.
+        hit = self.itemAt(event.pos())
+        focus_bounds = hit.sceneBoundingRect() if (hit is not None and hit in self._scale_items) else None
+
+        bounds = QtCore.QRectF()
+        for item in self._scale_items:
+            bounds = bounds.united(item.sceneBoundingRect())
+        use_bounds = focus_bounds if focus_bounds is not None else bounds
+
+        center = use_bounds.center()
+        corners = [
+            use_bounds.topLeft(),
+            use_bounds.topRight(),
+            use_bounds.bottomLeft(),
+            use_bounds.bottomRight(),
+        ]
+
+        def dist2(a: QtCore.QPointF, b: QtCore.QPointF) -> float:
+            dx = a.x() - b.x()
+            dy = a.y() - b.y()
+            return dx * dx + dy * dy
+
+        center_d = dist2(cursor_pos, center)
+        corner = min(corners, key=lambda p: dist2(cursor_pos, p))
+        corner_d = dist2(cursor_pos, corner)
+        pivot = center if center_d <= corner_d else corner
+
+        self._scale_start_center = pivot
+        self._scale_start_dist = max(self._scale_min_dist, QtCore.QLineF(pivot, cursor_pos).length())
+        self._scale_start_values = []
+        self._scale_start_positions = []
+        self._scale_group_mode = len(self._scale_items) > 1
+        for item in self._scale_items:
+            self._scale_start_values.append(item.scale())
+            self._scale_start_positions.append(item.pos())
+            if not self._scale_group_mode:
+                # Keep the pivot fixed in scene when changing transform origin.
+                scene_pivot = QtCore.QPointF(pivot)
+                local_pivot = item.mapFromScene(scene_pivot)
+                item.setTransformOriginPoint(local_pivot)
+                delta = scene_pivot - item.mapToScene(local_pivot)
+                if not delta.isNull():
+                    item.setPos(item.pos() + delta)
+            overlay = QtWidgets.QGraphicsRectItem(item.sceneBoundingRect())
+            overlay.setPen(QtGui.QPen(QtGui.QColor("#c6ccd6"), 1, QtCore.Qt.PenStyle.DashLine))
+            overlay.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            overlay.setZValue(10_000)
+            self.scene().addItem(overlay)
+            self._scale_overlays.append(overlay)
+
+    def _update_scale(self, event: QtGui.QMouseEvent) -> None:
+        cursor_pos = self.mapToScene(event.pos())
+        current_dist = max(self._scale_min_dist, QtCore.QLineF(self._scale_start_center, cursor_pos).length())
+        factor = current_dist / max(self._scale_min_dist, self._scale_start_dist)
+        factor = max(0.05, min(8.0, factor))
+        for idx, item in enumerate(self._scale_items):
+            start_scale = self._scale_start_values[idx] if idx < len(self._scale_start_values) else item.scale()
+            start_pos = self._scale_start_positions[idx] if idx < len(self._scale_start_positions) else item.pos()
+            item.setScale(max(0.05, min(8.0, start_scale * factor)))
+            if self._scale_group_mode:
+                offset = start_pos - self._scale_start_center
+                item.setPos(self._scale_start_center + offset * factor)
+            if idx < len(self._scale_overlays):
+                self._scale_overlays[idx].setRect(item.sceneBoundingRect())
 
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # type: ignore[override]
         if event.mimeData().hasUrls():
@@ -774,6 +819,22 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_info.setWordWrap(True)
         edit_layout.addWidget(self.edit_info, 0)
 
+        self.edit_toolbar = QtWidgets.QHBoxLayout()
+        self.edit_tool_crop = QtWidgets.QToolButton()
+        self.edit_tool_crop.setText("Crop")
+        self.edit_tool_crop.setEnabled(False)
+        self.edit_toolbar.addWidget(self.edit_tool_crop, 0)
+        self.edit_tool_levels = QtWidgets.QToolButton()
+        self.edit_tool_levels.setText("Levels")
+        self.edit_tool_levels.setEnabled(False)
+        self.edit_toolbar.addWidget(self.edit_tool_levels, 0)
+        self.edit_tool_export = QtWidgets.QToolButton()
+        self.edit_tool_export.setText("Export")
+        self.edit_tool_export.setEnabled(False)
+        self.edit_toolbar.addWidget(self.edit_tool_export, 0)
+        self.edit_toolbar.addStretch(1)
+        edit_layout.addLayout(self.edit_toolbar)
+
         self.edit_exr_channel_row = QtWidgets.QHBoxLayout()
         self.edit_exr_channel_label = QtWidgets.QLabel("Channel")
         self.edit_exr_channel_label.setStyleSheet(muted_text_style())
@@ -785,6 +846,22 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_exr_channel_label.setVisible(False)
         self.edit_exr_channel_combo.setVisible(False)
         edit_layout.addLayout(self.edit_exr_channel_row)
+
+        self.edit_exr_gamma_row = QtWidgets.QHBoxLayout()
+        self.edit_exr_srgb_check = QtWidgets.QCheckBox("sRGB")
+        self.edit_exr_srgb_check.setChecked(True)
+        self.edit_exr_gamma_label = QtWidgets.QLabel("Gamma: 2.2")
+        self.edit_exr_gamma_label.setStyleSheet(muted_text_style())
+        self.edit_exr_gamma_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_exr_gamma_slider.setRange(10, 30)  # 1.0 - 3.0
+        self.edit_exr_gamma_slider.setValue(22)
+        self.edit_exr_gamma_row.addWidget(self.edit_exr_srgb_check, 0)
+        self.edit_exr_gamma_row.addWidget(self.edit_exr_gamma_label, 0)
+        self.edit_exr_gamma_row.addWidget(self.edit_exr_gamma_slider, 1)
+        self.edit_exr_srgb_check.setVisible(False)
+        self.edit_exr_gamma_label.setVisible(False)
+        self.edit_exr_gamma_slider.setVisible(False)
+        edit_layout.addLayout(self.edit_exr_gamma_row)
 
         # Preview stack (image / video / sequence)
         self.edit_preview_stack = QtWidgets.QStackedWidget()
@@ -841,9 +918,20 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_sequence_preview = VideoPreviewLabel()
         self.edit_sequence_preview.setStyleSheet("color: #9aa3ad;")
         seq_layout.addWidget(self.edit_sequence_preview, 1)
+        self.edit_sequence_controls = QtWidgets.QHBoxLayout()
+        self.edit_sequence_play_btn = QtWidgets.QPushButton("Play")
         self.edit_sequence_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_sequence_slider.setRange(0, 0)
-        seq_layout.addWidget(self.edit_sequence_slider, 0)
+        self.edit_sequence_controls.addWidget(self.edit_sequence_play_btn, 0)
+        self.edit_sequence_controls.addWidget(self.edit_sequence_slider, 1)
+        seq_layout.addLayout(self.edit_sequence_controls, 0)
+
+        self.edit_sequence_timeline = _TimelineWidget()
+        seq_layout.addWidget(self.edit_sequence_timeline, 0)
+
+        self.edit_sequence_frame_label = QtWidgets.QLabel("Frame: 0")
+        self.edit_sequence_frame_label.setStyleSheet(muted_text_style())
+        seq_layout.addWidget(self.edit_sequence_frame_label, 0)
         self.edit_preview_stack.addWidget(self.edit_sequence_panel)
 
         self.edit_list = QtWidgets.QListWidget()
@@ -897,19 +985,43 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_footer.setText(footer)
         self.set_edit_panel_visible(True)
 
-    def set_exr_channels(self, channels: list[str]) -> None:
+    def set_exr_channels(self, channels: list[object]) -> None:
         self.edit_exr_channel_combo.blockSignals(True)
         self.edit_exr_channel_combo.clear()
-        self.edit_exr_channel_combo.addItems(channels)
+        for entry in channels:
+            if isinstance(entry, tuple) and len(entry) == 2:
+                label, value = entry
+                self.edit_exr_channel_combo.addItem(str(label), value)
+            else:
+                self.edit_exr_channel_combo.addItem(str(entry), str(entry))
         self.edit_exr_channel_combo.blockSignals(False)
         self.edit_exr_channel_row.setEnabled(bool(channels))
         self.edit_exr_channel_label.setVisible(True)
         self.edit_exr_channel_combo.setVisible(True)
 
+    def current_exr_channel_value(self) -> str:
+        data = self.edit_exr_channel_combo.currentData()
+        if isinstance(data, str):
+            return data
+        return self.edit_exr_channel_combo.currentText()
+
     def set_exr_channel_row_visible(self, visible: bool) -> None:
         self.edit_exr_channel_label.setVisible(bool(visible))
         self.edit_exr_channel_combo.setVisible(bool(visible))
         self.edit_exr_channel_row.setEnabled(bool(visible))
+
+        self.edit_exr_srgb_check.setVisible(bool(visible))
+        self.edit_exr_gamma_label.setVisible(bool(visible))
+        self.edit_exr_gamma_slider.setVisible(bool(visible))
+
+    def current_exr_gamma(self) -> float:
+        return float(self.edit_exr_gamma_slider.value()) / 10.0
+
+    def current_exr_srgb_enabled(self) -> bool:
+        return bool(self.edit_exr_srgb_check.isChecked())
+
+    def set_exr_gamma_label(self, gamma: float) -> None:
+        self.edit_exr_gamma_label.setText(f"Gamma: {gamma:.1f}")
 
     def show_edit_preview_image(self, pixmap: QtGui.QPixmap, label: str = "") -> None:
         self.edit_preview_stack.setCurrentWidget(self.edit_image_preview)
@@ -955,6 +1067,9 @@ class BoardPage(QtWidgets.QWidget):
                         item = controller.add_video_from_path(local_path, scene_pos=scene_pos)
                 elif hasattr(controller, "_is_image_file") and controller._is_image_file(local_path):
                     item = controller.add_image_from_path(local_path, scene_pos=scene_pos)
+                elif hasattr(controller, "_is_pic_file") and controller._is_pic_file(local_path):
+                    if hasattr(controller, "convert_picnc_interactive"):
+                        controller.convert_picnc_interactive(local_path)
                 if item is not None:
                     controller.try_add_item_to_group(item, scene_pos)
                     handled = True
