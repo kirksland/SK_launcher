@@ -22,6 +22,7 @@ from core.settings import (
     normalize_asset_manager_projects,
     save_settings,
 )
+from core.houdini_env import build_houdini_env
 from controllers.asset_manager_controller import AssetManagerController
 from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
@@ -279,22 +280,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_push_btn = self.asset_page.asset_push_btn
         self.asset_fetch_btn = self.asset_page.asset_fetch_btn
         self.asset_video_controller = self.asset_page.asset_video_controller
-        self.asset_controller = AssetManagerController(self)
-        self.project_controller = ProjectsController(self)
-        self.client_controller = ClientController(self)
-        self.board_controller = BoardController(self)
-        self.asset_video_box = self.asset_page.asset_video_box
-        self.asset_video_layout = self.asset_page.asset_video_layout
-
-        self.board_project_label = self.board_page.project_label
-        self.board_add_image_btn = self.board_page.add_image_btn
-        self.board_add_video_btn = self.board_page.add_video_btn
-        self.board_auto_layout_btn = self.board_page.auto_layout_btn
-        self.board_fit_btn = self.board_page.fit_btn
-        self.board_save_btn = self.board_page.save_btn
-        self.board_load_btn = self.board_page.load_btn
-        self.board_page.set_controller(self.board_controller)
-        self.board_controller.set_project(None)
 
         self.client_refresh_btn = self.client_page.refresh_btn
         self.client_list = self.client_page.client_list
@@ -317,6 +302,23 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.client_conflict_keep_local_btn = self.client_page.client_conflict_keep_local_btn
         self.client_conflict_keep_server_btn = self.client_page.client_conflict_keep_server_btn
         self.client_conflict_keep_both_btn = self.client_page.client_conflict_keep_both_btn
+
+        self.asset_controller = AssetManagerController(self)
+        self.project_controller = ProjectsController(self)
+        self.client_controller = ClientController(self)
+        self.board_controller = BoardController(self)
+        self.asset_video_box = self.asset_page.asset_video_box
+        self.asset_video_layout = self.asset_page.asset_video_layout
+
+        self.board_project_label = self.board_page.project_label
+        self.board_add_image_btn = self.board_page.add_image_btn
+        self.board_add_video_btn = self.board_page.add_video_btn
+        self.board_auto_layout_btn = self.board_page.auto_layout_btn
+        self.board_fit_btn = self.board_page.fit_btn
+        self.board_save_btn = self.board_page.save_btn
+        self.board_load_btn = self.board_page.load_btn
+        self.board_page.set_controller(self.board_controller)
+        self.board_controller.set_project(None)
 
         self.settings_projects_dir = self.settings_page.settings_projects_dir
         self.settings_server_dir = self.settings_page.settings_server_dir
@@ -409,6 +411,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.board_fit_btn.clicked.connect(self.board_controller.fit_view)
         self.board_save_btn.clicked.connect(self.board_controller.save_board)
         self.board_load_btn.clicked.connect(self.board_controller.load_board)
+        self.pages.currentChanged.connect(self._on_main_page_changed)
 
         self.settings_save_btn.clicked.connect(self.save_settings_from_ui)
         self.dev_add_box_btn.clicked.connect(self._dev_add_box_in_houdini)
@@ -463,6 +466,11 @@ class LauncherWindow(QtWidgets.QMainWindow):
     def _media_prev(self) -> None:
         # VK_MEDIA_PREV_TRACK = 0xB1
         self._send_media_key(0xB1)
+
+    def _on_main_page_changed(self, index: int) -> None:
+        # Ensure board visuals/overrides are freshly applied when entering the Board page.
+        if int(index) == 2 and hasattr(self, "board_controller") and self.board_controller is not None:
+            QtCore.QTimer.singleShot(0, self.board_controller.load_board)
 
     def set_clients_badge(self, enabled: bool) -> None:
         if self._nav_clients_btn is None or self._nav_clients_badge is None:
@@ -581,6 +589,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         try:
             if hasattr(self, "board_controller") and self.board_controller is not None:
                 self.board_controller.save_board()
+                self.board_controller.shutdown()
         except Exception:
             pass
         super().closeEvent(event)
@@ -629,7 +638,11 @@ class LauncherWindow(QtWidgets.QMainWindow):
             f"hou.hipFile.save(r'''{hip_path}''')\n"
         )
         try:
-            subprocess.check_call([str(hython), "-c", script])
+            houdini_env = build_houdini_env(
+                base_env=os.environ,
+                launcher_root=Path(__file__).resolve().parent,
+            )
+            subprocess.check_call([str(hython), "-c", script], env=houdini_env)
         except Exception as exc:
             self.dev_status.setText(f"Failed to run hython: {exc}")
             return
@@ -646,7 +659,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
                     self.dev_status.setText("Test Box created (silent).")
                     return
             try:
-                subprocess.Popen([str(houdini_path), str(hip_path)])
+                subprocess.Popen([str(houdini_path), str(hip_path)], env=houdini_env)
             except Exception as exc:
                 self.dev_status.setText(f"Failed to launch Houdini: {exc}")
                 return
@@ -705,7 +718,11 @@ class LauncherWindow(QtWidgets.QMainWindow):
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{src_path.stem}.{ext}"
         try:
-            subprocess.check_call([str(iconvert), str(src_path), str(out_path)])
+            houdini_env = build_houdini_env(
+                base_env=os.environ,
+                launcher_root=Path(__file__).resolve().parent,
+            )
+            subprocess.check_call([str(iconvert), str(src_path), str(out_path)], env=houdini_env)
         except Exception as exc:
             self.dev_status.setText(f"iconvert failed: {exc}")
             return

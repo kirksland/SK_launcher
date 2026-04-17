@@ -317,6 +317,11 @@ class BoardView(QtWidgets.QGraphicsView):
             controller.ungroup_selected()
 
     def _on_groups_tree_menu(self, pos: QtCore.QPoint) -> None:
+        controller = self._resolve_controller()
+        if controller is not None and hasattr(controller, "show_groups_tree_context_menu"):
+            handled = controller.show_groups_tree_context_menu(pos)
+            if handled:
+                return
         item = self.groups_tree.itemAt(pos)
         if item is None:
             return
@@ -333,7 +338,6 @@ class BoardView(QtWidgets.QGraphicsView):
             elif kind in ("image", "note"):
                 remove_from_group = menu.addAction("Remove From Group")
         action = menu.exec(self.groups_tree.mapToGlobal(pos))
-        controller = self._resolve_controller()
         if controller is None:
             return
         if action == add_to_group and hasattr(controller, "add_selected_to_group"):
@@ -383,6 +387,13 @@ class BoardView(QtWidgets.QGraphicsView):
             event.accept()
             self._schedule_quality_update()
             return
+        if event.key() == QtCore.Qt.Key.Key_Escape:
+            parent = self.parent()
+            controller = getattr(parent, "_controller", None)
+            if controller is not None and hasattr(controller, "exit_focus_mode"):
+                controller.exit_focus_mode()
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
@@ -508,6 +519,7 @@ class BoardView(QtWidgets.QGraphicsView):
 class _TimelineWidget(QtWidgets.QWidget):
     playheadChanged = QtCore.Signal(int)
     selectedClipChanged = QtCore.Signal(int)
+    scrubStateChanged = QtCore.Signal(bool)
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -560,16 +572,17 @@ class _TimelineWidget(QtWidgets.QWidget):
             self._pan_last_x = event.position().x()
             return
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            if not self._dragging:
+                self._dragging = True
+                self.scrubStateChanged.emit(True)
             hit = self._hit_test_clip(event.position().x())
             if hit is not None:
                 if hit != self._selected_clip:
                     self._selected_clip = hit
                     self.selectedClipChanged.emit(hit)
-                self._dragging = True
                 self._set_playhead_from_x(event.position().x())
                 self.update()
             else:
-                self._dragging = True
                 self._set_playhead_from_x(event.position().x())
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
@@ -583,7 +596,9 @@ class _TimelineWidget(QtWidgets.QWidget):
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
-            self._dragging = False
+            if self._dragging:
+                self._dragging = False
+                self.scrubStateChanged.emit(False)
         if event.button() == QtCore.Qt.MouseButton.MiddleButton:
             self._panning = False
 
@@ -717,6 +732,7 @@ class BoardPage(QtWidgets.QWidget):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._controller = None
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.setAcceptDrops(True)
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -783,6 +799,7 @@ class BoardPage(QtWidgets.QWidget):
         self.groups_tree = _GroupsTree()
         self.groups_tree.setHeaderHidden(True)
         self.groups_tree.setStyleSheet(tree_panel_style(bg_key="app_bg"))
+        self.groups_tree.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.groups_tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.groups_tree.customContextMenuRequested.connect(self._on_groups_tree_menu)
         groups_layout.addWidget(self.groups_tree, 1)
@@ -832,6 +849,9 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_tool_export.setText("Export")
         self.edit_tool_export.setEnabled(False)
         self.edit_toolbar.addWidget(self.edit_tool_export, 0)
+        self.edit_tool_exit = QtWidgets.QToolButton()
+        self.edit_tool_exit.setText("Exit Focus")
+        self.edit_toolbar.addWidget(self.edit_tool_exit, 0)
         self.edit_toolbar.addStretch(1)
         edit_layout.addLayout(self.edit_toolbar)
 
@@ -863,6 +883,103 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_exr_gamma_slider.setVisible(False)
         edit_layout.addLayout(self.edit_exr_gamma_row)
 
+        self.edit_image_tools_label = QtWidgets.QLabel("Tool Stack")
+        self.edit_image_tools_label.setStyleSheet(muted_text_style())
+        self.edit_image_tools_label.setVisible(False)
+        edit_layout.addWidget(self.edit_image_tools_label, 0)
+
+        self.edit_image_tool_list = QtWidgets.QListWidget()
+        self.edit_image_tool_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.edit_image_tool_list.setMaximumHeight(108)
+        self.edit_image_tool_list.setVisible(False)
+        edit_layout.addWidget(self.edit_image_tool_list, 0)
+
+        self.edit_image_tool_add_row = QtWidgets.QHBoxLayout()
+        self.edit_image_tool_add_combo = QtWidgets.QComboBox()
+        self.edit_image_tool_add_combo.setMinimumWidth(120)
+        self.edit_image_tool_add_btn = QtWidgets.QPushButton("Add")
+        self.edit_image_tool_remove_btn = QtWidgets.QPushButton("Remove")
+        self.edit_image_tool_add_row.addWidget(self.edit_image_tool_add_combo, 1)
+        self.edit_image_tool_add_row.addWidget(self.edit_image_tool_add_btn, 0)
+        self.edit_image_tool_add_row.addWidget(self.edit_image_tool_remove_btn, 0)
+        edit_layout.addLayout(self.edit_image_tool_add_row)
+        self.edit_image_tool_add_combo.setVisible(False)
+        self.edit_image_tool_add_btn.setVisible(False)
+        self.edit_image_tool_remove_btn.setVisible(False)
+
+        self.edit_image_tool_order_row = QtWidgets.QHBoxLayout()
+        self.edit_image_tool_up_btn = QtWidgets.QPushButton("Up")
+        self.edit_image_tool_down_btn = QtWidgets.QPushButton("Down")
+        self.edit_image_tool_order_row.addWidget(self.edit_image_tool_up_btn, 0)
+        self.edit_image_tool_order_row.addWidget(self.edit_image_tool_down_btn, 0)
+        self.edit_image_tool_order_row.addStretch(1)
+        edit_layout.addLayout(self.edit_image_tool_order_row)
+        self.edit_image_tool_up_btn.setVisible(False)
+        self.edit_image_tool_down_btn.setVisible(False)
+
+        self.edit_image_adjust_label = QtWidgets.QLabel("Image Adjustments")
+        self.edit_image_adjust_label.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_label.setVisible(False)
+        edit_layout.addWidget(self.edit_image_adjust_label, 0)
+
+        self.edit_image_adjust_brightness_row = QtWidgets.QHBoxLayout()
+        self.edit_image_adjust_brightness_title = QtWidgets.QLabel("Brightness")
+        self.edit_image_adjust_brightness_title.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_brightness_value = QtWidgets.QLabel("0.00")
+        self.edit_image_adjust_brightness_value.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_brightness_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_image_adjust_brightness_slider.setRange(-100, 100)
+        self.edit_image_adjust_brightness_slider.setValue(0)
+        self.edit_image_adjust_brightness_row.addWidget(self.edit_image_adjust_brightness_title, 0)
+        self.edit_image_adjust_brightness_row.addWidget(self.edit_image_adjust_brightness_slider, 1)
+        self.edit_image_adjust_brightness_row.addWidget(self.edit_image_adjust_brightness_value, 0)
+        edit_layout.addLayout(self.edit_image_adjust_brightness_row)
+
+        self.edit_image_adjust_contrast_row = QtWidgets.QHBoxLayout()
+        self.edit_image_adjust_contrast_title = QtWidgets.QLabel("Contrast")
+        self.edit_image_adjust_contrast_title.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_contrast_value = QtWidgets.QLabel("1.00")
+        self.edit_image_adjust_contrast_value.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_contrast_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_image_adjust_contrast_slider.setRange(0, 200)
+        self.edit_image_adjust_contrast_slider.setValue(100)
+        self.edit_image_adjust_contrast_row.addWidget(self.edit_image_adjust_contrast_title, 0)
+        self.edit_image_adjust_contrast_row.addWidget(self.edit_image_adjust_contrast_slider, 1)
+        self.edit_image_adjust_contrast_row.addWidget(self.edit_image_adjust_contrast_value, 0)
+        edit_layout.addLayout(self.edit_image_adjust_contrast_row)
+
+        self.edit_image_adjust_saturation_row = QtWidgets.QHBoxLayout()
+        self.edit_image_adjust_saturation_title = QtWidgets.QLabel("Saturation")
+        self.edit_image_adjust_saturation_title.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_saturation_value = QtWidgets.QLabel("1.00")
+        self.edit_image_adjust_saturation_value.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_saturation_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_image_adjust_saturation_slider.setRange(0, 200)
+        self.edit_image_adjust_saturation_slider.setValue(100)
+        self.edit_image_adjust_saturation_row.addWidget(self.edit_image_adjust_saturation_title, 0)
+        self.edit_image_adjust_saturation_row.addWidget(self.edit_image_adjust_saturation_slider, 1)
+        self.edit_image_adjust_saturation_row.addWidget(self.edit_image_adjust_saturation_value, 0)
+        edit_layout.addLayout(self.edit_image_adjust_saturation_row)
+
+        self.edit_image_vibrance_row = QtWidgets.QHBoxLayout()
+        self.edit_image_vibrance_title = QtWidgets.QLabel("Vibrance")
+        self.edit_image_vibrance_title.setStyleSheet(muted_text_style())
+        self.edit_image_vibrance_value = QtWidgets.QLabel("0.00")
+        self.edit_image_vibrance_value.setStyleSheet(muted_text_style())
+        self.edit_image_vibrance_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_image_vibrance_slider.setRange(-100, 100)
+        self.edit_image_vibrance_slider.setValue(0)
+        self.edit_image_vibrance_row.addWidget(self.edit_image_vibrance_title, 0)
+        self.edit_image_vibrance_row.addWidget(self.edit_image_vibrance_slider, 1)
+        self.edit_image_vibrance_row.addWidget(self.edit_image_vibrance_value, 0)
+        edit_layout.addLayout(self.edit_image_vibrance_row)
+
+        self.edit_image_adjust_reset_btn = QtWidgets.QPushButton("Reset Adjustments")
+        self.edit_image_adjust_reset_btn.setVisible(False)
+        edit_layout.addWidget(self.edit_image_adjust_reset_btn, 0)
+
+        self.set_image_adjust_controls_visible(False)
+
         # Preview stack (image / video / sequence)
         self.edit_preview_stack = QtWidgets.QStackedWidget()
         self.edit_preview_stack.setMinimumHeight(180)
@@ -892,20 +1009,6 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_video_controls.addWidget(self.edit_video_play_btn, 0)
         self.edit_video_controls.addWidget(self.edit_video_slider, 1)
         video_layout.addLayout(self.edit_video_controls, 0)
-
-        self.edit_timeline = _TimelineWidget()
-        video_layout.addWidget(self.edit_timeline, 0)
-
-        timeline_actions = QtWidgets.QHBoxLayout()
-        self.edit_timeline_frame_label = QtWidgets.QLabel("Frame: 0")
-        self.edit_timeline_frame_label.setStyleSheet(muted_text_style())
-        self.edit_timeline_split_btn = QtWidgets.QPushButton("Split")
-        self.edit_timeline_export_btn = QtWidgets.QPushButton("Export Segment")
-        timeline_actions.addWidget(self.edit_timeline_frame_label, 0)
-        timeline_actions.addWidget(self.edit_timeline_split_btn, 0)
-        timeline_actions.addWidget(self.edit_timeline_export_btn, 0)
-        timeline_actions.addStretch(1)
-        video_layout.addLayout(timeline_actions, 0)
         self.edit_preview_stack.addWidget(self.edit_video_panel)
 
         self.edit_sequence_panel = QtWidgets.QWidget()
@@ -955,6 +1058,9 @@ class BoardPage(QtWidgets.QWidget):
         self._undo_shortcut.activated.connect(self._on_undo)
         self._redo_shortcut = QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Redo, self)
         self._redo_shortcut.activated.connect(self._on_redo)
+        self._exit_focus_shortcut = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_Escape), self)
+        self._exit_focus_shortcut.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
+        self._exit_focus_shortcut.activated.connect(self._on_exit_focus)
 
         footer = QtWidgets.QHBoxLayout()
         layout.addLayout(footer)
@@ -964,8 +1070,38 @@ class BoardPage(QtWidgets.QWidget):
         self.hint_label.setStyleSheet(muted_text_style())
         footer.addWidget(self.hint_label, 1)
 
+        # Bottom timeline bar (for focus mode video editing)
+        self.edit_timeline_bar = QtWidgets.QFrame()
+        self.edit_timeline_bar.setStyleSheet(subtle_panel_frame_style(bg_key="app_bg"))
+        self.edit_timeline_bar.setVisible(False)
+        timeline_layout = QtWidgets.QVBoxLayout(self.edit_timeline_bar)
+        timeline_layout.setContentsMargins(10, 6, 10, 6)
+        timeline_layout.setSpacing(6)
+        timeline_title = QtWidgets.QLabel("Timeline")
+        timeline_title.setStyleSheet(muted_text_style())
+        timeline_layout.addWidget(timeline_title, 0)
+        self.edit_timeline = _TimelineWidget()
+        timeline_layout.addWidget(self.edit_timeline, 0)
+        timeline_actions = QtWidgets.QHBoxLayout()
+        self.edit_timeline_frame_label = QtWidgets.QLabel("Frame: 0")
+        self.edit_timeline_frame_label.setStyleSheet(muted_text_style())
+        self.edit_timeline_split_btn = QtWidgets.QPushButton("Split")
+        self.edit_timeline_export_btn = QtWidgets.QPushButton("Export Segment")
+        timeline_actions.addWidget(self.edit_timeline_frame_label, 0)
+        timeline_actions.addWidget(self.edit_timeline_split_btn, 0)
+        timeline_actions.addWidget(self.edit_timeline_export_btn, 0)
+        timeline_actions.addStretch(1)
+        timeline_layout.addLayout(timeline_actions, 0)
+        layout.insertWidget(layout.count() - 1, self.edit_timeline_bar, 0)
+
     def set_edit_panel_visible(self, visible: bool) -> None:
         self.edit_panel.setVisible(bool(visible))
+
+    def set_edit_preview_visible(self, visible: bool) -> None:
+        self.edit_preview_stack.setVisible(bool(visible))
+
+    def set_timeline_bar_visible(self, visible: bool) -> None:
+        self.edit_timeline_bar.setVisible(bool(visible))
 
     def set_edit_panel_content(
         self,
@@ -1022,6 +1158,109 @@ class BoardPage(QtWidgets.QWidget):
 
     def set_exr_gamma_label(self, gamma: float) -> None:
         self.edit_exr_gamma_label.setText(f"Gamma: {gamma:.1f}")
+
+    def set_image_adjust_controls_visible(self, visible: bool) -> None:
+        controls = [
+            self.edit_image_tools_label,
+            self.edit_image_tool_list,
+            self.edit_image_tool_add_combo,
+            self.edit_image_tool_add_btn,
+            self.edit_image_tool_remove_btn,
+            self.edit_image_tool_up_btn,
+            self.edit_image_tool_down_btn,
+            self.edit_image_adjust_label,
+            self.edit_image_adjust_brightness_title,
+            self.edit_image_adjust_brightness_slider,
+            self.edit_image_adjust_brightness_value,
+            self.edit_image_adjust_contrast_title,
+            self.edit_image_adjust_contrast_slider,
+            self.edit_image_adjust_contrast_value,
+            self.edit_image_adjust_saturation_title,
+            self.edit_image_adjust_saturation_slider,
+            self.edit_image_adjust_saturation_value,
+            self.edit_image_vibrance_title,
+            self.edit_image_vibrance_slider,
+            self.edit_image_vibrance_value,
+            self.edit_image_adjust_reset_btn,
+        ]
+        for widget in controls:
+            widget.setVisible(bool(visible))
+
+    def current_image_brightness(self) -> float:
+        return float(self.edit_image_adjust_brightness_slider.value()) / 100.0
+
+    def current_image_contrast(self) -> float:
+        return float(self.edit_image_adjust_contrast_slider.value()) / 100.0
+
+    def current_image_saturation(self) -> float:
+        return float(self.edit_image_adjust_saturation_slider.value()) / 100.0
+
+    def set_image_adjust_labels(self, brightness: float, contrast: float, saturation: float) -> None:
+        self.edit_image_adjust_brightness_value.setText(f"{brightness:+.2f}")
+        self.edit_image_adjust_contrast_value.setText(f"{contrast:.2f}")
+        self.edit_image_adjust_saturation_value.setText(f"{saturation:.2f}")
+
+    def set_image_vibrance_value(self, amount: float) -> None:
+        self.edit_image_vibrance_slider.blockSignals(True)
+        self.edit_image_vibrance_slider.setValue(int(round(float(amount) * 100.0)))
+        self.edit_image_vibrance_slider.blockSignals(False)
+        self.edit_image_vibrance_value.setText(f"{float(amount):+.2f}")
+
+    def current_image_vibrance(self) -> float:
+        return float(self.edit_image_vibrance_slider.value()) / 100.0
+
+    def set_image_vibrance_visible(self, visible: bool) -> None:
+        self.edit_image_vibrance_title.setVisible(bool(visible))
+        self.edit_image_vibrance_slider.setVisible(bool(visible))
+        self.edit_image_vibrance_value.setVisible(bool(visible))
+
+    def set_image_bcs_controls_visible(self, visible: bool) -> None:
+        self.edit_image_adjust_label.setVisible(bool(visible))
+        self.edit_image_adjust_brightness_title.setVisible(bool(visible))
+        self.edit_image_adjust_brightness_slider.setVisible(bool(visible))
+        self.edit_image_adjust_brightness_value.setVisible(bool(visible))
+        self.edit_image_adjust_contrast_title.setVisible(bool(visible))
+        self.edit_image_adjust_contrast_slider.setVisible(bool(visible))
+        self.edit_image_adjust_contrast_value.setVisible(bool(visible))
+        self.edit_image_adjust_saturation_title.setVisible(bool(visible))
+        self.edit_image_adjust_saturation_slider.setVisible(bool(visible))
+        self.edit_image_adjust_saturation_value.setVisible(bool(visible))
+
+    def set_image_tool_add_options(self, options: list[tuple[str, str]]) -> None:
+        self.edit_image_tool_add_combo.blockSignals(True)
+        self.edit_image_tool_add_combo.clear()
+        for label, tool_id in options:
+            self.edit_image_tool_add_combo.addItem(str(label), str(tool_id))
+        self.edit_image_tool_add_combo.blockSignals(False)
+
+    def current_image_tool_add_id(self) -> str:
+        data = self.edit_image_tool_add_combo.currentData()
+        return str(data) if data is not None else ""
+
+    def set_image_tool_stack_items(self, items: list[tuple[str, bool]], selected_index: int = -1) -> None:
+        self.edit_image_tool_list.blockSignals(True)
+        self.edit_image_tool_list.clear()
+        for label, enabled in items:
+            prefix = "ON" if enabled else "OFF"
+            self.edit_image_tool_list.addItem(f"[{prefix}] {label}")
+        if items and selected_index >= 0 and selected_index < len(items):
+            self.edit_image_tool_list.setCurrentRow(int(selected_index))
+        self.edit_image_tool_list.blockSignals(False)
+
+    def current_image_tool_stack_index(self) -> int:
+        return int(self.edit_image_tool_list.currentRow())
+
+    def set_image_adjust_values(self, brightness: float, contrast: float, saturation: float) -> None:
+        self.edit_image_adjust_brightness_slider.blockSignals(True)
+        self.edit_image_adjust_contrast_slider.blockSignals(True)
+        self.edit_image_adjust_saturation_slider.blockSignals(True)
+        self.edit_image_adjust_brightness_slider.setValue(int(round(float(brightness) * 100.0)))
+        self.edit_image_adjust_contrast_slider.setValue(int(round(float(contrast) * 100.0)))
+        self.edit_image_adjust_saturation_slider.setValue(int(round(float(saturation) * 100.0)))
+        self.edit_image_adjust_brightness_slider.blockSignals(False)
+        self.edit_image_adjust_contrast_slider.blockSignals(False)
+        self.edit_image_adjust_saturation_slider.blockSignals(False)
+        self.set_image_adjust_labels(brightness, contrast, saturation)
 
     def show_edit_preview_image(self, pixmap: QtGui.QPixmap, label: str = "") -> None:
         self.edit_preview_stack.setCurrentWidget(self.edit_image_preview)
@@ -1106,6 +1345,10 @@ class BoardPage(QtWidgets.QWidget):
         self._controller = controller
 
     def _on_groups_tree_menu(self, pos: QtCore.QPoint) -> None:
+        if self._controller is not None and hasattr(self._controller, "show_groups_tree_context_menu"):
+            handled = self._controller.show_groups_tree_context_menu(pos)
+            if handled:
+                return
         item = self.groups_tree.itemAt(pos)
         if item is None:
             return
@@ -1163,4 +1406,8 @@ class BoardPage(QtWidgets.QWidget):
     def _on_redo(self) -> None:
         if self._controller is not None and hasattr(self._controller, "redo"):
             self._controller.redo()
+
+    def _on_exit_focus(self) -> None:
+        if self._controller is not None and hasattr(self._controller, "exit_focus_mode"):
+            self._controller.exit_focus_mode()
 

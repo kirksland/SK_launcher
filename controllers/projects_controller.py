@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.fs import find_projects, list_hips_with_mtime, open_hip
+from core.houdini_env import build_houdini_env
 from core.settings import DEFAULT_TEMPLATE_HIP
 from core.watchers import update_watcher_paths
 from ui.widgets.project_card import ProjectCard
@@ -382,13 +383,11 @@ class ProjectsController:
         if not self.w._houdini_exe:
             open_hip(hip)
             return
-        env = os.environ.copy()
-        env["JOB"] = str(project_path)
-        env["HIP"] = str(project_path)
-        # Ensure project folder is on HOUDINI_PATH so per-project scripts can be found
-        existing_hpath = env.get("HOUDINI_PATH", "")
-        project_hpath = f"{project_path};&"
-        env["HOUDINI_PATH"] = project_hpath + (existing_hpath or "")
+        env = build_houdini_env(
+            base_env=os.environ,
+            project_path=project_path,
+            launcher_root=Path(__file__).resolve().parents[1],
+        )
         subprocess.Popen([self.w._houdini_exe, str(hip)], env=env)
 
     def setup_project_watcher(self) -> None:

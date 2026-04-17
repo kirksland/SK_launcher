@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from core.houdini_env import build_houdini_env
+from tools.image_tools.registry import apply_image_tool_stack, build_bcs_stack, extract_bcs_settings, normalize_tool_stack
 from video.player import VideoController, VideoPreviewLabel
 
 try:
@@ -29,6 +31,31 @@ except Exception:  # pragma: no cover - optional exr backend
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".exr"}
 PIC_EXTS = {".pic", ".picnc"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+
+def _downscale_rgb_for_preview(rgb: object, max_dim: int):
+    import numpy as np  # type: ignore
+
+    arr = np.asarray(rgb)
+    if arr.ndim != 3 or arr.shape[2] < 3:
+        return arr
+    h = int(arr.shape[0])
+    w = int(arr.shape[1])
+    target = int(max_dim)
+    if target <= 0 or (w <= target and h <= target):
+        return arr
+    scale = float(target) / float(max(w, h))
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    if cv2 is not None:
+        try:
+            return cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        except Exception:
+            pass
+    # Fallback: nearest-neighbor sampling without extra dependencies.
+    ys = np.linspace(0, h - 1, new_h).astype(np.int32)
+    xs = np.linspace(0, w - 1, new_w).astype(np.int32)
+    return arr[ys][:, xs]
 
 
 def _draw_corner_badge(painter: QtGui.QPainter, label: str, color: QtGui.QColor) -> None:
@@ -162,12 +189,28 @@ class _ExrInfoWorker(QtCore.QObject):
 class _ExrChannelPreviewWorker(QtCore.QObject):
     finished = QtCore.Signal(bool, str, object, object)
 
-    def __init__(self, path: Path, channel: str, gamma: float, srgb: bool) -> None:
+    def __init__(
+        self,
+        path: Path,
+        channel: str,
+        gamma: float,
+        srgb: bool,
+        brightness: float = 0.0,
+        contrast: float = 1.0,
+        saturation: float = 1.0,
+        max_dim: int = 0,
+        tool_stack: object = None,
+    ) -> None:
         super().__init__()
         self._path = path
         self._channel = channel
         self._gamma = max(0.1, float(gamma))
         self._srgb = bool(srgb)
+        self._brightness = float(brightness)
+        self._contrast = max(0.0, float(contrast))
+        self._saturation = max(0.0, float(saturation))
+        self._max_dim = int(max_dim)
+        self._tool_stack = normalize_tool_stack(tool_stack)
 
     @QtCore.Slot()
     def run(self) -> None:
@@ -235,10 +278,92 @@ class _ExrChannelPreviewWorker(QtCore.QObject):
                 rgb = np.stack([img8, img8, img8], axis=-1)
             else:
                 rgb = (norm * 255.0).astype(np.uint8)
+            stack = self._tool_stack or build_bcs_stack(self._brightness, self._contrast, self._saturation)
+            rgb = apply_image_tool_stack(rgb, stack)
+            rgb = _downscale_rgb_for_preview(rgb, self._max_dim)
             payload = (int(rgb.shape[1]), int(rgb.shape[0]), rgb.tobytes())
             self.finished.emit(True, self._channel, payload, None)
         except Exception as exc:
             self.finished.emit(False, self._channel, None, str(exc))
+
+
+class _ImageAdjustPreviewWorker(QtCore.QObject):
+    finished = QtCore.Signal(bool, object, object)
+
+    def __init__(
+        self,
+        path: Path,
+        brightness: float,
+        contrast: float,
+        saturation: float,
+        max_dim: int = 0,
+        tool_stack: object = None,
+    ) -> None:
+        super().__init__()
+        self._path = path
+        self._brightness = float(brightness)
+        self._contrast = max(0.0, float(contrast))
+        self._saturation = max(0.0, float(saturation))
+        self._max_dim = int(max_dim)
+        self._tool_stack = normalize_tool_stack(tool_stack)
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        try:
+            import numpy as np  # type: ignore
+        except Exception:
+            self.finished.emit(False, None, "NumPy not available.")
+            return
+        img = None
+        if cv2 is not None:
+            try:
+                img = cv2.imread(str(self._path), cv2.IMREAD_UNCHANGED)
+            except Exception:
+                img = None
+        if img is None:
+            qimg = QtGui.QImage(str(self._path))
+            if qimg.isNull():
+                self.finished.emit(False, None, "Failed to read image.")
+                return
+            qimg = qimg.convertToFormat(QtGui.QImage.Format.Format_RGB888)
+            w = int(qimg.width())
+            h = int(qimg.height())
+            if w <= 0 or h <= 0:
+                self.finished.emit(False, None, "Failed to read image.")
+                return
+            ptr = qimg.bits()
+            arr = np.frombuffer(ptr, dtype=np.uint8)
+            arr = arr.reshape((h, int(qimg.bytesPerLine())))
+            img = arr[:, : w * 3].reshape((h, w, 3)).copy()
+        if img is None:
+            self.finished.emit(False, None, "Failed to read image.")
+            return
+        if img.ndim == 2:
+            img = np.stack([img, img, img], axis=-1)
+        if img.ndim == 3 and img.shape[2] == 1:
+            img = np.repeat(img, 3, axis=2)
+        if img.ndim == 3 and img.shape[2] >= 3:
+            img = img[:, :, :3]
+        if img.dtype != np.uint8:
+            img_f = img.astype(np.float32)
+            max_val = float(np.nanmax(img_f)) if img_f.size else 1.0
+            if max_val <= 1.0:
+                img_f = img_f * 255.0
+            else:
+                img_f = (img_f / max_val) * 255.0
+            img = np.clip(img_f, 0, 255).astype(np.uint8)
+        if cv2 is not None:
+            try:
+                rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            except Exception:
+                rgb = img
+        else:
+            rgb = img
+        stack = self._tool_stack or build_bcs_stack(self._brightness, self._contrast, self._saturation)
+        rgb = apply_image_tool_stack(rgb, stack)
+        rgb = _downscale_rgb_for_preview(rgb, self._max_dim)
+        payload = (int(rgb.shape[1]), int(rgb.shape[0]), rgb.tobytes())
+        self.finished.emit(True, payload, None)
 
 
 class _VideoSegmentWorker(QtCore.QObject):
@@ -505,11 +630,17 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
         self._proxy_pixmap = controller._get_display_pixmap(path, self._proxy_dim)
         self._full_pixmap: Optional[QtGui.QPixmap] = None
         self._pixmap = self._proxy_pixmap
+        self._override_pixmap: Optional[QtGui.QPixmap] = None
         self._logical_size = controller._get_image_size(path, fallback=self._pixmap.size())
         self._rect = QtCore.QRectF(0, 0, float(self._logical_size.width()), float(self._logical_size.height()))
         self.setTransformOriginPoint(self._rect.center())
 
     def set_quality(self, quality: str) -> None:
+        if self._override_pixmap is not None:
+            self._pixmap = self._override_pixmap
+            self.update()
+            self._quality = quality
+            return
         if quality == self._quality:
             return
         if quality == "full":
@@ -524,8 +655,23 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
         self.update()
         self._quality = quality
 
+    def set_override_pixmap(self, pixmap: Optional[QtGui.QPixmap]) -> None:
+        self._override_pixmap = pixmap
+        if pixmap is not None and not pixmap.isNull():
+            self._pixmap = pixmap
+        else:
+            self._override_pixmap = None
+            self._pixmap = self._proxy_pixmap
+        self.update()
+
     def file_name(self) -> str:
         return self._path.name
+
+    def file_path(self) -> Path:
+        return self._path
+
+    def set_file_path(self, path: Path) -> None:
+        self._path = path
 
     def boundingRect(self) -> QtCore.QRectF:  # type: ignore[override]
         return self._rect
@@ -566,11 +712,18 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
         self._pixmap = controller._get_video_thumbnail(path, self._thumb_dim)
         if self._pixmap is None or self._pixmap.isNull():
             self._pixmap = controller._build_media_placeholder("VIDEO", path.name)
+        self._override_pixmap: Optional[QtGui.QPixmap] = None
         self._rect = QtCore.QRectF(0, 0, float(self._pixmap.width()), float(self._pixmap.height()))
         self.setTransformOriginPoint(self._rect.center())
 
     def file_name(self) -> str:
         return self._path.name
+
+    def file_path(self) -> Path:
+        return self._path
+
+    def set_file_path(self, path: Path) -> None:
+        self._path = path
 
     def boundingRect(self) -> QtCore.QRectF:  # type: ignore[override]
         return self._rect
@@ -581,9 +734,12 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
         option: QtWidgets.QStyleOptionGraphicsItem,
         widget: Optional[QtWidgets.QWidget] = None,
     ) -> None:
-        if self._pixmap is None or self._pixmap.isNull():
-            return
-        painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        if self._override_pixmap is not None and not self._override_pixmap.isNull():
+            painter.drawPixmap(self._rect, self._override_pixmap, self._override_pixmap.rect())
+        else:
+            if self._pixmap is None or self._pixmap.isNull():
+                return
+            painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
         border_pen = QtGui.QPen(QtGui.QColor(242, 193, 78, 140), 2)
         border_pen.setCosmetic(True)
         painter.setPen(border_pen)
@@ -596,6 +752,10 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
             painter.setPen(pen)
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
+
+    def set_override_pixmap(self, pixmap: Optional[QtGui.QPixmap]) -> None:
+        self._override_pixmap = pixmap if pixmap is not None and not pixmap.isNull() else None
+        self.update()
 
 
 class BoardSequenceItem(QtWidgets.QGraphicsItem):
@@ -612,6 +772,7 @@ class BoardSequenceItem(QtWidgets.QGraphicsItem):
         self._pixmap = controller._get_sequence_thumbnail(dir_path, self._thumb_dim)
         if self._pixmap is None or self._pixmap.isNull():
             self._pixmap = controller._build_media_placeholder("SEQ", dir_path.name)
+        self._override_pixmap: Optional[QtGui.QPixmap] = None
         self._rect = QtCore.QRectF(0, 0, float(self._pixmap.width()), float(self._pixmap.height()))
         self.setTransformOriginPoint(self._rect.center())
 
@@ -620,6 +781,9 @@ class BoardSequenceItem(QtWidgets.QGraphicsItem):
 
     def dir_path(self) -> Path:
         return self._dir_path
+
+    def set_dir_path(self, path: Path) -> None:
+        self._dir_path = path
 
     def boundingRect(self) -> QtCore.QRectF:  # type: ignore[override]
         return self._rect
@@ -630,9 +794,12 @@ class BoardSequenceItem(QtWidgets.QGraphicsItem):
         option: QtWidgets.QStyleOptionGraphicsItem,
         widget: Optional[QtWidgets.QWidget] = None,
     ) -> None:
-        if self._pixmap is None or self._pixmap.isNull():
-            return
-        painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        if self._override_pixmap is not None and not self._override_pixmap.isNull():
+            painter.drawPixmap(self._rect, self._override_pixmap, self._override_pixmap.rect())
+        else:
+            if self._pixmap is None or self._pixmap.isNull():
+                return
+            painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
         border_pen = QtGui.QPen(QtGui.QColor(90, 200, 165, 160), 2)
         border_pen.setCosmetic(True)
         painter.setPen(border_pen)
@@ -645,6 +812,10 @@ class BoardSequenceItem(QtWidgets.QGraphicsItem):
             painter.setPen(pen)
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             painter.drawRect(self._rect.adjusted(1, 1, -1, -1))
+
+    def set_override_pixmap(self, pixmap: Optional[QtGui.QPixmap]) -> None:
+        self._override_pixmap = pixmap if pixmap is not None and not pixmap.isNull() else None
+        self.update()
 
 
 class BoardGroupItem(QtWidgets.QGraphicsRectItem):
@@ -862,8 +1033,10 @@ class BoardController:
         self._history_index = -1
         self._history_timer: Optional[QtCore.QTimer] = None
         self._group_tree_timer: Optional[QtCore.QTimer] = None
+        self._post_load_reapply_timer: Optional[QtCore.QTimer] = None
         self._group_tree_refs: dict[int, BoardGroupItem] = {}
         self._syncing_tree_selection = False
+        self._group_tree_inline_rename: Optional[dict[str, object]] = None
         self._apply_timer: Optional[QtCore.QTimer] = None
         self._apply_queue: deque[dict] = deque()
         self._apply_pending_groups: list[dict] = []
@@ -888,12 +1061,38 @@ class BoardController:
         self._edit_video_playhead: int = 0
         self._edit_video_clips: list[tuple[int, int]] = []
         self._edit_selected_clip: int = -1
+        self._edit_timeline_scrubbing: bool = False
         self._edit_exr_path: Optional[Path] = None
         self._edit_exr_channels: list[str] = []
         self._edit_exr_thread: Optional[QtCore.QThread] = None
         self._edit_exr_worker: Optional[_ExrChannelPreviewWorker] = None
         self._edit_exr_gamma: float = 2.2
         self._edit_exr_srgb: bool = True
+        self._edit_exr_channel: Optional[str] = None
+        self._edit_image_path: Optional[Path] = None
+        self._edit_image_brightness: float = 0.0
+        self._edit_image_contrast: float = 1.0
+        self._edit_image_saturation: float = 1.0
+        self._edit_image_vibrance: float = 0.0
+        self._edit_tool_stack: list[dict[str, object]] = []
+        self._edit_selected_tool_index: int = -1
+        self._edit_tool_defs: list[tuple[str, str]] = [("bcs", "BCS"), ("vibrance", "Vibrance")]
+        self._edit_image_thread: Optional[QtCore.QThread] = None
+        self._edit_image_worker: Optional[_ImageAdjustPreviewWorker] = None
+        self._edit_preview_timer: Optional[QtCore.QTimer] = None
+        self._edit_preview_pending_channel: Optional[str] = None
+        self._edit_preview_dragging: bool = False
+        self._edit_preview_fast_dim: int = 640
+        self._edit_preview_full_dim: int = 1280
+        self._edit_exr_preview_busy: bool = False
+        self._edit_exr_preview_pending_channel: Optional[str] = None
+        self._edit_exr_preview_pending_max_dim: int = 0
+        self._edit_image_preview_busy: bool = False
+        self._edit_image_preview_pending_path: Optional[Path] = None
+        self._edit_image_preview_pending_max_dim: int = 0
+        self._image_exr_display_overrides: dict[str, dict[str, object]] = {}
+        self._exr_item_preview_threads: list[QtCore.QThread] = []
+        self._exr_item_preview_workers: list[QtCore.QObject] = []
         self._ui_bridge = _UiBridge(self)
         self._segment_thread: Optional[QtCore.QThread] = None
         self._segment_worker: Optional[_VideoSegmentWorker] = None
@@ -902,16 +1101,173 @@ class BoardController:
         self._scene.changed.connect(self._on_scene_changed)
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
         self.w.board_page.groups_tree.itemClicked.connect(self._on_group_tree_clicked)
+        self.w.board_page.groups_tree.itemDoubleClicked.connect(self._on_group_tree_double_clicked)
+        self.w.board_page.groups_tree.itemChanged.connect(self._on_group_tree_item_changed)
         self.w.board_page.edit_sequence_slider.valueChanged.connect(self._on_edit_sequence_slider)
         self.w.board_page.edit_sequence_play_btn.clicked.connect(self._toggle_edit_sequence_play)
         self.w.board_page.edit_sequence_timeline.playheadChanged.connect(self._on_edit_sequence_timeline_playhead)
         self.w.board_page.edit_timeline.playheadChanged.connect(self._on_edit_timeline_playhead)
+        self.w.board_page.edit_timeline.scrubStateChanged.connect(self._on_edit_timeline_scrub_state)
         self.w.board_page.edit_timeline.selectedClipChanged.connect(self._on_edit_timeline_selected)
         self.w.board_page.edit_timeline_split_btn.clicked.connect(self._split_edit_clip)
         self.w.board_page.edit_timeline_export_btn.clicked.connect(self._export_edit_clip)
         self.w.board_page.edit_exr_channel_combo.currentIndexChanged.connect(self._on_edit_exr_channel_changed)
         self.w.board_page.edit_exr_gamma_slider.valueChanged.connect(self._on_edit_exr_gamma_changed)
         self.w.board_page.edit_exr_srgb_check.toggled.connect(self._on_edit_exr_gamma_changed)
+        self.w.board_page.edit_image_adjust_brightness_slider.valueChanged.connect(self._on_edit_image_adjust_changed)
+        self.w.board_page.edit_image_adjust_contrast_slider.valueChanged.connect(self._on_edit_image_adjust_changed)
+        self.w.board_page.edit_image_adjust_saturation_slider.valueChanged.connect(self._on_edit_image_adjust_changed)
+        self.w.board_page.edit_image_adjust_brightness_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_image_adjust_brightness_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_image_adjust_contrast_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_image_adjust_contrast_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_image_adjust_saturation_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_image_adjust_saturation_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_image_vibrance_slider.valueChanged.connect(self._on_edit_image_vibrance_changed)
+        self.w.board_page.edit_image_vibrance_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_image_vibrance_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_exr_gamma_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_exr_gamma_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_image_adjust_reset_btn.clicked.connect(self._reset_edit_image_adjustments)
+        self.w.board_page.edit_image_tool_list.currentRowChanged.connect(self._on_edit_tool_stack_selection_changed)
+        self.w.board_page.edit_image_tool_add_btn.clicked.connect(self._on_edit_tool_stack_add_clicked)
+        self.w.board_page.edit_image_tool_remove_btn.clicked.connect(self._on_edit_tool_stack_remove_clicked)
+        self.w.board_page.edit_image_tool_up_btn.clicked.connect(self._on_edit_tool_stack_up_clicked)
+        self.w.board_page.edit_image_tool_down_btn.clicked.connect(self._on_edit_tool_stack_down_clicked)
+        self.w.board_page.edit_tool_exit.clicked.connect(self.exit_focus_mode)
+        self._edit_focus_kind: Optional[str] = None
+        self._focus_item: Optional[QtWidgets.QGraphicsItem] = None
+        self._focus_overlay: Optional[QtWidgets.QGraphicsRectItem] = None
+        self._focus_saved: dict[int, tuple[bool, float]] = {}
+        self._focus_video_path: Optional[Path] = None
+        self._focus_video_cap = None
+        self._video_preview_timer: Optional[QtCore.QTimer] = None
+        self._video_preview_pending: Optional[int] = None
+        self._shutting_down: bool = False
+
+    def _stop_qthread(self, thread: Optional[QtCore.QThread], timeout_ms: int = 1000) -> None:
+        if thread is None:
+            return
+        try:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(int(timeout_ms))
+        except Exception:
+            pass
+
+    def _ui_alive(self) -> bool:
+        if self._shutting_down:
+            return False
+        try:
+            _ = self.w.board_page.groups_tree
+            return self._scene_alive()
+        except Exception:
+            return False
+
+    def _scene_alive(self) -> bool:
+        if self._shutting_down:
+            return False
+        try:
+            _ = self._scene.views()
+            return True
+        except Exception:
+            return False
+
+    def _group_tree_is_editing(self) -> bool:
+        if self._shutting_down:
+            return False
+        try:
+            tree = self.w.board_page.groups_tree
+            return tree.state() == QtWidgets.QAbstractItemView.State.EditingState
+        except Exception:
+            return False
+
+    def shutdown(self) -> None:
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        try:
+            self._scene.changed.disconnect(self._on_scene_changed)
+        except Exception:
+            pass
+        try:
+            self._scene.selectionChanged.disconnect(self._on_scene_selection_changed)
+        except Exception:
+            pass
+        try:
+            tree = self.w.board_page.groups_tree
+            tree.itemClicked.disconnect(self._on_group_tree_clicked)
+        except Exception:
+            pass
+        try:
+            tree = self.w.board_page.groups_tree
+            tree.itemDoubleClicked.disconnect(self._on_group_tree_double_clicked)
+        except Exception:
+            pass
+        try:
+            tree = self.w.board_page.groups_tree
+            tree.itemChanged.disconnect(self._on_group_tree_item_changed)
+        except Exception:
+            pass
+        try:
+            if self._history_timer is not None and self._history_timer.isActive():
+                self._history_timer.stop()
+        except Exception:
+            pass
+        self._history_timer = None
+        try:
+            if self._group_tree_timer is not None and self._group_tree_timer.isActive():
+                self._group_tree_timer.stop()
+        except Exception:
+            pass
+        self._group_tree_timer = None
+        try:
+            if self._post_load_reapply_timer is not None and self._post_load_reapply_timer.isActive():
+                self._post_load_reapply_timer.stop()
+        except Exception:
+            pass
+        self._post_load_reapply_timer = None
+        try:
+            if self._apply_timer is not None and self._apply_timer.isActive():
+                self._apply_timer.stop()
+        except Exception:
+            pass
+        self._apply_timer = None
+        try:
+            if self._edit_preview_timer is not None and self._edit_preview_timer.isActive():
+                self._edit_preview_timer.stop()
+        except Exception:
+            pass
+        self._edit_preview_timer = None
+        try:
+            if self._video_preview_timer is not None and self._video_preview_timer.isActive():
+                self._video_preview_timer.stop()
+        except Exception:
+            pass
+        self._video_preview_timer = None
+        self._stop_qthread(self._convert_thread, timeout_ms=1500)
+        self._convert_thread = None
+        self._convert_worker = None
+        self._stop_qthread(self._segment_thread, timeout_ms=1500)
+        self._segment_thread = None
+        self._segment_worker = None
+        self._stop_qthread(self._edit_exr_thread, timeout_ms=1000)
+        self._edit_exr_thread = None
+        self._edit_exr_worker = None
+        try:
+            info_thread = getattr(self.w.board_page, "_edit_exr_thread", None)
+            self._stop_qthread(info_thread, timeout_ms=1000)
+            self.w.board_page._edit_exr_thread = None  # type: ignore[attr-defined]
+            self.w.board_page._edit_exr_worker = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        self._stop_qthread(self._edit_image_thread, timeout_ms=1000)
+        self._edit_image_thread = None
+        self._edit_image_worker = None
+        for thread in list(self._exr_item_preview_threads):
+            self._stop_qthread(thread, timeout_ms=800)
+        self._exr_item_preview_threads.clear()
+        self._exr_item_preview_workers.clear()
 
     def set_project(self, project_root: Optional[Path]) -> None:
         if project_root is None and self._project_root is not None:
@@ -1172,7 +1528,11 @@ class BoardController:
         out_path = Path(out_path_str)
         try:
             import subprocess
-            subprocess.check_call([str(iconvert), str(src_path), str(out_path)])
+            houdini_env = build_houdini_env(
+                base_env=os.environ,
+                launcher_root=Path(__file__).resolve().parents[1],
+            )
+            subprocess.check_call([str(iconvert), str(src_path), str(out_path)], env=houdini_env)
         except Exception as exc:
             self._notify(f"iconvert failed:\n{exc}")
             return
@@ -1577,6 +1937,7 @@ class BoardController:
     def save_board(self) -> None:
         if not self._project_root:
             return
+        self._commit_current_focus_image_override()
         board_path = self._project_root / ".skyforge_board.json"
         data = self._build_payload()
         try:
@@ -1613,6 +1974,36 @@ class BoardController:
         # Defer heavy loading to keep UI responsive on click.
         QtCore.QTimer.singleShot(40, self.load_board)
 
+    def _parse_image_display_overrides(self, payload: dict) -> dict[str, dict[str, object]]:
+        raw = payload.get("image_display_overrides")
+        if not isinstance(raw, dict):
+            raw = payload.get("image_exr_display_overrides", {})
+        parsed: dict[str, dict[str, object]] = {}
+        if not isinstance(raw, dict):
+            return parsed
+        for key, value in raw.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+            channel = str(value.get("channel", "")).strip()
+            gamma_val = value.get("gamma", 2.2)
+            srgb_val = value.get("srgb", True)
+            try:
+                gamma = float(gamma_val)
+            except Exception:
+                gamma = 2.2
+            brightness, contrast, saturation = self._coerce_color_adjustments(value)
+            tool_stack = self._tool_stack_from_override(value)
+            parsed[key] = {
+                "channel": channel,
+                "gamma": max(0.1, gamma),
+                "srgb": bool(srgb_val),
+                "brightness": brightness,
+                "contrast": contrast,
+                "saturation": saturation,
+                "tool_stack": tool_stack,
+            }
+        return parsed
+
     def _start_apply_payload(self, payload: dict) -> None:
         if self._apply_timer is not None and self._apply_timer.isActive():
             self._apply_timer.stop()
@@ -1625,6 +2016,7 @@ class BoardController:
         self._apply_sequence_map = {}
         self._apply_note_map = {}
         self._apply_payload_ref = payload
+        self._image_exr_display_overrides = self._parse_image_display_overrides(payload)
         notes: list[dict] = []
         images: list[dict] = []
         videos: list[dict] = []
@@ -1686,6 +2078,9 @@ class BoardController:
                 self._scene.addItem(item)
                 if filename:
                     self._apply_image_map[str(filename)] = item
+                    override = self._image_exr_display_overrides.get(str(filename))
+                    if isinstance(override, dict):
+                        self._apply_override_to_image_item(item, override)
             elif entry.get("type") == "video" and assets_dir is not None:
                 filename = entry.get("file", "")
                 path = assets_dir / filename
@@ -1788,6 +2183,60 @@ class BoardController:
         if self._apply_base_label:
             self.w.board_page.project_label.setText(self._apply_base_label)
         QtCore.QTimer.singleShot(0, self._fit_view_after_load)
+        self._schedule_post_load_reapply()
+
+    def _apply_override_to_image_item(self, item: BoardImageItem, override: dict[str, object]) -> None:
+        if item.scene() is None:
+            return
+        path = item.file_path()
+        brightness, contrast, saturation = self._coerce_color_adjustments(override)
+        tool_stack = self._tool_stack_from_override(override)
+        channel = str(override.get("channel", "")).strip()
+        if channel and path.suffix.lower() == ".exr":
+            gamma = float(override.get("gamma", 2.2))
+            srgb = bool(override.get("srgb", True))
+            self._queue_exr_display_for_item(
+                item,
+                channel,
+                gamma,
+                srgb,
+                brightness,
+                contrast,
+                saturation,
+                tool_stack,
+            )
+            return
+        if self._tool_stack_is_effective(tool_stack, brightness, contrast, saturation):
+            self._queue_image_adjust_for_item(
+                item,
+                brightness,
+                contrast,
+                saturation,
+                tool_stack,
+            )
+
+    def _schedule_post_load_reapply(self) -> None:
+        if not self._ui_alive():
+            return
+        if self._post_load_reapply_timer is None:
+            self._post_load_reapply_timer = QtCore.QTimer(self.w)
+            self._post_load_reapply_timer.setSingleShot(True)
+            self._post_load_reapply_timer.timeout.connect(self._reapply_image_overrides_for_scene)
+        self._post_load_reapply_timer.start(250)
+
+    def _reapply_image_overrides_for_scene(self) -> None:
+        self._post_load_reapply_timer = None
+        if not self._ui_alive() or self._loading:
+            return
+        for scene_item in list(self._scene.items()):
+            if not isinstance(scene_item, BoardImageItem):
+                continue
+            filename = str(scene_item.data(1) or "").strip()
+            if not filename:
+                continue
+            override = self._image_exr_display_overrides.get(filename)
+            if isinstance(override, dict):
+                self._apply_override_to_image_item(scene_item, override)
 
     def _fit_view_after_load(self) -> None:
         rect = self._scene.itemsBoundingRect()
@@ -1922,6 +2371,7 @@ class BoardController:
             if not path.exists():
                 self._notify("Video file not found.")
                 return
+            self.enter_focus_mode(item)
             self._show_edit_panel_for_video(path)
         elif kind == "sequence":
             dir_text = str(item.data(1))
@@ -1929,6 +2379,7 @@ class BoardController:
             if not dir_path.exists():
                 self._notify("Sequence directory not found.")
                 return
+            self.enter_focus_mode(item)
             self._show_edit_panel_for_sequence(dir_path)
 
     def open_image_item(self, item: QtWidgets.QGraphicsItem) -> None:
@@ -1942,6 +2393,7 @@ class BoardController:
         if not path.exists():
             self._notify("Image file not found.")
             return
+        self.enter_focus_mode(item)
         self._show_edit_panel_for_image(path)
 
     def _open_video_dialog(self, path: Path) -> None:
@@ -1988,6 +2440,8 @@ class BoardController:
         dialog.activateWindow()
 
     def _show_edit_panel_for_video(self, path: Path) -> None:
+        self._edit_image_path = None
+        self.w.board_page.set_image_adjust_controls_visible(False)
         info = [
             f"Type: Video",
             f"Name: {path.name}",
@@ -2004,9 +2458,16 @@ class BoardController:
             self.w.board_page.show_edit_preview_video()
             self._edit_video_controller.preview_first_frame(path)
             self._edit_video_controller.play_path(path)
+        self._focus_video_path = path
+        self._ensure_focus_video_cap()
         self._init_edit_video_timeline(path)
+        self.w.board_page.set_timeline_bar_visible(True)
+        self.w.board_page.set_edit_preview_visible(False)
+        self._edit_focus_kind = "video"
 
     def _show_edit_panel_for_sequence(self, dir_path: Path) -> None:
+        self._edit_image_path = None
+        self.w.board_page.set_image_adjust_controls_visible(False)
         frames = self._sequence_frame_paths(dir_path)
         info = [
             "Type: Sequence",
@@ -2046,6 +2507,11 @@ class BoardController:
             self.w.board_page.edit_sequence_slider.setRange(0, 0)
             self.w.board_page.edit_sequence_timeline.set_data(0, [], 0)
             self.w.board_page.edit_sequence_frame_label.setText("Frame: 0")
+        # Use the main timeline bar for sequences as well
+        self.w.board_page.edit_timeline.set_data(len(frames), [(0, max(0, len(frames) - 1))], 0)
+        self.w.board_page.set_timeline_bar_visible(True)
+        self.w.board_page.set_edit_preview_visible(False)
+        self._edit_focus_kind = "sequence"
 
     def _show_edit_panel_for_image(self, path: Path) -> None:
         size = self._get_image_size(path)
@@ -2055,25 +2521,64 @@ class BoardController:
             f"Size: {size.width()} x {size.height()}",
             f"Path: {path}",
         ]
+        self._edit_image_path = path
+        self._edit_tool_stack = build_bcs_stack(*self._default_color_adjustments())
+        self._edit_selected_tool_index = 0
+        self._edit_image_brightness, self._edit_image_contrast, self._edit_image_saturation = self._default_color_adjustments()
+        self._edit_image_vibrance = self._default_vibrance()
+        if isinstance(self._focus_item, BoardImageItem):
+            filename = str(self._focus_item.data(1) or "").strip()
+            override = self._image_exr_display_overrides.get(filename)
+            self._edit_tool_stack = self._tool_stack_from_override(override)
+            (
+                self._edit_image_brightness,
+                self._edit_image_contrast,
+                self._edit_image_saturation,
+            ) = self._coerce_color_adjustments(override)
+            for entry in normalize_tool_stack(self._edit_tool_stack):
+                if str(entry.get("id", "")) == "vibrance":
+                    settings = entry.get("settings", {})
+                    if isinstance(settings, dict):
+                        try:
+                            self._edit_image_vibrance = float(settings.get("amount", self._default_vibrance()))
+                        except Exception:
+                            self._edit_image_vibrance = self._default_vibrance()
+                    break
+        self.w.board_page.set_image_adjust_controls_visible(True)
+        self._sync_tool_stack_ui()
         preview = self._get_display_pixmap(path, max_dim=1024)
         self.w.board_page.show_edit_preview_image(preview)
         if path.suffix.lower() == ".exr":
             self._edit_exr_path = path
             self._edit_exr_channels = []
+            self._edit_exr_channel = None
+            if isinstance(self._focus_item, BoardImageItem):
+                filename = str(self._focus_item.data(1) or "").strip()
+                override = self._image_exr_display_overrides.get(filename)
+                if isinstance(override, dict):
+                    channel = str(override.get("channel", "")).strip()
+                    if channel:
+                        self._edit_exr_channel = channel
+                    try:
+                        self._edit_exr_gamma = max(0.1, float(override.get("gamma", self._edit_exr_gamma)))
+                    except Exception:
+                        pass
+                    self._edit_exr_srgb = bool(override.get("srgb", self._edit_exr_srgb))
             self.w.board_page.set_exr_channel_row_visible(True)
             self.w.board_page.set_exr_gamma_label(self._edit_exr_gamma)
             self.w.board_page.edit_exr_srgb_check.setChecked(self._edit_exr_srgb)
             self.w.board_page.edit_exr_gamma_slider.setValue(int(self._edit_exr_gamma * 10))
             self.w.board_page.set_edit_panel_content(
-                "Edit Mode: EXR",
+                "Edit Mode: Image",
                 info,
                 list_items=["Loading channels..."],
-                footer="Channels and metadata will appear here.",
+                footer="EXR channels and metadata will appear here.",
             )
             self._load_exr_channels_into_panel(path)
         else:
             self._edit_exr_path = None
             self._edit_exr_channels = []
+            self._edit_exr_channel = None
             self.w.board_page.set_exr_channel_row_visible(False)
             self.w.board_page.set_edit_panel_content(
                 "Edit Mode: Image",
@@ -2081,6 +2586,9 @@ class BoardController:
                 list_items=None,
                 footer="Edit/export options will appear here.",
             )
+        self.w.board_page.set_timeline_bar_visible(False)
+        self.w.board_page.set_edit_preview_visible(False)
+        self._edit_focus_kind = "image"
 
     def _ensure_edit_video_controller(self) -> None:
         if self._edit_video_controller is not None:
@@ -2138,10 +2646,25 @@ class BoardController:
 
     def _on_edit_timeline_playhead(self, frame: int) -> None:
         self._edit_video_playhead = max(0, min(int(frame), max(0, self._edit_video_total - 1)))
-        if self._edit_video_controller is not None:
+        if self._edit_focus_kind == "sequence":
+            self._on_edit_sequence_timeline_playhead(self._edit_video_playhead)
+            self.w.board_page.edit_timeline_frame_label.setText(f"Frame: {self._edit_video_playhead}")
+            return
+        if self._edit_video_controller is not None and not self._edit_timeline_scrubbing:
             self._edit_video_controller.seek_frame(self._edit_video_playhead)
+        if isinstance(self._focus_item, BoardVideoItem):
+            delay = 140 if self._edit_timeline_scrubbing else 40
+            self._schedule_video_focus_preview(self._edit_video_playhead, delay_ms=delay)
         if hasattr(self.w.board_page, "edit_timeline_frame_label"):
             self.w.board_page.edit_timeline_frame_label.setText(f"Frame: {self._edit_video_playhead}")
+
+    def _on_edit_timeline_scrub_state(self, active: bool) -> None:
+        self._edit_timeline_scrubbing = bool(active)
+        if not active and self._edit_focus_kind == "video":
+            if self._edit_video_controller is not None:
+                self._edit_video_controller.seek_frame(self._edit_video_playhead)
+            if isinstance(self._focus_item, BoardVideoItem):
+                self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
 
     def _on_edit_timeline_selected(self, index: int) -> None:
         self._edit_selected_clip = int(index)
@@ -2262,6 +2785,10 @@ class BoardController:
         self.w.board_page.edit_sequence_slider.setValue(idx)
         self.w.board_page.edit_sequence_slider.blockSignals(False)
         self._on_edit_sequence_slider(idx)
+        if isinstance(self._focus_item, BoardSequenceItem):
+            frame_path = self._edit_seq_frames[idx]
+            pixmap = self._get_display_pixmap(frame_path, max_dim=512)
+            self._focus_item.set_override_pixmap(pixmap)
 
     def _toggle_edit_sequence_play(self) -> None:
         if not self._edit_seq_frames or self._edit_seq_timer is None:
@@ -2345,21 +2872,397 @@ class BoardController:
                 break
         return options, default_value
 
+    @staticmethod
+    def _default_color_adjustments() -> tuple[float, float, float]:
+        return 0.0, 1.0, 1.0
+
+    @staticmethod
+    def _default_vibrance() -> float:
+        return 0.0
+
+    def _ensure_edit_tool_stack(self) -> None:
+        tools = normalize_tool_stack(self._edit_tool_stack)
+        if not tools:
+            b, c, s = self._default_color_adjustments()
+            tools = build_bcs_stack(b, c, s)
+        self._edit_tool_stack = [dict(t) for t in tools]
+        if self._edit_selected_tool_index < 0 or self._edit_selected_tool_index >= len(self._edit_tool_stack):
+            self._edit_selected_tool_index = 0
+
+    def _tool_label_for_id(self, tool_id: str) -> str:
+        key = str(tool_id or "").strip().lower()
+        for tid, label in self._edit_tool_defs:
+            if tid == key:
+                return label
+        return key or "Tool"
+
+    def _tool_entry_from_id(self, tool_id: str) -> dict[str, object]:
+        key = str(tool_id or "").strip().lower()
+        if key == "vibrance":
+            return {
+                "id": "vibrance",
+                "enabled": True,
+                "settings": {"amount": self._default_vibrance()},
+            }
+        b, c, s = self._default_color_adjustments()
+        return {
+            "id": "bcs",
+            "enabled": True,
+            "settings": {"brightness": b, "contrast": c, "saturation": s},
+        }
+
+    def _selected_tool_entry(self) -> Optional[dict[str, object]]:
+        if self._edit_selected_tool_index < 0 or self._edit_selected_tool_index >= len(self._edit_tool_stack):
+            return None
+        entry = self._edit_tool_stack[self._edit_selected_tool_index]
+        return entry if isinstance(entry, dict) else None
+
+    def _sync_edit_values_from_tool_stack(self) -> None:
+        b, c, s = self._default_color_adjustments()
+        vib = self._default_vibrance()
+        bcs = extract_bcs_settings(self._edit_tool_stack)
+        if bcs is not None:
+            b, c, s = bcs
+        for entry in normalize_tool_stack(self._edit_tool_stack):
+            if str(entry.get("id", "")) == "vibrance":
+                settings = entry.get("settings", {})
+                if isinstance(settings, dict):
+                    try:
+                        vib = float(settings.get("amount", vib))
+                    except Exception:
+                        vib = self._default_vibrance()
+                break
+        self._edit_image_brightness = max(-1.0, min(1.0, float(b)))
+        self._edit_image_contrast = max(0.0, min(2.0, float(c)))
+        self._edit_image_saturation = max(0.0, min(2.0, float(s)))
+        self._edit_image_vibrance = max(-1.0, min(1.0, float(vib)))
+
+    def _sync_tool_stack_ui(self) -> None:
+        self._ensure_edit_tool_stack()
+        self._sync_edit_values_from_tool_stack()
+        self.w.board_page.set_image_tool_add_options(
+            [(label, tool_id) for tool_id, label in self._edit_tool_defs]
+        )
+        rows = []
+        for entry in self._edit_tool_stack:
+            tool_id = str(entry.get("id", "tool")).strip().lower()
+            enabled = bool(entry.get("enabled", True))
+            rows.append((self._tool_label_for_id(tool_id), enabled))
+        self.w.board_page.set_image_tool_stack_items(rows, self._edit_selected_tool_index)
+        self.w.board_page.set_image_adjust_values(
+            self._edit_image_brightness,
+            self._edit_image_contrast,
+            self._edit_image_saturation,
+        )
+        self.w.board_page.set_image_vibrance_value(self._edit_image_vibrance)
+        selected = self._selected_tool_entry()
+        selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
+        self.w.board_page.set_image_bcs_controls_visible(selected_id in ("", "bcs"))
+        self.w.board_page.set_image_vibrance_visible(selected_id == "vibrance")
+
+    def _current_edit_tool_stack(self) -> list[dict[str, object]]:
+        self._ensure_edit_tool_stack()
+        return normalize_tool_stack(self._edit_tool_stack)
+
+    def _tool_stack_from_override(self, override: object) -> list[dict[str, object]]:
+        if not isinstance(override, dict):
+            b, c, s = self._default_color_adjustments()
+            return build_bcs_stack(b, c, s)
+        stack = normalize_tool_stack(override.get("tool_stack"))
+        if stack:
+            return stack
+        b, c, s = self._coerce_color_adjustments(override)
+        return build_bcs_stack(b, c, s)
+
+    def _coerce_color_adjustments(self, override: object) -> tuple[float, float, float]:
+        b_def, c_def, s_def = self._default_color_adjustments()
+        if not isinstance(override, dict):
+            return b_def, c_def, s_def
+        from_stack = extract_bcs_settings(override.get("tool_stack"))
+        if from_stack is not None:
+            b, c, s = from_stack
+            return (
+                max(-1.0, min(1.0, float(b))),
+                max(0.0, min(2.0, float(c))),
+                max(0.0, min(2.0, float(s))),
+            )
+        try:
+            brightness = float(override.get("brightness", b_def))
+        except Exception:
+            brightness = b_def
+        try:
+            contrast = float(override.get("contrast", c_def))
+        except Exception:
+            contrast = c_def
+        try:
+            saturation = float(override.get("saturation", s_def))
+        except Exception:
+            saturation = s_def
+        brightness = max(-1.0, min(1.0, brightness))
+        contrast = max(0.0, min(2.0, contrast))
+        saturation = max(0.0, min(2.0, saturation))
+        return brightness, contrast, saturation
+
+    def _color_adjustments_are_default(self, brightness: float, contrast: float, saturation: float) -> bool:
+        b_def, c_def, s_def = self._default_color_adjustments()
+        return (
+            abs(float(brightness) - b_def) < 1e-6
+            and abs(float(contrast) - c_def) < 1e-6
+            and abs(float(saturation) - s_def) < 1e-6
+        )
+
+    def _tool_stack_is_effective(
+        self,
+        stack: object,
+        brightness: float,
+        contrast: float,
+        saturation: float,
+    ) -> bool:
+        tools = normalize_tool_stack(stack)
+        if not tools:
+            return not self._color_adjustments_are_default(brightness, contrast, saturation)
+        if len(tools) == 1 and str(tools[0].get("id", "")) == "bcs":
+            return not self._color_adjustments_are_default(brightness, contrast, saturation)
+        return True
+
+    def _set_bcs_in_tool_stack(self, brightness: float, contrast: float, saturation: float) -> None:
+        self._ensure_edit_tool_stack()
+        for entry in self._edit_tool_stack:
+            if str(entry.get("id", "")).strip().lower() == "bcs":
+                settings = entry.get("settings", {})
+                if not isinstance(settings, dict):
+                    settings = {}
+                settings["brightness"] = float(brightness)
+                settings["contrast"] = float(contrast)
+                settings["saturation"] = float(saturation)
+                entry["settings"] = settings
+                return
+        self._edit_tool_stack.insert(
+            0,
+            {
+                "id": "bcs",
+                "enabled": True,
+                "settings": {
+                    "brightness": float(brightness),
+                    "contrast": float(contrast),
+                    "saturation": float(saturation),
+                },
+            },
+        )
+        self._edit_selected_tool_index = 0
+
+    def _set_vibrance_in_tool_stack(self, amount: float, add_if_missing: bool = True) -> None:
+        self._ensure_edit_tool_stack()
+        for idx, entry in enumerate(self._edit_tool_stack):
+            if str(entry.get("id", "")).strip().lower() == "vibrance":
+                settings = entry.get("settings", {})
+                if not isinstance(settings, dict):
+                    settings = {}
+                settings["amount"] = float(amount)
+                entry["settings"] = settings
+                self._edit_selected_tool_index = idx
+                return
+        if not add_if_missing:
+            return
+        self._edit_tool_stack.append(
+            {
+                "id": "vibrance",
+                "enabled": True,
+                "settings": {"amount": float(amount)},
+            }
+        )
+        self._edit_selected_tool_index = len(self._edit_tool_stack) - 1
+
+    def _on_edit_tool_stack_selection_changed(self, row: int) -> None:
+        self._edit_selected_tool_index = int(row)
+        self._sync_tool_stack_ui()
+
+    def _on_edit_tool_stack_add_clicked(self) -> None:
+        if self._edit_image_path is None:
+            return
+        tool_id = self.w.board_page.current_image_tool_add_id().strip().lower()
+        if not tool_id:
+            return
+        self._ensure_edit_tool_stack()
+        self._edit_tool_stack.append(self._tool_entry_from_id(tool_id))
+        self._edit_selected_tool_index = len(self._edit_tool_stack) - 1
+        self._sync_tool_stack_ui()
+        self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+
+    def _on_edit_tool_stack_remove_clicked(self) -> None:
+        if self._edit_image_path is None:
+            return
+        idx = self.w.board_page.current_image_tool_stack_index()
+        if idx < 0 or idx >= len(self._edit_tool_stack):
+            return
+        self._edit_tool_stack.pop(idx)
+        if not self._edit_tool_stack:
+            self._edit_tool_stack = [self._tool_entry_from_id("bcs")]
+            self._edit_selected_tool_index = 0
+        else:
+            self._edit_selected_tool_index = max(0, min(idx, len(self._edit_tool_stack) - 1))
+        self._sync_tool_stack_ui()
+        self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+
+    def _on_edit_tool_stack_up_clicked(self) -> None:
+        idx = self.w.board_page.current_image_tool_stack_index()
+        if idx <= 0 or idx >= len(self._edit_tool_stack):
+            return
+        self._edit_tool_stack[idx - 1], self._edit_tool_stack[idx] = (
+            self._edit_tool_stack[idx],
+            self._edit_tool_stack[idx - 1],
+        )
+        self._edit_selected_tool_index = idx - 1
+        self._sync_tool_stack_ui()
+        self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+
+    def _on_edit_tool_stack_down_clicked(self) -> None:
+        idx = self.w.board_page.current_image_tool_stack_index()
+        if idx < 0 or idx >= len(self._edit_tool_stack) - 1:
+            return
+        self._edit_tool_stack[idx + 1], self._edit_tool_stack[idx] = (
+            self._edit_tool_stack[idx],
+            self._edit_tool_stack[idx + 1],
+        )
+        self._edit_selected_tool_index = idx + 1
+        self._sync_tool_stack_ui()
+        self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+
+    def _on_edit_image_adjust_changed(self, *_: object) -> None:
+        self._edit_image_brightness = self.w.board_page.current_image_brightness()
+        self._edit_image_contrast = self.w.board_page.current_image_contrast()
+        self._edit_image_saturation = self.w.board_page.current_image_saturation()
+        self._set_bcs_in_tool_stack(
+            self._edit_image_brightness,
+            self._edit_image_contrast,
+            self._edit_image_saturation,
+        )
+        self.w.board_page.set_image_adjust_labels(
+            self._edit_image_brightness,
+            self._edit_image_contrast,
+            self._edit_image_saturation,
+        )
+        self._commit_current_focus_image_override()
+        if self._edit_image_path is None or not isinstance(self._focus_item, BoardImageItem):
+            return
+        if self._edit_exr_path is not None:
+            channel = self.w.board_page.current_exr_channel_value()
+            if channel:
+                self._edit_exr_channel = str(channel)
+                self._schedule_edit_preview_update(channel=str(channel))
+        else:
+            self._schedule_edit_preview_update()
+
+    def _on_edit_image_vibrance_changed(self, *_: object) -> None:
+        self._edit_image_vibrance = self.w.board_page.current_image_vibrance()
+        self.w.board_page.set_image_vibrance_value(self._edit_image_vibrance)
+        self._set_vibrance_in_tool_stack(self._edit_image_vibrance)
+        self._commit_current_focus_image_override()
+        if self._edit_image_path is None or not isinstance(self._focus_item, BoardImageItem):
+            return
+        if self._edit_exr_path is not None:
+            channel = self.w.board_page.current_exr_channel_value()
+            if channel:
+                self._edit_exr_channel = str(channel)
+                self._schedule_edit_preview_update(channel=str(channel))
+        else:
+            self._schedule_edit_preview_update()
+
+    def _reset_edit_image_adjustments(self) -> None:
+        b_def, c_def, s_def = self._default_color_adjustments()
+        v_def = self._default_vibrance()
+        self.w.board_page.set_image_adjust_values(b_def, c_def, s_def)
+        self.w.board_page.set_image_vibrance_value(v_def)
+        self._set_bcs_in_tool_stack(b_def, c_def, s_def)
+        self._set_vibrance_in_tool_stack(v_def, add_if_missing=False)
+        self._on_edit_image_adjust_changed()
+
+    def _on_edit_preview_slider_pressed(self) -> None:
+        self._edit_preview_dragging = True
+
+    def _on_edit_preview_slider_released(self) -> None:
+        self._edit_preview_dragging = False
+        self._schedule_edit_preview_update()
+
+    def _schedule_edit_preview_update(self, channel: Optional[str] = None) -> None:
+        if channel:
+            self._edit_preview_pending_channel = str(channel)
+        if self._edit_preview_timer is None:
+            self._edit_preview_timer = QtCore.QTimer(self.w)
+            self._edit_preview_timer.setSingleShot(True)
+            self._edit_preview_timer.timeout.connect(self._flush_edit_preview_update)
+        self._edit_preview_timer.start(60)
+
+    def _flush_edit_preview_update(self) -> None:
+        self._edit_preview_timer = None
+        max_dim = self._edit_preview_fast_dim if self._edit_preview_dragging else self._edit_preview_full_dim
+        if self._edit_exr_path is not None:
+            channel = str(
+                self._edit_preview_pending_channel
+                or self._edit_exr_channel
+                or self.w.board_page.current_exr_channel_value()
+                or ""
+            ).strip()
+            self._edit_preview_pending_channel = None
+            if channel:
+                self._queue_exr_channel_preview(channel, max_dim=max_dim)
+            return
+        self._edit_preview_pending_channel = None
+        if self._edit_image_path is not None:
+            self._queue_image_adjust_preview(self._edit_image_path, max_dim=max_dim)
+
     def _on_edit_exr_channel_changed(self, _index: int) -> None:
         channel = self.w.board_page.current_exr_channel_value()
         if not channel:
             return
-        self._queue_exr_channel_preview(channel)
+        self._edit_exr_channel = str(channel)
+        self._commit_current_focus_image_override()
+        self._schedule_edit_preview_update(channel=str(channel))
 
     def _on_edit_exr_gamma_changed(self, *_: object) -> None:
         self._edit_exr_gamma = self.w.board_page.current_exr_gamma()
         self._edit_exr_srgb = self.w.board_page.current_exr_srgb_enabled()
         self.w.board_page.set_exr_gamma_label(self._edit_exr_gamma)
+        self._commit_current_focus_image_override()
         if self._edit_exr_path is None:
             return
         channel = self.w.board_page.current_exr_channel_value()
         if channel:
-            self._queue_exr_channel_preview(channel)
+            self._edit_exr_channel = str(channel)
+            self._schedule_edit_preview_update(channel=str(channel))
+
+    def _commit_current_focus_image_override(self) -> None:
+        if not isinstance(self._focus_item, BoardImageItem):
+            return
+        filename = str(self._focus_item.data(1) or "").strip()
+        if not filename:
+            return
+        tool_stack = self._current_edit_tool_stack()
+        effective = self._tool_stack_is_effective(
+            tool_stack,
+            self._edit_image_brightness,
+            self._edit_image_contrast,
+            self._edit_image_saturation,
+        )
+        if not effective:
+            if filename in self._image_exr_display_overrides:
+                self._image_exr_display_overrides.pop(filename, None)
+                self._dirty = True
+            return
+        current = self._image_exr_display_overrides.get(filename)
+        merged = dict(current) if isinstance(current, dict) else {}
+        merged["brightness"] = float(self._edit_image_brightness)
+        merged["contrast"] = float(self._edit_image_contrast)
+        merged["saturation"] = float(self._edit_image_saturation)
+        merged["tool_stack"] = tool_stack
+        if self._edit_exr_path is not None:
+            channel_value = str(self._edit_exr_channel or "").strip()
+            if channel_value:
+                merged["channel"] = channel_value
+            merged["gamma"] = float(self._edit_exr_gamma)
+            merged["srgb"] = bool(self._edit_exr_srgb)
+        self._image_exr_display_overrides[filename] = merged
+        self._dirty = True
 
     def _handle_exr_info_finished(
         self, success: bool, channels_obj: object, size_obj: object, note_obj: object
@@ -2383,14 +3286,22 @@ class BoardController:
             options, default_value = self._build_exr_channel_options(self._edit_exr_channels)
             self.w.board_page.set_exr_channels(options)
             self.w.board_page.set_edit_panel_content(
-                "Edit Mode: EXR",
+                "Edit Mode: Image",
                 info_lines,
                 list_items=[str(c) for c in channels],
                 footer=footer,
             )
             if default_value is None and self._edit_exr_channels:
                 default_value = self._edit_exr_channels[0]
+            preferred_channel = str(self._edit_exr_channel or "").strip()
+            if preferred_channel:
+                available_values = [value for _label, value in options]
+                if preferred_channel in available_values:
+                    default_value = preferred_channel
+                elif preferred_channel in self._edit_exr_channels:
+                    default_value = preferred_channel
             if default_value:
+                self._edit_exr_channel = str(default_value)
                 # Set combo selection to default
                 combo = self.w.board_page.edit_exr_channel_combo
                 idx = combo.findData(default_value)
@@ -2401,7 +3312,7 @@ class BoardController:
                 self._queue_exr_channel_preview(default_value)
         elif success:
             self.w.board_page.set_edit_panel_content(
-                "Edit Mode: EXR",
+                "Edit Mode: Image",
                 info_lines,
                 list_items=["No channels found."],
                 footer=footer,
@@ -2410,7 +3321,7 @@ class BoardController:
             self._edit_exr_channels = []
             self.w.board_page.set_exr_channels([])
             self.w.board_page.set_edit_panel_content(
-                "Edit Mode: EXR",
+                "Edit Mode: Image",
                 info_lines,
                 list_items=["Failed to read EXR."],
                 footer=str(note_obj or "Failed to read EXR."),
@@ -2425,22 +3336,180 @@ class BoardController:
                 bytes_per_line = w * 3
                 qimage = QtGui.QImage(raw, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
                 pixmap = QtGui.QPixmap.fromImage(qimage.copy())
-                self.w.board_page.show_edit_preview_image(pixmap, label=f"Channel: {channel}")
+                if isinstance(self._focus_item, BoardImageItem):
+                    self._focus_item.set_override_pixmap(pixmap)
+                    filename = str(self._focus_item.data(1) or "").strip()
+                    if filename:
+                        channel_value = str(self._edit_exr_channel or channel or "").strip()
+                        if channel_value:
+                            self._image_exr_display_overrides[filename] = {
+                                "channel": channel_value,
+                                "gamma": float(self._edit_exr_gamma),
+                                "srgb": bool(self._edit_exr_srgb),
+                                "brightness": float(self._edit_image_brightness),
+                                "contrast": float(self._edit_image_contrast),
+                                "saturation": float(self._edit_image_saturation),
+                                "tool_stack": self._current_edit_tool_stack(),
+                            }
+                            self._dirty = True
+                else:
+                    self.w.board_page.show_edit_preview_image(pixmap, label=f"Channel: {channel}")
                 return
         msg = str(error or "Failed to render channel.")
         self.w.board_page.edit_footer.setText(msg)
 
-    def _queue_exr_channel_preview(self, channel: str) -> None:
-        if self._edit_exr_path is None:
+    def _handle_image_adjust_preview_finished(self, success: bool, payload: object, error: object) -> None:
+        if success and isinstance(payload, tuple) and len(payload) == 3:
+            w, h, raw = payload
+            if isinstance(w, int) and isinstance(h, int) and isinstance(raw, (bytes, bytearray)):
+                bytes_per_line = w * 3
+                qimage = QtGui.QImage(raw, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+                pixmap = QtGui.QPixmap.fromImage(qimage.copy())
+                if isinstance(self._focus_item, BoardImageItem):
+                    filename = str(self._focus_item.data(1) or "").strip()
+                    if filename:
+                        current_stack = self._current_edit_tool_stack()
+                        if not self._tool_stack_is_effective(
+                            current_stack,
+                            self._edit_image_brightness,
+                            self._edit_image_contrast,
+                            self._edit_image_saturation,
+                        ):
+                            self._image_exr_display_overrides.pop(filename, None)
+                            self._focus_item.set_override_pixmap(None)
+                        else:
+                            self._focus_item.set_override_pixmap(pixmap)
+                            current = self._image_exr_display_overrides.get(filename)
+                            merged = dict(current) if isinstance(current, dict) else {}
+                            merged["brightness"] = float(self._edit_image_brightness)
+                            merged["contrast"] = float(self._edit_image_contrast)
+                            merged["saturation"] = float(self._edit_image_saturation)
+                            merged["tool_stack"] = current_stack
+                            self._image_exr_display_overrides[filename] = merged
+                        self._dirty = True
+                    else:
+                        self._focus_item.set_override_pixmap(pixmap)
+                        self._dirty = True
+                else:
+                    self.w.board_page.show_edit_preview_image(pixmap, label="Image adjustments")
+                return
+        msg = str(error or "Failed to render image adjustments.")
+        self.w.board_page.edit_footer.setText(msg)
+
+    def enter_focus_mode(self, item: QtWidgets.QGraphicsItem) -> None:
+        if self._focus_item is item:
             return
+        self.exit_focus_mode()
+        self._focus_item = item
+        try:
+            self.w.board_page.view.setFocus()
+        except Exception:
+            pass
+        scene = self._scene
+        # Dim non-focused items and disable interaction.
+        for obj in scene.items():
+            if obj is item:
+                continue
+            self._focus_saved[id(obj)] = (obj.isEnabled(), obj.opacity())
+            obj.setEnabled(False)
+            obj.setOpacity(0.15)
+        # Add overlay
+        overlay = QtWidgets.QGraphicsRectItem(scene.sceneRect())
+        overlay.setBrush(QtGui.QColor(0, 0, 0, 120))
+        overlay.setPen(QtCore.Qt.PenStyle.NoPen)
+        overlay.setZValue(9_000)
+        scene.addItem(overlay)
+        self._focus_overlay = overlay
+        # Bring focused item to front
+        item.setZValue(10_000)
+        self.w.board_page.set_edit_panel_visible(True)
+        self._edit_focus_kind = str(item.data(0) or "")
+
+    def exit_focus_mode(self) -> None:
+        if self._focus_item is None:
+            return
+        # Restore item states
+        for obj in self._scene.items():
+            saved = self._focus_saved.pop(id(obj), None)
+            if saved is not None:
+                enabled, opacity = saved
+                obj.setEnabled(enabled)
+                obj.setOpacity(opacity)
+        if self._focus_overlay is not None:
+            self._scene.removeItem(self._focus_overlay)
+            self._focus_overlay = None
+        if self._focus_item is not None:
+            if isinstance(self._focus_item, BoardImageItem):
+                filename = str(self._focus_item.data(1) or "").strip()
+                if not filename or filename not in self._image_exr_display_overrides:
+                    self._focus_item.set_override_pixmap(None)
+            if isinstance(self._focus_item, BoardVideoItem):
+                self._focus_item.set_override_pixmap(None)
+            if isinstance(self._focus_item, BoardSequenceItem):
+                self._focus_item.set_override_pixmap(None)
+            self._focus_item.setZValue(0)
+        self._focus_item = None
+        self._edit_focus_kind = None
+        self._edit_timeline_scrubbing = False
+        if self._video_preview_timer is not None and self._video_preview_timer.isActive():
+            self._video_preview_timer.stop()
+        self._video_preview_pending = None
+        self._release_focus_video_cap()
+        if self._edit_preview_timer is not None and self._edit_preview_timer.isActive():
+            self._edit_preview_timer.stop()
+        self._edit_preview_timer = None
+        self._edit_preview_pending_channel = None
+        self._edit_preview_dragging = False
+        self._edit_exr_preview_pending_channel = None
+        self._edit_exr_preview_pending_max_dim = 0
+        self._edit_image_preview_pending_path = None
+        self._edit_image_preview_pending_max_dim = 0
         if self._edit_exr_thread is not None:
             try:
                 self._edit_exr_thread.quit()
+                self._edit_exr_thread.wait(1000)
             except Exception:
                 pass
-        worker = _ExrChannelPreviewWorker(self._edit_exr_path, channel, self._edit_exr_gamma, self._edit_exr_srgb)
+        self._edit_exr_preview_busy = False
+        self._edit_exr_thread = None
+        self._edit_exr_worker = None
+        if self._edit_image_thread is not None:
+            try:
+                self._edit_image_thread.quit()
+                self._edit_image_thread.wait(1000)
+            except Exception:
+                pass
+        self._edit_image_preview_busy = False
+        self._edit_image_thread = None
+        self._edit_image_worker = None
+        self._edit_image_path = None
+        self._edit_exr_path = None
+        self.w.board_page.set_image_adjust_controls_visible(False)
+        self.w.board_page.set_edit_panel_visible(False)
+        self.w.board_page.set_timeline_bar_visible(False)
+        self.w.board_page.set_edit_preview_visible(True)
+
+    def _queue_exr_channel_preview(self, channel: str, max_dim: int = 0) -> None:
+        if self._edit_exr_path is None:
+            return
+        if self._edit_exr_preview_busy:
+            self._edit_exr_preview_pending_channel = str(channel)
+            self._edit_exr_preview_pending_max_dim = int(max_dim)
+            return
+        worker = _ExrChannelPreviewWorker(
+            self._edit_exr_path,
+            channel,
+            self._edit_exr_gamma,
+            self._edit_exr_srgb,
+            self._edit_image_brightness,
+            self._edit_image_contrast,
+            self._edit_image_saturation,
+            int(max_dim),
+            self._current_edit_tool_stack(),
+        )
         thread = QtCore.QThread(self.w)
         worker.moveToThread(thread)
+        self._edit_exr_preview_busy = True
         self._edit_exr_thread = thread
         self._edit_exr_worker = worker
         worker.finished.connect(self._ui_bridge.on_exr_preview_finished)
@@ -2448,12 +3517,175 @@ class BoardController:
         thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_edit_exr_preview_cycle_finished)
+        thread.start()
+
+    def _on_edit_exr_preview_cycle_finished(self) -> None:
+        self._edit_exr_preview_busy = False
+        self._edit_exr_thread = None
+        self._edit_exr_worker = None
+        pending_channel = self._edit_exr_preview_pending_channel
+        pending_dim = self._edit_exr_preview_pending_max_dim
+        self._edit_exr_preview_pending_channel = None
+        self._edit_exr_preview_pending_max_dim = 0
+        if self._edit_exr_path is not None and pending_channel:
+            self._queue_exr_channel_preview(pending_channel, max_dim=pending_dim)
+
+    def _queue_exr_display_for_item(
+        self,
+        item: BoardImageItem,
+        channel: str,
+        gamma: float,
+        srgb: bool,
+        brightness: float = 0.0,
+        contrast: float = 1.0,
+        saturation: float = 1.0,
+        tool_stack: object = None,
+    ) -> None:
+        if item.scene() is None:
+            return
+        path = item.file_path()
+        if path.suffix.lower() != ".exr":
+            return
+        worker = _ExrChannelPreviewWorker(
+            path,
+            str(channel),
+            float(gamma),
+            bool(srgb),
+            float(brightness),
+            float(contrast),
+            float(saturation),
+            1024,
+            tool_stack,
+        )
+        thread = QtCore.QThread(self.w)
+        worker.moveToThread(thread)
+        self._exr_item_preview_threads.append(thread)
+        self._exr_item_preview_workers.append(worker)
+
+        def _on_finished(success: bool, _channel: str, payload: object, _error: object) -> None:
+            if success and isinstance(payload, tuple) and len(payload) == 3 and item.scene() is not None:
+                w, h, raw = payload
+                if isinstance(w, int) and isinstance(h, int) and isinstance(raw, (bytes, bytearray)):
+                    bytes_per_line = w * 3
+                    qimage = QtGui.QImage(raw, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+                    item.set_override_pixmap(QtGui.QPixmap.fromImage(qimage.copy()))
+
+        worker.finished.connect(_on_finished)
+        worker.finished.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        def _cleanup() -> None:
+            try:
+                self._exr_item_preview_threads.remove(thread)
+            except ValueError:
+                pass
+            try:
+                self._exr_item_preview_workers.remove(worker)
+            except ValueError:
+                pass
+
+        thread.finished.connect(_cleanup)
+        thread.start()
+
+    def _queue_image_adjust_preview(self, path: Path, max_dim: int = 0) -> None:
+        if self._edit_image_preview_busy:
+            self._edit_image_preview_pending_path = path
+            self._edit_image_preview_pending_max_dim = int(max_dim)
+            return
+        worker = _ImageAdjustPreviewWorker(
+            path,
+            self._edit_image_brightness,
+            self._edit_image_contrast,
+            self._edit_image_saturation,
+            int(max_dim),
+            self._current_edit_tool_stack(),
+        )
+        thread = QtCore.QThread(self.w)
+        worker.moveToThread(thread)
+        self._edit_image_preview_busy = True
+        self._edit_image_thread = thread
+        self._edit_image_worker = worker
+        worker.finished.connect(self._handle_image_adjust_preview_finished)
+        worker.finished.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_edit_image_preview_cycle_finished)
+        thread.start()
+
+    def _on_edit_image_preview_cycle_finished(self) -> None:
+        self._edit_image_preview_busy = False
+        self._edit_image_thread = None
+        self._edit_image_worker = None
+        pending_path = self._edit_image_preview_pending_path
+        pending_dim = self._edit_image_preview_pending_max_dim
+        self._edit_image_preview_pending_path = None
+        self._edit_image_preview_pending_max_dim = 0
+        if pending_path is not None and self._edit_image_path is not None:
+            self._queue_image_adjust_preview(pending_path, max_dim=pending_dim)
+
+    def _queue_image_adjust_for_item(
+        self,
+        item: BoardImageItem,
+        brightness: float,
+        contrast: float,
+        saturation: float,
+        tool_stack: object = None,
+    ) -> None:
+        if item.scene() is None:
+            return
+        path = item.file_path()
+        if path.suffix.lower() == ".exr":
+            return
+        worker = _ImageAdjustPreviewWorker(
+            path,
+            float(brightness),
+            float(contrast),
+            float(saturation),
+            1024,
+            tool_stack,
+        )
+        thread = QtCore.QThread(self.w)
+        worker.moveToThread(thread)
+        self._exr_item_preview_threads.append(thread)
+        self._exr_item_preview_workers.append(worker)
+
+        def _on_finished(success: bool, payload: object, _error: object) -> None:
+            if success and isinstance(payload, tuple) and len(payload) == 3 and item.scene() is not None:
+                w, h, raw = payload
+                if isinstance(w, int) and isinstance(h, int) and isinstance(raw, (bytes, bytearray)):
+                    bytes_per_line = w * 3
+                    qimage = QtGui.QImage(raw, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+                    item.set_override_pixmap(QtGui.QPixmap.fromImage(qimage.copy()))
+
+        worker.finished.connect(_on_finished)
+        worker.finished.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        def _cleanup() -> None:
+            try:
+                self._exr_item_preview_threads.remove(thread)
+            except ValueError:
+                pass
+            try:
+                self._exr_item_preview_workers.remove(worker)
+            except ValueError:
+                pass
+
+        thread.finished.connect(_cleanup)
         thread.start()
 
     def _on_scene_changed(self) -> None:
         if self._loading:
             return
         if self._saving:
+            return
+        if self._group_tree_is_editing():
             return
         for item in list(self._scene.items()):
             if isinstance(item, BoardGroupItem):
@@ -2670,6 +3902,109 @@ class BoardController:
         self._video_thumb_cache[key] = (mtime, pixmap)
         return pixmap
 
+    def _get_video_frame_pixmap(self, path: Path, frame_index: int, max_dim: int) -> Optional[QtGui.QPixmap]:
+        if cv2 is None:
+            return None
+        try:
+            cap = cv2.VideoCapture(str(path))
+            if not cap.isOpened():
+                cap.release()
+                return None
+            cap.set(1, int(frame_index))  # CAP_PROP_POS_FRAMES
+            ok, frame = cap.read()
+            cap.release()
+            if not ok or frame is None:
+                return None
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            bytes_per_line = ch * w
+            image = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+            pixmap = QtGui.QPixmap.fromImage(image)
+            if pixmap.width() > max_dim or pixmap.height() > max_dim:
+                pixmap = pixmap.scaled(
+                    max_dim,
+                    max_dim,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+            return pixmap
+        except Exception:
+            return None
+
+    def _ensure_focus_video_cap(self) -> None:
+        if cv2 is None:
+            return
+        if self._focus_video_path is None:
+            return
+        if self._focus_video_cap is not None:
+            return
+        try:
+            cap = cv2.VideoCapture(str(self._focus_video_path))
+            if cap.isOpened():
+                self._focus_video_cap = cap
+        except Exception:
+            self._focus_video_cap = None
+
+    def _release_focus_video_cap(self) -> None:
+        try:
+            if self._focus_video_cap is not None:
+                self._focus_video_cap.release()
+        except Exception:
+            pass
+        self._focus_video_cap = None
+
+    def _schedule_video_focus_preview(self, frame_index: int, delay_ms: int = 40, immediate: bool = False) -> None:
+        self._video_preview_pending = int(frame_index)
+        if self._video_preview_timer is None:
+            self._video_preview_timer = QtCore.QTimer(self.w)
+            self._video_preview_timer.setSingleShot(True)
+            self._video_preview_timer.timeout.connect(self._flush_video_focus_preview)
+        if immediate:
+            if self._video_preview_timer.isActive():
+                self._video_preview_timer.stop()
+            self._flush_video_focus_preview()
+            return
+        if not self._video_preview_timer.isActive():
+            self._video_preview_timer.start(max(10, int(delay_ms)))
+
+    def _flush_video_focus_preview(self) -> None:
+        if self._video_preview_pending is None:
+            return
+        idx = self._video_preview_pending
+        self._video_preview_pending = None
+        if not isinstance(self._focus_item, BoardVideoItem):
+            return
+        self._ensure_focus_video_cap()
+        pixmap = self._get_focus_video_frame_pixmap(idx, max_dim=512)
+        if pixmap is not None:
+            self._focus_item.set_override_pixmap(pixmap)
+
+    def _get_focus_video_frame_pixmap(self, frame_index: int, max_dim: int) -> Optional[QtGui.QPixmap]:
+        if cv2 is None:
+            return None
+        if self._focus_video_cap is None:
+            return None
+        try:
+            self._focus_video_cap.set(1, int(frame_index))  # CAP_PROP_POS_FRAMES
+            ok, frame = self._focus_video_cap.read()
+            if not ok or frame is None:
+                return None
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            bytes_per_line = ch * w
+            image = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+            pixmap = QtGui.QPixmap.fromImage(image)
+            if pixmap.width() > max_dim or pixmap.height() > max_dim:
+                pixmap = pixmap.scaled(
+                    max_dim,
+                    max_dim,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+            return pixmap
+        except Exception:
+            return None
+
     def _sequence_frame_paths(self, dir_path: Path) -> list[Path]:
         if not dir_path.exists() or not dir_path.is_dir():
             return []
@@ -2788,12 +4123,15 @@ class BoardController:
 
     def _build_payload(self) -> dict:
         data = {"items": []}
+        image_ids: set[str] = set()
         for item in self._scene.items():
             kind = item.data(0)
             if kind == "image":
+                file_id = str(item.data(1))
+                image_ids.add(file_id)
                 data["items"].append({
                     "type": "image",
-                    "file": str(item.data(1)),
+                    "file": file_id,
                     "x": item.pos().x(),
                     "y": item.pos().y(),
                     "scale": item.scale(),
@@ -2839,10 +4177,16 @@ class BoardController:
                     "color": item.color_hex(),
                     "members": members,
                 })
+        data["image_display_overrides"] = {
+            key: value
+            for key, value in self._image_exr_display_overrides.items()
+            if key in image_ids and isinstance(value, dict)
+        }
         return data
 
     def _apply_payload(self, payload: dict) -> None:
         assets_dir = self._project_root / ".skyforge_board_assets" if self._project_root else None
+        self._image_exr_display_overrides = self._parse_image_display_overrides(payload)
         image_map: dict[str, QtWidgets.QGraphicsPixmapItem] = {}
         video_map: dict[str, QtWidgets.QGraphicsItem] = {}
         sequence_map: dict[str, QtWidgets.QGraphicsItem] = {}
@@ -2868,6 +4212,32 @@ class BoardController:
                 self._scene.addItem(item)
                 if filename:
                     image_map[str(filename)] = item
+                    override = self._image_exr_display_overrides.get(str(filename))
+                    if isinstance(override, dict):
+                        brightness, contrast, saturation = self._coerce_color_adjustments(override)
+                        tool_stack = self._tool_stack_from_override(override)
+                        channel = str(override.get("channel", "")).strip()
+                        if channel and path.suffix.lower() == ".exr":
+                            gamma = float(override.get("gamma", 2.2))
+                            srgb = bool(override.get("srgb", True))
+                            self._queue_exr_display_for_item(
+                                item,
+                                channel,
+                                gamma,
+                                srgb,
+                                brightness,
+                                contrast,
+                                saturation,
+                                tool_stack,
+                            )
+                        elif self._tool_stack_is_effective(tool_stack, brightness, contrast, saturation):
+                            self._queue_image_adjust_for_item(
+                                item,
+                                brightness,
+                                contrast,
+                                saturation,
+                                tool_stack,
+                            )
             elif entry.get("type") == "video" and assets_dir is not None:
                 filename = entry.get("file", "")
                 path = assets_dir / filename
@@ -2980,6 +4350,8 @@ class BoardController:
         self._history_index = 0
 
     def _schedule_group_tree_update(self) -> None:
+        if not self._ui_alive():
+            return
         if self._group_tree_timer is not None:
             return
         self._group_tree_timer = QtCore.QTimer(self.w)
@@ -2989,9 +4361,17 @@ class BoardController:
 
     def _update_group_tree(self) -> None:
         self._group_tree_timer = None
+        if not self._ui_alive():
+            return
+        if self._group_tree_is_editing():
+            self._schedule_group_tree_update()
+            return
         tree = self.w.board_page.groups_tree
-        tree.blockSignals(True)
-        tree.clear()
+        try:
+            tree.blockSignals(True)
+            tree.clear()
+        except Exception:
+            return
         self._group_tree_refs = {}
         groups = self._groups()
         assets_dir = self._project_root / ".skyforge_board_assets" if self._project_root else None
@@ -3094,19 +4474,35 @@ class BoardController:
                 child.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("note", item.note_id()))
                 root_ungrouped.addChild(child)
 
-        tree.expandAll()
-        tree.blockSignals(False)
+        try:
+            tree.expandAll()
+            tree.blockSignals(False)
+        except Exception:
+            return
         self._sync_tree_selection_from_scene()
 
     def _sync_tree_selection_from_scene(self) -> None:
+        if not self._ui_alive() or not self._scene_alive():
+            return
+        if self._group_tree_is_editing():
+            return
         if self._syncing_tree_selection:
             return
-        tree = self.w.board_page.groups_tree
-        selected = [i for i in self._scene.selectedItems() if i.data(0) in ("image", "note", "video", "sequence")]
+        try:
+            tree = self.w.board_page.groups_tree
+        except Exception:
+            return
+        try:
+            selected = [i for i in self._scene.selectedItems() if i.data(0) in ("image", "note", "video", "sequence")]
+        except Exception:
+            return
         if not selected:
-            tree.blockSignals(True)
-            tree.clearSelection()
-            tree.blockSignals(False)
+            try:
+                tree.blockSignals(True)
+                tree.clearSelection()
+                tree.blockSignals(False)
+            except Exception:
+                pass
             return
         item = selected[0]
         if item.data(0) == "image":
@@ -3126,21 +4522,33 @@ class BoardController:
                 node = it.value()
                 info = node.data(0, QtCore.Qt.ItemDataRole.UserRole)
                 if info == target:
-                    tree.blockSignals(True)
-                    tree.setCurrentItem(node)
-                    tree.scrollToItem(node)
-                    tree.blockSignals(False)
+                    try:
+                        tree.blockSignals(True)
+                        tree.setCurrentItem(node)
+                        tree.scrollToItem(node)
+                        tree.blockSignals(False)
+                    except Exception:
+                        pass
                     break
                 it += 1
         finally:
             self._syncing_tree_selection = False
 
     def _on_scene_selection_changed(self) -> None:
+        if not self._ui_alive() or not self._scene_alive():
+            return
+        if self._group_tree_is_editing():
+            return
         if self._syncing_tree_selection:
             return
-        self._sync_tree_selection_from_scene()
+        try:
+            self._sync_tree_selection_from_scene()
+        except Exception:
+            return
 
     def _on_group_tree_clicked(self, item: QtWidgets.QTreeWidgetItem) -> None:
+        if not self._ui_alive():
+            return
         info = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
         if not isinstance(info, tuple):
             return
@@ -3181,6 +4589,337 @@ class BoardController:
                         sel.setSelected(False)
                     it.setSelected(True)
                     break
+
+    def _on_group_tree_double_clicked(self, item: QtWidgets.QTreeWidgetItem, _column: int) -> None:
+        if not self._ui_alive():
+            return
+        info = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if not (isinstance(info, tuple) and info):
+            return
+        if str(info[0]) in ("image", "video", "sequence"):
+            self._begin_group_tree_inline_rename(item, info)
+
+    def _editable_name_for_tree_info(self, info: tuple) -> str:
+        path = self._tree_info_path(info)
+        kind = str(info[0]) if info else ""
+        if path is None:
+            return ""
+        if kind in ("image", "video"):
+            return path.stem
+        if kind == "sequence":
+            return path.name
+        return ""
+
+    def _begin_group_tree_inline_rename(self, item: QtWidgets.QTreeWidgetItem, info: tuple) -> None:
+        if not self._ui_alive():
+            return
+        kind = str(info[0]) if info else ""
+        if kind not in ("image", "video", "sequence"):
+            return
+        tree = self.w.board_page.groups_tree
+        editable = self._editable_name_for_tree_info(info).strip()
+        if not editable:
+            return
+        self._group_tree_inline_rename = {
+            "item": item,
+            "info": info,
+            "old_text": item.text(0),
+        }
+        tree.blockSignals(True)
+        flags = item.flags()
+        if not (flags & QtCore.Qt.ItemFlag.ItemIsEditable):
+            item.setFlags(flags | QtCore.Qt.ItemFlag.ItemIsEditable)
+        item.setText(0, editable)
+        tree.blockSignals(False)
+        tree.setCurrentItem(item)
+        tree.setFocus()
+
+        def _open_editor() -> None:
+            if not self._ui_alive():
+                return
+            try:
+                tree.editItem(item, 0)
+            except Exception:
+                return
+
+        QtCore.QTimer.singleShot(0, _open_editor)
+
+    def _on_group_tree_item_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
+        if not self._ui_alive():
+            return
+        if column != 0:
+            return
+        state = self._group_tree_inline_rename
+        if not state:
+            return
+        if state.get("item") is not item:
+            return
+        self._group_tree_inline_rename = None
+        info = state.get("info")
+        old_text = str(state.get("old_text", ""))
+        flags = item.flags()
+        if flags & QtCore.Qt.ItemFlag.ItemIsEditable:
+            item.setFlags(flags & ~QtCore.Qt.ItemFlag.ItemIsEditable)
+        if not isinstance(info, tuple):
+            self._schedule_group_tree_update()
+            return
+        new_name = item.text(0).strip()
+        if not new_name:
+            self._schedule_group_tree_update()
+            return
+        renamed = self.rename_group_tree_entry(info, desired_name=new_name)
+        if not renamed:
+            tree = self.w.board_page.groups_tree
+            tree.blockSignals(True)
+            item.setText(0, old_text)
+            tree.blockSignals(False)
+
+    def _find_scene_item_for_tree_info(self, info: tuple) -> Optional[QtWidgets.QGraphicsItem]:
+        if not info:
+            return None
+        kind = str(info[0])
+        key = str(info[1]) if len(info) > 1 else ""
+        for it in self._scene.items():
+            if it.data(0) != kind:
+                continue
+            if kind in ("image", "video", "sequence") and str(it.data(1)) == key:
+                return it
+            if kind == "note" and isinstance(it, BoardNoteItem) and it.note_id() == key:
+                return it
+        return None
+
+    def _select_tree_info_target(self, info: tuple) -> None:
+        if not self._ui_alive():
+            return
+        kind = str(info[0]) if info else ""
+        if kind == "group":
+            group = self._group_tree_refs.get(int(info[1]))
+            if group is None:
+                return
+            for sel in self._scene.selectedItems():
+                sel.setSelected(False)
+            group.setSelected(True)
+            return
+        item = self._find_scene_item_for_tree_info(info)
+        if item is None:
+            return
+        for sel in self._scene.selectedItems():
+            sel.setSelected(False)
+        item.setSelected(True)
+
+    def _tree_info_path(self, info: tuple) -> Optional[Path]:
+        if not info:
+            return None
+        kind = str(info[0])
+        key = str(info[1]) if len(info) > 1 else ""
+        if kind in ("image", "video"):
+            if self._project_root is None:
+                return None
+            return self._project_root / ".skyforge_board_assets" / key
+        if kind == "sequence":
+            return self._resolve_project_path(key)
+        return None
+
+    def show_groups_tree_context_menu(self, pos: QtCore.QPoint) -> bool:
+        if not self._ui_alive():
+            return False
+        tree = self.w.board_page.groups_tree
+        item = tree.itemAt(pos)
+        if item is None:
+            return False
+        info = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if not (isinstance(info, tuple) and info):
+            return False
+        kind = str(info[0])
+        menu = QtWidgets.QMenu(tree)
+        add_to_group = None
+        remove_from_group = None
+        ungroup = None
+        open_item = None
+        convert_video = None
+        convert_pic = None
+        rename_entry = None
+        copy_path = None
+
+        if kind == "group":
+            add_to_group = menu.addAction("Add Selected To Group")
+            ungroup = menu.addAction("Ungroup")
+        elif kind in ("image", "video", "sequence", "note"):
+            if kind == "image":
+                open_item = menu.addAction("Edit Image")
+            elif kind == "video":
+                open_item = menu.addAction("Open Video")
+                convert_video = menu.addAction("Convert Video To Sequence")
+            elif kind == "sequence":
+                open_item = menu.addAction("Open Sequence")
+            elif kind == "note":
+                open_item = menu.addAction("Edit Note")
+            if kind in ("image", "video", "sequence"):
+                rename_entry = menu.addAction("Rename...")
+                path = self._tree_info_path(info)
+                if path is not None and path.exists():
+                    copy_path = menu.addAction("Copy Path")
+                if kind == "image" and path is not None and path.suffix.lower() in PIC_EXTS:
+                    convert_pic = menu.addAction("Convert PICNC...")
+            remove_from_group = menu.addAction("Remove From Group")
+        else:
+            return False
+
+        action = menu.exec(tree.mapToGlobal(pos))
+        if action is None:
+            return True
+        if action == add_to_group:
+            self.add_selected_to_group(info[1])
+            return True
+        if action == ungroup:
+            self._select_tree_info_target(info)
+            self.ungroup_selected()
+            return True
+        if action == remove_from_group:
+            self._select_tree_info_target(info)
+            self.remove_selected_from_groups()
+            return True
+        if action == open_item:
+            target = self._find_scene_item_for_tree_info(info)
+            if target is None:
+                self._notify("Item not found.")
+                return True
+            if kind == "image":
+                self.open_image_item(target)
+            elif kind in ("video", "sequence"):
+                self.open_media_item(target)
+            elif kind == "note" and isinstance(target, BoardNoteItem):
+                self.edit_note(target)
+            return True
+        if action == convert_video:
+            target = self._find_scene_item_for_tree_info(info)
+            if target is not None:
+                self.convert_video_to_sequence(target)
+            return True
+        if action == convert_pic:
+            src_path = self._tree_info_path(info)
+            if src_path is not None:
+                self.convert_picnc_interactive(src_path)
+            return True
+        if action == rename_entry:
+            self._begin_group_tree_inline_rename(item, info)
+            return True
+        if action == copy_path:
+            path = self._tree_info_path(info)
+            if path is not None:
+                QtWidgets.QApplication.clipboard().setText(str(path))
+                self._notify(f"Copied: {path}")
+            return True
+        return True
+
+    def rename_group_tree_entry(self, info: tuple, desired_name: Optional[str] = None) -> bool:
+        if not self._ui_alive():
+            return False
+        if self._project_root is None:
+            self._notify("Select a project first.")
+            return False
+        kind = str(info[0]) if info else ""
+        if kind not in ("image", "video", "sequence"):
+            return False
+        item = self._find_scene_item_for_tree_info(info)
+        if item is None:
+            self._notify("Item not found.")
+            return False
+        src_path = self._tree_info_path(info)
+        if src_path is None or not src_path.exists():
+            self._notify("Source file not found.")
+            return False
+
+        if kind in ("image", "video"):
+            if desired_name is None:
+                default_name = src_path.stem
+                new_base, ok = QtWidgets.QInputDialog.getText(
+                    self.w,
+                    "Rename File",
+                    "New file name (extension preserved):",
+                    QtWidgets.QLineEdit.EchoMode.Normal,
+                    default_name,
+                )
+                if not ok:
+                    return False
+            else:
+                new_base = desired_name
+            new_base = str(new_base).strip()
+            if not new_base:
+                self._notify("Name cannot be empty.")
+                return False
+            if any(ch in new_base for ch in "\\/:*?\"<>|"):
+                self._notify("Invalid file name.")
+                return False
+            new_name = f"{new_base}{src_path.suffix.lower()}"
+            dest_path = src_path.with_name(new_name)
+        else:
+            if desired_name is None:
+                default_name = src_path.name
+                new_name, ok = QtWidgets.QInputDialog.getText(
+                    self.w,
+                    "Rename Sequence Folder",
+                    "New folder name:",
+                    QtWidgets.QLineEdit.EchoMode.Normal,
+                    default_name,
+                )
+                if not ok:
+                    return False
+            else:
+                new_name = desired_name
+            new_name = str(new_name).strip()
+            if not new_name:
+                self._notify("Name cannot be empty.")
+                return False
+            if any(ch in new_name for ch in "\\/:*?\"<>|"):
+                self._notify("Invalid folder name.")
+                return False
+            dest_path = src_path.with_name(new_name)
+
+        if dest_path == src_path:
+            return False
+        if dest_path.exists():
+            self._notify("A file/folder with this name already exists.")
+            return False
+        try:
+            src_path.rename(dest_path)
+        except Exception as exc:
+            self._notify(f"Rename failed:\n{exc}")
+            return False
+
+        if kind == "image":
+            old_name = str(item.data(1) or "")
+            item.setData(1, dest_path.name)
+            if isinstance(item, BoardImageItem):
+                item.set_file_path(dest_path)
+            if self._edit_image_path == src_path:
+                self._edit_image_path = dest_path
+            if self._edit_exr_path == src_path:
+                self._edit_exr_path = dest_path
+            if old_name and old_name in self._image_exr_display_overrides:
+                self._image_exr_display_overrides[dest_path.name] = self._image_exr_display_overrides.pop(old_name)
+        elif kind == "video":
+            item.setData(1, dest_path.name)
+            if isinstance(item, BoardVideoItem):
+                item.set_file_path(dest_path)
+            if self._focus_video_path == src_path:
+                self._focus_video_path = dest_path
+            if self._edit_video_path == src_path:
+                self._edit_video_path = dest_path
+        elif kind == "sequence":
+            rel = self._relative_to_project(dest_path)
+            item.setData(1, rel)
+            if isinstance(item, BoardSequenceItem):
+                item.set_dir_path(dest_path)
+            if self._edit_seq_dir == src_path:
+                self._edit_seq_dir = dest_path
+                self._edit_seq_frames = self._sequence_frame_paths(dest_path)
+
+        self._dirty = True
+        self._schedule_group_tree_update()
+        self._schedule_history_snapshot()
+        self._notify(f"Renamed to: {dest_path.name}")
+        return True
 
     def _notify(self, text: str) -> None:
         self.w.asset_status.setText(text)
