@@ -367,6 +367,7 @@ class _ImageAdjustPreviewWorker(QtCore.QObject):
 
 
 class _VideoSegmentWorker(QtCore.QObject):
+    status = QtCore.Signal(str)
     progress = QtCore.Signal(int, int)
     finished = QtCore.Signal(bool, object, object)
 
@@ -384,15 +385,18 @@ class _VideoSegmentWorker(QtCore.QObject):
             self.finished.emit(False, None, "OpenCV not available.")
             return
         try:
+            self.status.emit("Opening video...")
             cap = cv2.VideoCapture(str(self._video_path))
             if not cap.isOpened():
                 cap.release()
                 self.finished.emit(False, None, "Failed to open video.")
                 return
+            self.status.emit(f"Seeking to frame {self._start}...")
             cap.set(1, self._start)  # CAP_PROP_POS_FRAMES
             idx = 0
             total = max(1, self._end - self._start + 1)
             stem = self._video_path.stem
+            self.status.emit(f"Exporting {total} frames...")
             while True:
                 if self._cancel:
                     cap.release()
@@ -1155,6 +1159,17 @@ class BoardController:
         except Exception:
             pass
 
+    def _log_export_event(self, message: str) -> None:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[EXPORT] {stamp} {message}"
+        print(line)
+        try:
+            log_path = Path(__file__).resolve().parents[1] / "board_export.log"
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            pass
+
     def _ui_alive(self) -> bool:
         if self._shutting_down:
             return False
@@ -1484,11 +1499,15 @@ class BoardController:
             return iconvert
         return None
 
-    def convert_picnc_interactive(self, src_path: Optional[Path] = None) -> None:
+    def convert_picnc_interactive(
+        self,
+        src_path: Optional[Path] = None,
+        scene_pos: Optional[QtCore.QPointF] = None,
+    ) -> Optional[QtWidgets.QGraphicsPixmapItem]:
         iconvert = self._find_iconvert()
         if iconvert is None:
             self._notify("iconvert.exe not found. Set Houdini path in Settings.")
-            return
+            return None
         if src_path is None:
             src_path_str, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self.w,
@@ -1497,7 +1516,7 @@ class BoardController:
                 "Houdini PIC (*.picnc *.pic)",
             )
             if not src_path_str:
-                return
+                return None
             src_path = Path(src_path_str)
         choice = QtWidgets.QMessageBox.question(
             self.w,
@@ -1524,7 +1543,7 @@ class BoardController:
             "Images (*.jpg *.jpeg *.exr)",
         )
         if not out_path_str:
-            return
+            return None
         out_path = Path(out_path_str)
         try:
             import subprocess
@@ -1535,10 +1554,11 @@ class BoardController:
             subprocess.check_call([str(iconvert), str(src_path), str(out_path)], env=houdini_env)
         except Exception as exc:
             self._notify(f"iconvert failed:\n{exc}")
-            return
+            return None
         self._notify(f"Converted: {out_path.name}")
         if out_path.suffix.lower() in IMAGE_EXTS:
-            self.add_image_from_path(out_path)
+            return self.add_image_from_path(out_path, scene_pos=scene_pos)
+        return None
 
     def add_paths_from_selection(
         self, paths: list[Path], scene_pos: Optional[QtCore.QPointF] = None
@@ -1549,8 +1569,9 @@ class BoardController:
         if not paths:
             return
         if scene_pos is None:
-            scene_pos = self._scene.sceneRect().center()
+            scene_pos = self._current_view_scene_center()
         added = 0
+        added_items: list[QtWidgets.QGraphicsItem] = []
         added_images: list[BoardImageItem] = []
         offset = QtCore.QPointF(30.0, 30.0)
         current_pos = QtCore.QPointF(scene_pos)
@@ -1564,11 +1585,14 @@ class BoardController:
                     if isinstance(item, BoardImageItem):
                         added_images.append(item)
                 elif self._is_pic_file(path):
-                    self.convert_picnc_interactive(path)
+                    item = self.convert_picnc_interactive(path, scene_pos=current_pos)
+                    if isinstance(item, BoardImageItem):
+                        added_images.append(item)
             elif path.exists() and path.is_dir():
                 item = self.add_sequence_from_dir(path, scene_pos=current_pos)
             if item is not None:
                 added += 1
+                added_items.append(item)
                 current_pos = QtCore.QPointF(current_pos.x() + offset.x(), current_pos.y() + offset.y())
         if added == 0:
             self._notify("No supported media found in selection.")
@@ -1584,6 +1608,9 @@ class BoardController:
                 img.setSelected(False)
             for sel in prev_selected:
                 sel.setSelected(True)
+        self._reveal_scene_items(added_items)
+        self._schedule_group_tree_update()
+        self.save_board()
 
     def add_sequence(self) -> None:
         if not self._project_root:
@@ -1881,6 +1908,27 @@ class BoardController:
             return
         self.w.board_page.view.fitInView(rect.adjusted(-80, -80, 80, 80), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
 
+    def _current_view_scene_center(self) -> QtCore.QPointF:
+        view = self.w.board_page.view
+        viewport_rect = view.viewport().rect()
+        if viewport_rect.isNull():
+            return self._scene.sceneRect().center()
+        return view.mapToScene(viewport_rect.center())
+
+    def _reveal_scene_items(self, items: list[QtWidgets.QGraphicsItem]) -> None:
+        if not items:
+            return
+        rect = QtCore.QRectF()
+        for item in items:
+            if item is None or item.scene() is not self._scene:
+                continue
+            rect = rect.united(item.sceneBoundingRect())
+        if rect.isNull():
+            return
+        view = self.w.board_page.view
+        margins = 80
+        view.ensureVisible(rect.adjusted(-margins, -margins, margins, margins))
+
     def layout_selection_grid(self) -> None:
         items = [i for i in self._scene.selectedItems() if isinstance(i, QtWidgets.QGraphicsItem)]
         if not items:
@@ -1937,8 +1985,16 @@ class BoardController:
     def save_board(self) -> None:
         if not self._project_root:
             return
-        self._commit_current_focus_image_override()
         board_path = self._project_root / ".skyforge_board.json"
+        existing_payload = self._read_board_payload(board_path)
+        if self._should_block_empty_board_save(existing_payload):
+            self._backup_board_payload(board_path, existing_payload, "blocked-empty-save")
+            print(f"[BOARD] Skipped suspicious empty save: {board_path}")
+            self._notify(
+                "Skipped board save to avoid overwriting an existing board with an empty scene."
+            )
+            return
+        self._commit_current_focus_image_override()
         data = self._build_payload()
         try:
             self._saving = True
@@ -1952,6 +2008,56 @@ class BoardController:
 
     def _clear_saving(self) -> None:
         self._saving = False
+
+    @staticmethod
+    def _payload_item_count(payload: object) -> int:
+        if not isinstance(payload, dict):
+            return 0
+        items = payload.get("items", [])
+        if not isinstance(items, list):
+            return 0
+        return sum(1 for entry in items if isinstance(entry, dict))
+
+    @staticmethod
+    def _read_board_payload(board_path: Path) -> Optional[dict]:
+        if not board_path.exists():
+            return None
+        try:
+            payload = json.loads(board_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _board_load_in_progress(self) -> bool:
+        timer_active = self._apply_timer is not None and self._apply_timer.isActive()
+        return self._loading or timer_active or bool(self._apply_queue)
+
+    def _should_block_empty_board_save(self, existing_payload: Optional[dict]) -> bool:
+        if not self._project_root:
+            return False
+        current_count = self._payload_item_count(self._build_payload())
+        existing_count = self._payload_item_count(existing_payload)
+        if current_count != 0 or existing_count <= 0:
+            return False
+        if self._board_load_in_progress():
+            return True
+        return not self._dirty
+
+    def _backup_board_payload(
+        self, board_path: Path, payload: Optional[dict], reason: str
+    ) -> Optional[Path]:
+        if not self._project_root or not isinstance(payload, dict):
+            return None
+        backup_dir = self._project_root / ".skyforge_board_backups"
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            safe_reason = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in reason)
+            backup_path = backup_dir / f"{stamp}_{safe_reason}.json"
+            backup_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            return backup_path
+        except Exception:
+            return None
 
     def load_board(self) -> None:
         if not self._project_root:
@@ -2488,13 +2594,8 @@ class BoardController:
             self._edit_seq_timer.timeout.connect(self._advance_edit_sequence_frame)
         self._edit_seq_playing = False
         self.w.board_page.edit_sequence_play_btn.setText("Play")
+        self._edit_video_playhead = 0
         if frames:
-            first = frames[0]
-            pixmap = self._get_display_pixmap(first, max_dim=1024)
-            self.w.board_page.show_edit_preview_sequence(
-                pixmap,
-                label=f"{first.name} (1/{len(frames)})",
-            )
             self.w.board_page.edit_sequence_slider.blockSignals(True)
             self.w.board_page.edit_sequence_slider.setRange(0, max(0, len(frames) - 1))
             self.w.board_page.edit_sequence_slider.setValue(0)
@@ -2502,16 +2603,15 @@ class BoardController:
             self.w.board_page.edit_sequence_timeline.set_data(len(frames), [(0, len(frames) - 1)], 0)
             self.w.board_page.edit_sequence_frame_label.setText("Frame: 0")
         else:
-            placeholder = self._build_media_placeholder("SEQ", dir_path.name)
-            self.w.board_page.show_edit_preview_sequence(placeholder, label="No frames found.")
             self.w.board_page.edit_sequence_slider.setRange(0, 0)
             self.w.board_page.edit_sequence_timeline.set_data(0, [], 0)
             self.w.board_page.edit_sequence_frame_label.setText("Frame: 0")
         # Use the main timeline bar for sequences as well
         self.w.board_page.edit_timeline.set_data(len(frames), [(0, max(0, len(frames) - 1))], 0)
         self.w.board_page.set_timeline_bar_visible(True)
-        self.w.board_page.set_edit_preview_visible(False)
         self._edit_focus_kind = "sequence"
+        self.w.board_page.set_edit_preview_visible(False)
+        self._on_edit_sequence_timeline_playhead(0)
 
     def _show_edit_panel_for_image(self, path: Path) -> None:
         size = self._get_image_size(path)
@@ -2645,11 +2745,10 @@ class BoardController:
         self.w.board_page.edit_timeline_export_btn.setEnabled(True)
 
     def _on_edit_timeline_playhead(self, frame: int) -> None:
-        self._edit_video_playhead = max(0, min(int(frame), max(0, self._edit_video_total - 1)))
         if self._edit_focus_kind == "sequence":
-            self._on_edit_sequence_timeline_playhead(self._edit_video_playhead)
-            self.w.board_page.edit_timeline_frame_label.setText(f"Frame: {self._edit_video_playhead}")
+            self._on_edit_sequence_timeline_playhead(int(frame))
             return
+        self._edit_video_playhead = max(0, min(int(frame), max(0, self._edit_video_total - 1)))
         if self._edit_video_controller is not None and not self._edit_timeline_scrubbing:
             self._edit_video_controller.seek_frame(self._edit_video_playhead)
         if isinstance(self._focus_item, BoardVideoItem):
@@ -2698,61 +2797,104 @@ class BoardController:
     def _export_edit_clip(self) -> None:
         if self._edit_video_path is None or not self._edit_video_clips:
             return
+        self._log_export_event("Export clip requested.")
         idx = self._edit_selected_clip if self._edit_selected_clip >= 0 else self._find_clip_at_playhead()
         if idx is None:
+            self._log_export_event("Export aborted: no clip selected.")
             return
         start, end = self._edit_video_clips[idx]
+        self._log_export_event(f"Selected clip {idx}: frames {start}-{end}.")
         if self._segment_thread is not None:
+            self._log_export_event("Export aborted: segment thread already running.")
             self._notify("Export already running.")
             return
         if not self._project_root:
+            self._log_export_event("Export aborted: no project root.")
             self._notify("Select a project first.")
             return
         assets_dir = self._project_root / ".skyforge_board_assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
         out_dir = assets_dir / f"{self._edit_video_path.stem}_seg_{start}_{end}"
         out_dir.mkdir(parents=True, exist_ok=True)
+        self._log_export_event(f"Output directory ready: {out_dir}")
 
         dialog = QtWidgets.QProgressDialog("Exporting segment...", "Cancel", 0, 100, self.w)
         dialog.setWindowTitle("Export Segment")
-        dialog.setMinimumDuration(200)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setRange(0, 0)
         dialog.setValue(0)
         dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        dialog.setLabelText(
+            f"Preparing export for frames {start}-{end}...\nOutput: {out_dir.name}"
+        )
+        dialog.show()
+        self._log_export_event("Progress dialog shown.")
         self._segment_dialog = dialog
+        self.w.board_page.edit_timeline_split_btn.setEnabled(False)
+        self.w.board_page.edit_timeline_export_btn.setEnabled(False)
 
         worker = _VideoSegmentWorker(self._edit_video_path, out_dir, start, end)
         thread = QtCore.QThread(self.w)
         worker.moveToThread(thread)
+        determinate_progress = False
 
-        def _on_progress(current: int, total: int) -> None:
+        def _on_status(text: str) -> None:
+            self._log_export_event(f"Worker status: {text}")
             if self._segment_dialog is None:
                 return
+            self._segment_dialog.setLabelText(
+                f"{text}\nFrames {start}-{end}\nOutput: {out_dir.name}"
+            )
+
+        def _on_progress(current: int, total: int) -> None:
+            nonlocal determinate_progress
+            if self._segment_dialog is None:
+                return
+            if not determinate_progress:
+                self._segment_dialog.setRange(0, 100)
+                determinate_progress = True
+                self._log_export_event(f"Progress became determinate: total={total}")
             percent = int((current / max(1, total)) * 100)
             self._segment_dialog.setValue(min(100, max(0, percent)))
-            self._segment_dialog.setLabelText(f"Exporting frames... {current}/{total}")
-            QtWidgets.QApplication.processEvents()
+            self._segment_dialog.setLabelText(
+                f"Exporting frames... {current}/{total}\nFrames {start}-{end}\nOutput: {out_dir.name}"
+            )
 
         def _on_finished(success: bool, out_path: object, error: object) -> None:
+            self._log_export_event(f"Worker finished: success={success} out={out_path} error={error}")
             if self._segment_dialog is not None:
                 self._segment_dialog.reset()
                 self._segment_dialog = None
             self._segment_thread = None
             self._segment_worker = None
+            self.w.board_page.edit_timeline_split_btn.setEnabled(True)
+            self.w.board_page.edit_timeline_export_btn.setEnabled(True)
             if not success:
                 self._notify(str(error or "Export failed."))
                 return
             if isinstance(out_path, Path):
+                if self._focus_item is not None:
+                    self.exit_focus_mode()
                 item = self.add_sequence_from_dir(out_path)
                 if item is not None:
+                    item.setSelected(True)
+                    self._reveal_scene_items([item])
+                    self.save_board()
                     self._notify("Segment exported as sequence.")
             else:
                 self._notify("Export completed.")
 
         def _on_cancel() -> None:
+            self._log_export_event("Cancel requested.")
+            if self._segment_dialog is not None:
+                self._segment_dialog.setLabelText("Cancelling export...")
             if self._segment_worker is not None:
                 self._segment_worker.cancel()
 
         dialog.canceled.connect(_on_cancel)
+        worker.status.connect(_on_status)
         worker.progress.connect(_on_progress)
         worker.finished.connect(_on_finished)
         worker.finished.connect(thread.quit)
@@ -2762,32 +2904,34 @@ class BoardController:
 
         self._segment_thread = thread
         self._segment_worker = worker
-        thread.start()
+
+        def _start_export_thread() -> None:
+            self._log_export_event("Starting export thread.")
+            if self._segment_thread is thread:
+                thread.start()
+
+        QtCore.QTimer.singleShot(0, _start_export_thread)
 
     def _on_edit_sequence_slider(self, value: int) -> None:
         if not self._edit_seq_frames:
             return
         idx = max(0, min(value, len(self._edit_seq_frames) - 1))
-        frame = self._edit_seq_frames[idx]
-        pixmap = self._get_display_pixmap(frame, max_dim=1024)
-        self.w.board_page.show_edit_preview_sequence(
-            pixmap,
-            label=f"{frame.name} ({idx + 1}/{len(self._edit_seq_frames)})",
-        )
-        self.w.board_page.edit_sequence_frame_label.setText(f"Frame: {idx}")
+        self._edit_video_playhead = idx
         self.w.board_page.edit_sequence_timeline.set_playhead(idx)
+        self._on_edit_sequence_timeline_playhead(idx)
 
     def _on_edit_sequence_timeline_playhead(self, frame: int) -> None:
         if not self._edit_seq_frames:
             return
         idx = max(0, min(int(frame), len(self._edit_seq_frames) - 1))
+        self._edit_video_playhead = idx
         self.w.board_page.edit_sequence_slider.blockSignals(True)
         self.w.board_page.edit_sequence_slider.setValue(idx)
         self.w.board_page.edit_sequence_slider.blockSignals(False)
-        self._on_edit_sequence_slider(idx)
+        self.w.board_page.edit_timeline_frame_label.setText(f"Frame: {idx}")
         if isinstance(self._focus_item, BoardSequenceItem):
             frame_path = self._edit_seq_frames[idx]
-            pixmap = self._get_display_pixmap(frame_path, max_dim=512)
+            pixmap = self._get_display_pixmap(frame_path, max_dim=self._max_display_dim)
             self._focus_item.set_override_pixmap(pixmap)
 
     def _toggle_edit_sequence_play(self) -> None:
@@ -3975,7 +4119,7 @@ class BoardController:
         if not isinstance(self._focus_item, BoardVideoItem):
             return
         self._ensure_focus_video_cap()
-        pixmap = self._get_focus_video_frame_pixmap(idx, max_dim=512)
+        pixmap = self._get_focus_video_frame_pixmap(idx, max_dim=self._max_display_dim)
         if pixmap is not None:
             self._focus_item.set_override_pixmap(pixmap)
 

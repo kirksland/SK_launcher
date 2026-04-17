@@ -1031,10 +1031,12 @@ class BoardPage(QtWidgets.QWidget):
 
         self.edit_sequence_timeline = _TimelineWidget()
         seq_layout.addWidget(self.edit_sequence_timeline, 0)
+        self.edit_sequence_timeline.setVisible(False)
 
         self.edit_sequence_frame_label = QtWidgets.QLabel("Frame: 0")
         self.edit_sequence_frame_label.setStyleSheet(muted_text_style())
         seq_layout.addWidget(self.edit_sequence_frame_label, 0)
+        self.edit_sequence_frame_label.setVisible(False)
         self.edit_preview_stack.addWidget(self.edit_sequence_panel)
 
         self.edit_list = QtWidgets.QListWidget()
