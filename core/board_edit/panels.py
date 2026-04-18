@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from tools.edit_tools import get_edit_tool, list_edit_tools
+from tools.board_tools.edit import get_edit_tool, list_edit_tools
 
 from .tool_stack import get_tool_settings
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np  # type: ignore
 
-from .registry import register_tool
+from tools.board_tools.image import register_tool
 
 
 def _apply_bcs(rgb: object, settings: dict) -> object:
@@ -34,4 +34,3 @@ def _apply_bcs(rgb: object, settings: dict) -> object:
 
 
 register_tool("bcs", _apply_bcs)
-

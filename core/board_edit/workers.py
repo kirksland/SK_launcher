@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui
 
-from tools.image_tools.registry import apply_image_tool_stack, build_bcs_stack, normalize_tool_stack
+from tools.board_tools.image import apply_image_tool_stack, build_bcs_stack, normalize_tool_stack
 
 try:
     import cv2  # type: ignore

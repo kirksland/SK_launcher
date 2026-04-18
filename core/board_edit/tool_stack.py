@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from tools.edit_tools import get_edit_tool
-from tools.image_tools.registry import normalize_tool_stack
+from tools.board_tools.edit import get_edit_tool
+from tools.board_tools.image import normalize_tool_stack
 from .handles import sanitize_crop
 
 

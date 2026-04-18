@@ -2,341 +2,343 @@
 
 Date: 2026-04-18
 
-## Le point important
+## Idee simple
 
-Il y a **deux couches differentes** dans le systeme de tools:
+La cible maintenant, c'est:
+
+- un tool = un dossier
+- ce dossier porte ses capacites optionnelles
+
+Concretement:
+
+```text
+tools/
+  board_tools/
+    <tool_id>/
+      tool.py
+      image.py
+      scene.py
+```
+
+Tous les fichiers ne sont pas obligatoires:
+
+- `tool.py`
+  - spec board/edit
+  - UI
+  - defaults
+  - normalisation
+  - support media
+- `image.py`
+  - rendu raster sur preview/export image
+- `scene.py`
+  - interaction de scene
+  - handles
+  - hit test
+  - drag
+
+## Pourquoi on fait ca
+
+Avant, un tool complet pouvait etre disperse entre:
 
 - `tools/edit_tools/`
-  - decrit un tool pour le board edit
-  - sert a l'UI, a la stack, a la normalisation, aux defaults, a l'ordre et au support media
 - `tools/image_tools/`
-  - applique concretement un effet raster sur une image preview
-  - sert au rendu image pendant les previews ou exports image
+- parfois `core/board_edit/`
 
-En bref:
+La separation etait saine pour sortir du monolithe, mais pas tres agreable a maintenir.
 
-- `edit_tools` = "definition produit / UX / state"
-- `image_tools` = "execution pixel"
+La vraie organisation a viser est:
 
-## Pourquoi on a les deux
+- `tools/board_tools/<tool_id>/...`
 
-Un tool du board n'est pas forcement un simple filtre image.
+## Les trois couches a bien distinguer
 
-Exemples:
+### 1. `tool.py`
 
-- `bcs`
-  - a une UI avec 3 sliders
-  - a un etat dans la `tool_stack`
-  - a aussi un rendu pixel sur les previews image
-- `vibrance`
-  - meme logique
-- `crop`
-  - a une UI
-  - a un etat dans la `tool_stack`
-  - a une interaction de scene
-  - mais **n'est pas** un filtre raster `image_tools`
+C'est la definition du tool dans le board.
 
-Donc:
+Il dit:
 
-- si ton tool existe dans le board edit, il lui faut une spec `edit_tools`
-- s'il doit transformer des pixels RGB, il lui faut en plus un module `image_tools`
-- s'il manipule la scene au lieu des pixels, il peut avoir une spec `edit_tools` sans `image_tools`
-
-## Vue simple du flux
-
-### 1. Definition du tool
-
-Le tool est decouvert via:
-
-- `tools/edit_tools/registry.py`
-
-Chaque tool enregistre une `EditToolSpec` dans un dossier:
-
-- `tools/edit_tools/<tool_id>/tool.py`
-
-La spec dit:
-
-- quel est son `id`
-- sur quels medias il marche (`supports`)
+- son `id`
+- son `label`
+- sur quels medias il marche
 - son etat par defaut
-- comment normaliser son etat
+- comment normaliser cet etat
 - comment savoir s'il est actif
-- quel panneau UI afficher
-- quels controles UI il expose
-
-### 2. Integration dans le board
-
-Le board:
-
-- liste les tools disponibles selon `supports`
-- lit la spec via `get_edit_tool(...)`
-- construit/synchronise les panels via `core/board_edit/panels.py`
-- stocke le state dans la `tool_stack`
-
-### 3. Rendu effectif
-
-Selon le type de tool:
-
-- soit le rendu passe par `tools/image_tools/registry.py` puis `apply_image_tool_stack(...)`
-- soit le comportement passe par un runtime ou une interaction de scene
-  - exemple: `core/board_edit/crop_scene.py`
-
-## Quand creer quoi
-
-### Cas A. Tool purement declaratif / logique board
+- quel panel UI il expose
+- quels sliders/controles il decrit
 
 Exemple:
 
-- un toggle metadata
-- un offset de timing
-- un crop de scene
+- `tools/board_tools/bcs/tool.py`
+- `tools/board_tools/crop/tool.py`
+
+### 2. `image.py`
+
+C'est l'execution pixel.
+
+Il prend:
+
+- une image RGB
+- des `settings`
+
+et retourne une image transformee.
+
+Exemple:
+
+- `tools/board_tools/bcs/image.py`
+- `tools/board_tools/vibrance/image.py`
+
+### 3. `scene.py`
+
+C'est l'interaction dans la scene.
+
+Il gere par exemple:
+
+- les handles
+- les overlays
+- le drag
+- le hit test
+
+Exemple:
+
+- `tools/board_tools/crop/scene.py`
+
+## Quand creer quoi
+
+### Cas A. Tool de board simple
+
+Exemple:
+
+- metadata toggle
+- offset logique
+- parametre stocke dans la `tool_stack`
 
 A faire:
 
-- `tools/edit_tools/<tool_id>/tool.py`
+- `tools/board_tools/<tool_id>/tool.py`
 
-Pas necessaire:
-
-- `tools/image_tools/<tool_id>.py`
-
-### Cas B. Tool de reglage image avec preview raster
+### Cas B. Tool image
 
 Exemple:
 
 - exposure
 - hue shift
 - gamma
+- sharpen
 
 A faire:
 
-- `tools/edit_tools/<tool_id>/tool.py`
-- `tools/image_tools/<tool_id>.py`
+- `tools/board_tools/<tool_id>/tool.py`
+- `tools/board_tools/<tool_id>/image.py`
 
 ### Cas C. Tool interactif de scene
 
 Exemple:
 
-- crop avec handles
-- perspective handles
-- region mask editable dans la vue
+- crop
+- perspective box
+- region mask
 
 A faire:
 
-- `tools/edit_tools/<tool_id>/tool.py`
-- un module runtime/scene dedie dans `core/board_edit/*` ou `core/board_scene/*`
+- `tools/board_tools/<tool_id>/tool.py`
+- `tools/board_tools/<tool_id>/scene.py`
 
-Pas forcement necessaire:
-
-- `tools/image_tools/<tool_id>.py`
-
-## Anatomie d'un `edit_tool`
+### Cas D. Tool complet
 
 Exemple:
 
-- `tools/edit_tools/bcs/tool.py`
+- un tool avec UI + rendu image + interaction scene
 
-Une spec contient surtout:
+A faire:
 
-- `id`
-- `label`
-- `supports`
-- `default_state_factory`
-- `normalize_state_fn`
-- `is_effective_fn`
-- `order`
-- `stack_insert_at`
-- `ui_panel`
-- `ui_settings_keys`
-- `ui_controls`
+- `tools/board_tools/<tool_id>/tool.py`
+- `tools/board_tools/<tool_id>/image.py`
+- `tools/board_tools/<tool_id>/scene.py`
 
-### Role des champs
+## Comment ca se branche
 
-- `supports`
-  - determine si le tool est dispo pour `image`, `video`, `sequence`, etc.
-- `default_state_factory`
-  - construit l'etat par defaut
-- `normalize_state_fn`
-  - garantit un state propre et borné
-- `is_effective_fn`
-  - dit si le tool a un vrai effet ou s'il est a son etat neutre
-- `stack_insert_at`
-  - permet de choisir une position preferentielle dans la `tool_stack`
-- `ui_panel`
-  - nom du panel UI associe
-- `ui_settings_keys`
-  - cles attendues pour l'etat UI
-- `ui_controls`
-  - description declarative des sliders/controles
+### Discovery edit
 
-## Anatomie d'un `image_tool`
+La couche edit est maintenant:
 
-Exemple:
+- `tools/board_tools/edit.py`
 
-- `tools/image_tools/bcs.py`
+decouvre maintenant:
 
-Le pattern est simple:
+- les anciens tools `tools/edit_tools/*`
+- les nouveaux tools `tools/board_tools/*/tool.py`
 
-1. tu crees une fonction `apply_fn(rgb, settings)`
-2. tu enregistres le tool avec `register_tool("<tool_id>", apply_fn)`
+### Discovery image
 
-Contraintes pratiques:
+La couche image est maintenant:
 
-- l'input est un RGB array
-- le tool doit etre tolerant aux erreurs
-- il doit retourner un array image compatible
-- le `tool_id` doit matcher la spec `edit_tools`
+- `tools/board_tools/image.py`
 
-## Recette: ajouter un nouveau tool image
+decouvre maintenant:
+
+- les anciens modules `tools/image_tools/*.py`
+- les nouveaux modules `tools/board_tools/*/image.py`
+
+Donc on peut migrer progressivement sans casser l'app.
+
+### Discovery unifiee
+
+On a maintenant aussi une registry source de verite:
+
+- `tools/board_tools/registry.py`
+
+Elle expose les capacites d'un tool:
+
+- `has_tool`
+- `has_image`
+- `has_scene`
+
+Le but est que le board puisse raisonner a terme sur des capacites explicites, pas juste sur des conventions de fichiers implicites.
+
+Pour les tools interactifs, la couche `scene.py` peut maintenant exposer un runtime formel:
+
+- `SCENE_RUNTIME`
+
+Ce runtime suit un contrat explicite via:
+
+- `tools/board_tools/base.py`
+- `BoardToolSceneRuntime`
+
+Les hooks attendus sont:
+
+- `refresh_handles`
+- `clear_handles`
+- `panel_value_changed`
+- `mouse_press`
+- `mouse_move`
+- `mouse_release`
+- optionnellement `apply_to_focus_item`
+
+## Ce qu'il reste en compatibilite
+
+L'ancienne separation `tools/edit_tools` / `tools/image_tools` a maintenant ete retiree du code actif.
+
+Pareil pour:
+
+- `core/board_edit/crop_scene.py`
+
+qui reste comme point d'entree stable, tout en reexportant maintenant:
+
+- `tools/board_tools/crop/scene.py`
+
+## Recette: creer un nouveau tool image
 
 Exemple: `exposure`
 
-### 1. Creer la spec board edit
-
-Chemin:
-
-- `tools/edit_tools/exposure/tool.py`
-
-Tu y definis:
-
-- `id="exposure"`
-- `supports=("image",)`
-- un state du style `{"amount": 0.0}`
-- une normalisation
-- `ui_panel="exposure"`
-- `ui_settings_keys=("amount",)`
-- un `ToolUiControlSpec("amount", "Exposure", -2.0, 2.0, ...)`
-
-### 2. Enregistrer la spec
-
-Dans ce meme fichier:
-
-- `register_edit_tool(EditToolSpec(...))`
-
-### 3. Ajouter le rendu raster
-
-Chemin:
-
-- `tools/image_tools/exposure.py`
-
-Tu y definis:
-
-- `_apply_exposure(rgb, settings)`
-- `register_tool("exposure", _apply_exposure)`
-
-### 4. Verifier que le tool apparait
-
-Le board decouvre automatiquement:
-
-- les specs `tools/edit_tools/*/tool.py`
-- les renderers `tools/image_tools/*.py`
-
-Donc normalement il n'y a rien d'autre a brancher si ton tool suit le contrat existant.
-
-## Recette: ajouter un tool interactif
-
-Exemple: un tool `mask_box`
-
-### 1. Faire la spec `edit_tools`
-
-Elle decrit:
-
-- l'etat
-- les defaults
-- la normalisation
-- les sliders ou champs eventuels
-
-### 2. Faire un module runtime/scene
-
-Exemple de cible:
-
-- `core/board_edit/mask_box_scene.py`
-
-Il portera:
-
-- hit test
-- drag state
-- creation d'overlays
-- calcul des nouvelles valeurs
-
-### 3. Garder `BoardController` en orchestrateur
-
-Le controller ne devrait faire que:
-
-- appeler le runtime de scene
-- propager l'etat vers la `tool_stack`
-- commit les overrides / previews si necessaire
-
-## Regle pratique pour ne pas se perdre
-
-Pose-toi juste cette question:
-
-> Est-ce que je suis en train de decrire un tool pour le board, ou d'executer un effet sur des pixels ?
-
-Si tu decris:
-
-- `tools/edit_tools`
-
-Si tu executes un rendu image:
-
-- `tools/image_tools`
-
-Si tu pilotes la scene/interactions:
-
-- `core/board_edit` ou `core/board_scene`
-
-## Structure recommandee pour un nouveau tool
-
-Pour un tool complet `exposure`:
+Structure recommandee:
 
 ```text
 tools/
-  edit_tools/
+  board_tools/
     exposure/
       __init__.py
       tool.py
-  image_tools/
-    exposure.py
-tests/
-  test_board_edit_panels.py
-  test_board_tool_stack.py
+      image.py
 ```
 
-Pour un tool interactif sans rendu raster:
+### `tool.py`
+
+Tu definis:
+
+- `id="exposure"`
+- `supports=("image",)`
+- un state par defaut
+- une normalisation
+- un `ui_panel`
+- des `ui_controls`
+
+Puis tu fais:
+
+- `register_edit_tool(EditToolSpec(...))`
+
+### `image.py`
+
+Tu definis:
+
+- `_apply_exposure(rgb, settings)`
+
+Puis:
+
+- `register_tool("exposure", _apply_exposure)`
+
+## Recette: creer un tool interactif
+
+Exemple: `mask_box`
+
+Structure recommandee:
 
 ```text
 tools/
-  edit_tools/
-    crop_like_tool/
+  board_tools/
+    mask_box/
       __init__.py
       tool.py
-core/
-  board_edit/
-    crop_like_tool_scene.py
+      scene.py
 ```
 
-## Fichiers a regarder comme exemples
+### `tool.py`
 
-- `tools/edit_tools/bcs/tool.py`
-- `tools/edit_tools/vibrance/tool.py`
-- `tools/edit_tools/crop/tool.py`
-- `tools/image_tools/bcs.py`
-- `tools/image_tools/vibrance.py`
-- `core/board_edit/panels.py`
-- `core/board_edit/crop_scene.py`
+Decrit:
 
-## Conclusion simple
+- les settings
+- les defaults
+- la normalisation
+- les controles UI
 
-Le systeme n'est pas "double" pour rien.
+### `scene.py`
 
-Il separe volontairement:
+Porte:
 
-- la description d'un tool dans le board
-- l'execution technique de son rendu
+- les handles
+- l'etat de drag
+- la creation des overlays
+- le calcul des nouvelles valeurs
 
-C'est justement ce qui permet d'avoir:
+Le `BoardController` ne devrait faire que:
 
-- des tools purement UI/state
-- des tools raster
-- des tools interactifs de scene
+- appeler ce runtime
+- remettre a jour la `tool_stack`
+- commit preview/override si besoin
 
-sans tout remelanger dans `BoardController`.
+## Regle mentale utile
+
+Pose-toi juste cette question:
+
+> Est-ce que je suis en train de definir le tool, de transformer des pixels, ou de piloter la scene ?
+
+La reponse donne directement le fichier:
+
+- definition du tool -> `tool.py`
+- rendu image -> `image.py`
+- interaction scene -> `scene.py`
+
+## Exemples actuels
+
+- `tools/board_tools/edit.py`
+- `tools/board_tools/image.py`
+- `tools/board_tools/bcs/tool.py`
+- `tools/board_tools/bcs/image.py`
+- `tools/board_tools/vibrance/tool.py`
+- `tools/board_tools/vibrance/image.py`
+- `tools/board_tools/crop/tool.py`
+- `tools/board_tools/crop/scene.py`
+
+## Conclusion
+
+La structure qu'on vise n'est plus:
+
+- un systeme par dossier technique global
+
+mais:
+
+- un systeme par tool
+
+avec des capacites optionnelles regroupees ensemble.
+
+C'est beaucoup plus plug & play, beaucoup plus lisible, et plus naturel pour faire evoluer le board dans le temps.

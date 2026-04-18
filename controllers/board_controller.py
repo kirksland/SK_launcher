@@ -109,8 +109,9 @@ from core.board_scene.groups import (
 )
 from core.board_scene.items import BoardGroupItem, BoardImageItem, BoardNoteItem, BoardSequenceItem, BoardVideoItem
 from core.houdini_env import build_houdini_env
-from tools.edit_tools import available_tools_for_kind, discover_edit_tools, get_edit_tool, list_edit_tools
-from tools.image_tools.registry import apply_image_tool_stack, build_bcs_stack, normalize_tool_stack
+from tools.board_tools.edit import available_tools_for_kind, discover_edit_tools, get_edit_tool, list_edit_tools
+from tools.board_tools.image import apply_image_tool_stack, build_bcs_stack, normalize_tool_stack
+from tools.board_tools.registry import get_board_tool, get_board_tool_scene_runtime
 from video.player import VideoController
 
 try:
@@ -2280,12 +2281,16 @@ class BoardController:
             tool_id = str(getattr(spec, "id", "") or "").strip().lower()
             if not tool_id:
                 continue
+            tool_caps = get_board_tool(tool_id)
+            has_scene = bool(getattr(tool_caps, "has_scene", False))
             for control in getattr(spec, "ui_controls", ()):
                 slider = self.w.board_page.image_tool_control_slider(getattr(control, "key", ""))
                 if slider is None:
                     continue
-                if str(tool_id).strip().lower() == "crop":
-                    slider.valueChanged.connect(self._on_edit_crop_changed)
+                if has_scene:
+                    slider.valueChanged.connect(
+                        lambda *_args, current_tool_id=tool_id: self._on_edit_scene_tool_panel_changed(current_tool_id)
+                    )
                 else:
                     slider.valueChanged.connect(
                         lambda *_args, current_tool_id=tool_id: self._on_edit_image_tool_panel_changed(
@@ -2315,7 +2320,7 @@ class BoardController:
             self.w.board_page.set_image_tool_panel_state(panel, state)
         selected_panel = self._selected_tool_panel()
         self.w.board_page.set_active_image_tool_panel(selected_panel)
-        self._refresh_focus_crop_handles()
+        self._refresh_focus_scene_handles()
 
     def _current_edit_tool_stack(self) -> list[dict[str, object]]:
         self._ensure_edit_tool_stack()
@@ -2484,6 +2489,11 @@ class BoardController:
         self._on_edit_image_tool_panel_changed("vibrance")
 
     def _apply_crop_to_focus_item(self) -> None:
+        scene_runtime = self._scene_tool_runtime("crop")
+        apply_hook = getattr(scene_runtime, "apply_to_focus_item", None) if scene_runtime is not None else None
+        if callable(apply_hook):
+            apply_hook(self)
+            return
         if not apply_crop_to_item(
             self._focus_item,
             (
@@ -2498,9 +2508,28 @@ class BoardController:
         if group is not None:
             group.update_bounds()
         self._refresh_scene_workspace()
-        self._refresh_focus_crop_handles()
+        self._refresh_focus_scene_handles()
+
+    def _selected_scene_tool_id(self) -> str:
+        selected = self._selected_tool_entry()
+        selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
+        tool_caps = get_board_tool(selected_id)
+        if tool_caps is None or not tool_caps.has_scene:
+            return ""
+        return selected_id
+
+    def _scene_tool_runtime(self, tool_id: str | None = None) -> object | None:
+        target_id = str(tool_id or "").strip().lower() or self._selected_scene_tool_id()
+        if not target_id:
+            return None
+        return get_board_tool_scene_runtime(target_id)
 
     def _clear_focus_crop_handles(self, *, reset_drag: bool = True) -> None:
+        scene_runtime = self._scene_tool_runtime()
+        clear_hook = getattr(scene_runtime, "clear_handles", None) if scene_runtime is not None else None
+        if callable(clear_hook):
+            clear_hook(self, reset_drag)
+            return
         (
             self._focus_handle_frame,
             self._focus_handle_items,
@@ -2514,72 +2543,50 @@ class BoardController:
             self._focus_crop_drag = None
 
     def _crop_handles_active(self) -> bool:
-        return crop_handles_active(self._focus_item, self._selected_tool_panel())
+        return self._selected_scene_tool_id() != ""
+
+    def _refresh_focus_scene_handles(self) -> None:
+        scene_runtime = self._scene_tool_runtime()
+        refresh_hook = getattr(scene_runtime, "refresh_handles", None) if scene_runtime is not None else None
+        if callable(refresh_hook):
+            refresh_hook(self)
+            return
+        self._clear_focus_crop_handles(reset_drag=False)
 
     def _refresh_focus_crop_handles(self) -> None:
-        self._clear_focus_crop_handles(reset_drag=False)
-        if not self._crop_handles_active():
+        self._refresh_focus_scene_handles()
+
+    def _on_edit_scene_tool_panel_changed(self, tool_id: str) -> None:
+        scene_runtime = self._scene_tool_runtime(tool_id)
+        panel_hook = getattr(scene_runtime, "panel_value_changed", None) if scene_runtime is not None else None
+        if callable(panel_hook):
+            panel_hook(self)
             return
-        if self._focus_item is None:
-            return
-        (
-            self._focus_handle_frame,
-            self._focus_handle_items,
-            self._focus_crop_layout,
-        ) = create_crop_handle_items(
-            self._scene,
-            self._focus_item.sceneBoundingRect(),
-            handle_size=12.0,
+        self._on_edit_image_tool_panel_changed(
+            tool_id,
+            insert_at=getattr(get_edit_tool(tool_id), "stack_insert_at", None),
         )
 
     def handle_view_mouse_press(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
-        if event.button() != QtCore.Qt.MouseButton.LeftButton:
-            return False
-        if not self._crop_handles_active():
-            return False
-        layout = self._focus_crop_layout
-        if layout is None:
-            self._refresh_focus_crop_handles()
-            layout = self._focus_crop_layout
-        if layout is None:
-            return False
-        self._focus_crop_drag = begin_crop_handle_drag(
-            self._focus_item,
-            layout,
-            scene_pos,
-            (
-                self._edit_crop_left,
-                self._edit_crop_top,
-                self._edit_crop_right,
-                self._edit_crop_bottom,
-            ),
-        )
-        return self._focus_crop_drag is not None
+        scene_runtime = self._scene_tool_runtime()
+        handler = getattr(scene_runtime, "mouse_press", None) if scene_runtime is not None else None
+        if callable(handler):
+            return bool(handler(self, scene_pos, event))
+        return False
 
     def handle_view_mouse_move(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
-        crop_values = crop_values_from_drag(self._focus_crop_drag, scene_pos)
-        if crop_values is None:
-            return False
-        left, top, right, bottom = crop_values
-        self._set_current_crop(left, top, right, bottom, schedule_preview=False)
-        return True
+        scene_runtime = self._scene_tool_runtime()
+        handler = getattr(scene_runtime, "mouse_move", None) if scene_runtime is not None else None
+        if callable(handler):
+            return bool(handler(self, scene_pos, event))
+        return False
 
     def handle_view_mouse_release(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
-        if self._focus_crop_drag is None:
-            return False
-        self._focus_crop_drag = None
-        self._refresh_focus_crop_handles()
-        if isinstance(self._focus_item, BoardVideoItem):
-            self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
-        elif isinstance(self._focus_item, BoardImageItem):
-            if self._edit_exr_path is not None:
-                channel = self.w.board_page.current_exr_channel_value()
-                if channel:
-                    self._edit_exr_channel = str(channel)
-                    self._schedule_edit_preview_update(channel=str(channel))
-            else:
-                self._schedule_edit_preview_update()
-        return True
+        scene_runtime = self._scene_tool_runtime()
+        handler = getattr(scene_runtime, "mouse_release", None) if scene_runtime is not None else None
+        if callable(handler):
+            return bool(handler(self, scene_pos, event))
+        return False
 
     def _set_current_crop(
         self,
@@ -2615,12 +2622,7 @@ class BoardController:
                 self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
 
     def _on_edit_crop_changed(self, *_: object) -> None:
-        panel_state = self._tool_panel_state_for_id("crop")
-        left = float(panel_state.get("left", 0.0))
-        top = float(panel_state.get("top", 0.0))
-        right = float(panel_state.get("right", 0.0))
-        bottom = float(panel_state.get("bottom", 0.0))
-        self._set_current_crop(left, top, right, bottom, schedule_preview=True)
+        self._on_edit_scene_tool_panel_changed("crop")
 
     def _reset_edit_image_adjustments(self) -> None:
         for tool_id, add_if_missing, insert_at in (

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from core.board_edit.handles import sanitize_crop
-from tools.edit_tools.base import EditToolSpec, ToolUiControlSpec
-from tools.edit_tools.registry import register_edit_tool
+from tools.board_tools.edit import EditToolSpec, ToolUiControlSpec, register_edit_tool
 
 
 def _default_state() -> dict[str, float]:

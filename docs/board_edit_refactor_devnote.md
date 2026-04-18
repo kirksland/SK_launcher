@@ -289,3 +289,34 @@ Couverture visee dans cette premiere passe:
 Commande de verification actuelle:
 
 - `venv\Scripts\python.exe -m unittest discover -s tests -v`
+
+## Nouveau chantier: rationalisation des tools
+
+Statut: en cours le 2026-04-18
+
+Constat:
+
+- la separation `tools/edit_tools` et `tools/image_tools` etait saine pour sortir du monolithe
+- mais elle reste peu agreable pour l'auteur d'un tool complet
+- `crop` montrait aussi qu'un tool interactif a besoin de vivre avec sa logique de scene, pas a cote dans un namespace trop generique
+
+Direction retenue:
+
+- converger vers `tools/board_tools/<tool_id>/`
+- y regrouper les capacites par tool:
+  - `tool.py`
+  - `image.py`
+  - `scene.py`
+- garder `tools/edit_tools/*` et `tools/image_tools/*` comme couches de compatibilite/discovery pendant la migration
+
+Premier pas deja pose:
+
+- `bcs`, `vibrance` et `crop` vivent maintenant aussi dans `tools/board_tools/*`
+- les registries edit/image savent maintenant decouvrir ces nouveaux dossiers
+- `core/board_edit/crop_scene.py` devient une couche de compatibilite vers `tools/board_tools/crop/scene.py`
+- une registry unifiee `tools/board_tools/registry.py` expose maintenant explicitement les capacites `tool/image/scene` de chaque tool
+- `BoardController` commence maintenant a brancher l'interaction de scene via ces capacites, au lieu de dependre seulement d'un test nominal sur `crop`
+- le runtime de scene d'un tool n'est plus seulement un module implicite: `crop` expose maintenant un `SCENE_RUNTIME` formel via `BoardToolSceneRuntime`
+- les anciens wrappers `tools/edit_tools/{bcs,crop,vibrance}` et `tools/image_tools/{bcs,vibrance}` ont ete supprimes
+- la vraie logique edit/image residuelle a ete remontee dans `tools/board_tools/edit.py` et `tools/board_tools/image.py`
+- apres audit des imports internes, la couche historique `tools/edit_tools/*` et `tools/image_tools/*` a pu etre retiree completement

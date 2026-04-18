@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import importlib
-import pkgutil
-from pathlib import Path
 from typing import Any, Callable
+
+from tools.board_tools.registry import discover_board_tools
 
 
 ToolApplyFn = Callable[[object, dict[str, Any]], object]
@@ -16,24 +15,6 @@ def register_tool(tool_id: str, apply_fn: ToolApplyFn) -> None:
     if not key:
         return
     _TOOL_REGISTRY[key] = apply_fn
-
-
-def _discover_tools() -> None:
-    global _TOOLS_DISCOVERED
-    if _TOOLS_DISCOVERED:
-        return
-    _TOOLS_DISCOVERED = True
-    pkg_name = "tools.image_tools"
-    pkg_dir = Path(__file__).resolve().parent
-    for mod in pkgutil.iter_modules([str(pkg_dir)]):
-        name = str(mod.name)
-        if name.startswith("_") or name in {"registry", "base"}:
-            continue
-        try:
-            importlib.import_module(f"{pkg_name}.{name}")
-        except Exception:
-            # Keep app resilient if one plugin fails to import.
-            continue
 
 
 def build_bcs_stack(brightness: float, contrast: float, saturation: float) -> list[dict[str, Any]]:
@@ -120,3 +101,11 @@ def apply_image_tool_stack(rgb: object, stack: object) -> object:
             settings = {}
         output = apply_fn(output, settings)
     return output
+
+
+def _discover_tools() -> None:
+    global _TOOLS_DISCOVERED
+    if _TOOLS_DISCOVERED:
+        return
+    _TOOLS_DISCOVERED = True
+    discover_board_tools()
