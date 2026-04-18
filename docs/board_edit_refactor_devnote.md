@@ -1,0 +1,343 @@
+# Board / Edit Refactor Dev Note
+
+Date: 2026-04-18
+
+## Intent
+
+Cette note capture l'etat actuel du `Skyforge Launcher` avec un focus sur le board et son mode d'edition, pour clarifier:
+
+- ce qui est deja bien refactorise
+- ce qui reste encore trop couple a `BoardController`
+- la cible d'architecture vers laquelle on veut aller
+
+## Vue d'ensemble du repo
+
+La structure du projet est globalement saine et suit deja une separation utile:
+
+- `ui/`: widgets et pages Qt
+- `controllers/`: orchestration entre UI, scene, fichiers et services
+- `core/`: logique transversale et helpers applicatifs
+- `tools/`: systemes extensibles de tools/plugins
+- `video/`: lecture et widgets video
+
+En pratique, le board est encore le module le plus dense, parce qu'il concentre plusieurs responsabilites historiques.
+
+## Ce que fait aujourd'hui le board
+
+Le board sert a la fois de:
+
+- scene 2D libre avec items image/video/sequence/note/groupe
+- navigateur d'assets de board
+- mini-editeur non destructif pour image/video/sequence
+- point d'entree pour conversion media et manipulations de scene
+
+Cette richesse explique pourquoi `controllers/board_controller.py` reste massif: il ne gere pas seulement "un controller UI", il porte aussi des modeles de scene, des workflows media, et la logique du mode edit.
+
+## Refacto deja en place
+
+Le dernier gros refacto a pose les bonnes briques:
+
+- `core/board_edit/session.py`
+  - etat de session d'edition
+- `core/board_edit/tool_stack.py`
+  - creation, normalisation et mise a jour d'une stack d'outils
+- `core/board_edit/handles.py`
+  - logique des handles de crop
+- `core/board_edit/media_runtime.py`
+  - runtime de playback image sequence / video
+- `tools/edit_tools/*`
+  - declaration des outils editables via `EditToolSpec`
+- `tools/image_tools/*`
+  - application concrete de certains effets sur les previews raster
+
+Conclusion: on n'est plus dans un board monolithique pur. On est dans une architecture de transition deja modularisee, mais pas encore totalement decouplee.
+
+## Frontieres actuelles
+
+### Ce qui est bien separe
+
+- les specs d'outils (`id`, label, supports, defaults, normalisation, `is_effective`)
+- la registry des edit tools
+- la stack d'outils comme structure de donnees
+- le runtime de lecture video/sequence
+- une partie de la logique de preview image
+
+### Ce qui reste encore trop dans `BoardController`
+
+- les classes d'items de scene:
+  - `BoardImageItem`
+  - `BoardVideoItem`
+  - `BoardSequenceItem`
+  - `BoardNoteItem`
+  - `BoardGroupItem`
+- le wiring UI complet de la page board
+- la coordination scene <-> arbre des groupes
+- la synchronisation session edit <-> widgets Qt
+- les decisions d'affichage des panneaux d'outils
+- une partie des workflows media annexes
+
+## Le point cle sur les tools edit
+
+La confusion vient de la difference entre:
+
+- "les tools sont declares independamment"
+- et "le mode edit est entierement pilote par ces tools"
+
+Aujourd'hui, les tools sont bien declares independamment dans `tools/edit_tools/*`.
+Mais le mode edit n'est pas encore 100% pilote par metadata. Le controller sait encore:
+
+- quel tool affiche quels widgets
+- comment lire certaines valeurs de la stack pour les remettre dans l'UI
+- comment rebrancher certaines valeurs sur l'item focalise
+
+Autrement dit:
+
+- les tools sont modularises
+- l'UI d'edition ne l'est pas encore totalement
+
+## Dette residuelle identifiee
+
+### 1. `BoardController` melange encore trop de couches
+
+Aujourd'hui il contient:
+
+- des `QGraphicsItem`
+- des handlers d'events de vue
+- des actions media
+- des operations de persistence
+- de la logique d'edition
+
+C'est le plus gros point de dette restant.
+
+### 2. L'UI edit reste partiellement hardcodee
+
+Le controller continue d'avoir des decisions explicites du type:
+
+- afficher les controles BCS
+- afficher le slider vibrance
+- afficher le panneau crop
+
+Cela fonctionne, mais ce n'est pas encore un vrai systeme de panneaux drive par spec.
+
+### 3. La session d'edition reste orientee "tools connus"
+
+`EditSessionState` garde encore des champs dedies:
+
+- brightness
+- contrast
+- saturation
+- vibrance
+- crop
+
+Ce n'est pas faux pour un systeme en transition, mais ce n'est pas la cible finale si on veut un mode edit reellement generique.
+
+### 4. Les items de scene vivent encore dans le controller
+
+Meme si ce n'est pas le probleme le plus urgent, sortir les items vers un module `board_scene` ou `board_items` allegerait fortement le fichier.
+
+## Cible d'architecture
+
+La cible propre serait:
+
+- `ui/pages/board_page.py`
+  - widgets purs
+- `controllers/board_controller.py`
+  - orchestration haut niveau seulement
+- `core/board_scene/*`
+  - items de scene, selection, groupes, interactions de scene
+- `core/board_edit/*`
+  - session edit, mapping stack <-> UI state, preview policies, crop handles
+- `tools/edit_tools/*`
+  - spec des outils editables
+- `tools/image_tools/*`
+  - application raster des outils qui ont un rendu preview
+
+Le point important est que `BoardController` devrait devenir un chef d'orchestre, pas le depot central de toute la logique.
+
+## Ordre de refacto recommande
+
+### Etape 1. Continuer a sortir la logique de stack hors du controller
+
+Objectif:
+
+- eviter que `BoardController` connaisse trop le schema interne des outils
+
+Travail:
+
+- centraliser extraction/normalisation/effective-state dans `core/board_edit/tool_stack.py`
+- reduire les branches locales special-case quand elles ne servent qu'a interpreter la stack
+
+Statut: termine le 2026-04-18
+
+Ce qui a ete sorti de `BoardController`:
+
+- extraction d'etats BCS / crop / vibrance depuis la stack
+- evaluation de l'efficacite d'une stack
+- conversion des anciens overrides vers une `tool_stack`
+- valeurs visuelles derivees de la stack via `EditVisualState`
+
+### Etape 2. Introduire des panneaux d'outils pilotables par spec
+
+Objectif:
+
+- ne plus coder l'UI edit autour de `crop`, `vibrance`, `bcs` en dur
+
+Travail:
+
+- definir une forme de "tool panel definition"
+- permettre a un tool de decrire ses controles
+- laisser le controller juste monter/dispatcher ces controles
+
+Statut: termine le 2026-04-18
+
+Premier pas deja pose:
+
+- les specs d'outils peuvent maintenant declarer un `ui_panel`
+- `BoardController` utilise ce metadata pour afficher les panneaux BCS / Vibrance / Crop
+- le mode crop handle ne depend plus directement d'un test en dur sur l'id `crop`
+- `BoardPage` expose maintenant des panneaux nommes (`bcs`, `vibrance`, `crop`) au lieu d'une simple serie de toggles specialises
+- `BoardController` lit/ecrit deja une partie des valeurs d'edition via des etats de panel, pas directement widget par widget
+- les mises a jour de la stack passent desormais par une voie generique avant les wrappers de compatibilite (`bcs`, `vibrance`, `crop`)
+- les specs d'outils declarent aussi leurs `ui_settings_keys`, ce qui permet au controller de relire un panel avec moins de connaissance metier codee en dur
+- le pont `tool spec <-> panel state` commence maintenant a vivre dans `core/board_edit/panels.py`
+- la synchro UI de `BoardController` et une partie du reset des outils s'appuient maintenant sur `core/board_edit/panels.py` plutot que sur des etats de panel hardcodes un par un
+- les specs d'outils commencent aussi a decrire leurs controles UI (`ui_controls`), et `BoardPage` relit/ecrit maintenant une partie des panels a partir de cette metadata
+- une partie des callbacks de panel image passe maintenant par une voie plus generique cote controller, au lieu de multiplier les handlers presque identiques par tool
+
+Ce qui reste volontairement a part:
+
+- l'interaction scene du crop (handles, drag dans la vue) reste un sujet d'interaction de scene, pas un simple panel de reglages
+- cette interaction de scene commence maintenant a vivre dans `core/board_edit/crop_scene.py`, pour que `BoardController` ne porte plus seul les regles de handles/drag crop
+
+### Etape 3. Sortir les items de scene de `board_controller.py`
+
+Objectif:
+
+- faire tomber drastiquement la taille du fichier
+
+Travail:
+
+- deplacer `BoardImageItem`, `BoardVideoItem`, `BoardSequenceItem`, `BoardNoteItem`, `BoardGroupItem`
+- garder uniquement leur orchestration dans le controller
+
+Statut: termine le 2026-04-18
+
+Premier pas deja pose:
+
+- les items de scene ont ete extraits vers `core/board_scene/items.py`
+- `BoardController` importe maintenant ces classes au lieu de les definir inline
+- le fichier a nettement maigri sans changer le comportement visible
+- les workers/media helpers ont ete extraits vers `core/board_edit/workers.py`
+- les petits composants UI du board ont ete extraits vers `core/board_scene/dialogs.py`
+- les operations de groupes et une partie du mapping `scene <-> groups_tree` commencent a sortir vers `core/board_scene/groups.py`
+- la selection ciblee depuis le `groups_tree` et une partie des regles de renommage du tree passent maintenant aussi par `core/board_scene/groups.py`
+- les regles d'actions disponibles dans le context menu du `groups_tree` commencent aussi a etre centralisees dans `core/board_scene/groups.py`
+- les regles de click/double-click et de nom editable du `groups_tree` commencent aussi a s'appuyer sur `core/board_scene/groups.py`
+- les helpers purs de `board_state` et de migration de payload commencent a sortir vers `core/board_state/payload.py`
+- l'etat temporaire et les helpers du flux `apply payload` commencent a sortir vers `core/board_state/apply.py`
+- la reconstruction concrete des items et groupes depuis le payload commence a sortir vers `core/board_state/rebuild.py`
+
+### Sous-chantier termine: groups tree / groupes de scene
+
+Statut: termine le 2026-04-18
+
+Ce qui est maintenant sorti:
+
+- les operations de groupes et une partie du mapping `scene <-> groups_tree` vivent dans `core/board_scene/groups.py`
+- la selection ciblee depuis le `groups_tree` passe par `core/board_scene/groups.py`
+- une partie des regles de renommage du tree passe par `core/board_scene/groups.py`
+- les regles d'actions disponibles dans le context menu du `groups_tree` commencent a etre centralisees dans `core/board_scene/groups.py`
+- les regles de click/double-click et de nom editable du `groups_tree` s'appuient aussi sur `core/board_scene/groups.py`
+- la logique de filtrage groupable, ungroup, et regroupement "par bloc" pour certaines operations de layout vit maintenant aussi dans `core/board_scene/groups.py`
+
+### Sous-chantier termine: board state / apply payload
+
+Statut: termine le 2026-04-18
+
+Ce qui est maintenant sorti:
+
+- clonage/normalisation du payload
+- comptage et synchronisation des overrides du payload
+- migration des anciens overrides vers le format courant
+- etat temporaire du flux `apply payload`
+- partition des entries du payload
+- reconstruction des items et groupes depuis le payload
+
+Le flux est encore orchestre par `BoardController`, mais les briques critiques ne vivent plus toutes dedans.
+
+### Etape 4. Isoler les workflows media annexes
+
+Objectif:
+
+- decouper les conversions et previews longues du controller principal
+
+Travail:
+
+- sortir les workers image/video/exr si possible vers un module dedie
+
+## Changement realise dans ce passage
+
+Ce passage de nettoyage pousse deja une partie de la logique de stack vers `core/board_edit/tool_stack.py`:
+
+- extraction BCS
+- extraction crop
+- evaluation "effective" d'une stack
+
+Et la sanitization du crop repose desormais sur une source commune dans `core/board_edit/handles.py`.
+
+## Sous-chantier termine: board overrides
+
+Statut: termine le 2026-04-18
+
+Ce qui est maintenant sorti:
+
+- les regles de merge/update/remove des overrides commencent a sortir vers `core/board_state/overrides.py`
+- `BoardController` ne construit deja plus seul certaines variantes d'override image/video/preview
+- l'application des overrides aux items et le reapply de scene commencent aussi a sortir vers `core/board_state/overrides.py`
+- la conversion des payloads de preview en pixmap et certaines mises a jour d'override post-preview sortent aussi vers `core/board_state/overrides.py`
+- les commits d'override image/video depuis le focus mode passent maintenant aussi par `core/board_state/overrides.py`
+- le traitement post-preview du focus image/EXR vit maintenant en grande partie dans `core/board_state/overrides.py`
+- l'ancien chemin `_apply_payload` reapplique lui aussi les overrides via les memes helpers dedies
+- le renommage de medias deplace maintenant les overrides image et video via un helper commun
+
+## Resume honnete
+
+Le refacto precedent n'etait pas "fini"; il a surtout installe la nouvelle fondation.
+La dette restante est reelle, mais elle est maintenant visible et structurable.
+
+Le board n'est pas en mauvais etat conceptuel.
+Il est surtout a mi-chemin entre:
+
+- un ancien controller monolithique
+- et une architecture plugin/edit/scene propre
+
+La bonne strategie maintenant n'est pas de tout re-ecrire, mais de continuer a deplacer les frontieres dans le bon ordre.
+
+## Tests cibles ajoutes
+
+Statut: en cours le 2026-04-18
+
+Une premiere base de tests `unittest` existe maintenant dans `tests/` pour proteger les modules purs extraits:
+
+- `tests/test_board_tool_stack.py`
+- `tests/test_board_state_payload.py`
+- `tests/test_board_state_overrides.py`
+- `tests/test_board_scene_groups.py`
+- `tests/test_board_crop_scene.py`
+
+Couverture visee dans cette premiere passe:
+
+- normalisation et efficacite de `tool_stack`
+- parsing/synchronisation du `board_state`
+- merge/commit/rename d'overrides
+- logique groupes / `groups_tree` pure
+- interaction de scene du crop et calculs de drag associes
+
+Commande de verification actuelle:
+
+- `venv\Scripts\python.exe -m unittest discover -s tests -v`
+
+Etat actuel:
+
+- les fondations structurelles principales du board/edit sont maintenant posees et testees
+- les prochains travaux relevent surtout de l'evolution fonctionnelle et de finitions d'architecture, plus d'un gros chantier de desenchevetrement

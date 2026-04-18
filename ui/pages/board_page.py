@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from core.board_edit.panels import default_panel_state, tool_spec_for_panel
 
 from video.player import VideoPreviewLabel
 
@@ -1535,6 +1536,53 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_image_tool_add_combo.setVisible(False)
         self.edit_image_tool_add_row.setEnabled(bool(visible))
         self.edit_image_tool_order_row.setEnabled(bool(visible))
+        if visible:
+            self.set_active_image_tool_panel("")
+
+    def _image_tool_panel_widgets(self) -> dict[str, list[QtWidgets.QWidget]]:
+        return {
+            "bcs": [
+                self.edit_image_adjust_label,
+                self.edit_image_adjust_brightness_title,
+                self.edit_image_adjust_brightness_slider,
+                self.edit_image_adjust_brightness_value,
+                self.edit_image_adjust_contrast_title,
+                self.edit_image_adjust_contrast_slider,
+                self.edit_image_adjust_contrast_value,
+                self.edit_image_adjust_saturation_title,
+                self.edit_image_adjust_saturation_slider,
+                self.edit_image_adjust_saturation_value,
+            ],
+            "vibrance": [
+                self.edit_image_vibrance_title,
+                self.edit_image_vibrance_slider,
+                self.edit_image_vibrance_value,
+            ],
+            "crop": [
+                self.edit_crop_label,
+                self.edit_crop_left_title,
+                self.edit_crop_left_slider,
+                self.edit_crop_left_value,
+                self.edit_crop_right_title,
+                self.edit_crop_right_slider,
+                self.edit_crop_right_value,
+                self.edit_crop_top_title,
+                self.edit_crop_top_slider,
+                self.edit_crop_top_value,
+                self.edit_crop_bottom_title,
+                self.edit_crop_bottom_slider,
+                self.edit_crop_bottom_value,
+            ],
+        }
+
+    def set_image_tool_panel_visible(self, panel: str, visible: bool) -> None:
+        for widget in self._image_tool_panel_widgets().get(str(panel or "").strip().lower(), []):
+            widget.setVisible(bool(visible))
+
+    def set_active_image_tool_panel(self, panel: str) -> None:
+        key = str(panel or "").strip().lower()
+        for panel_id in self._image_tool_panel_widgets():
+            self.set_image_tool_panel_visible(panel_id, panel_id == key)
 
     def current_image_brightness(self) -> float:
         return float(self.edit_image_adjust_brightness_slider.value()) / 100.0
@@ -1560,24 +1608,10 @@ class BoardPage(QtWidgets.QWidget):
         return float(self.edit_image_vibrance_slider.value()) / 100.0
 
     def set_image_vibrance_visible(self, visible: bool) -> None:
-        self.edit_image_vibrance_title.setVisible(bool(visible))
-        self.edit_image_vibrance_slider.setVisible(bool(visible))
-        self.edit_image_vibrance_value.setVisible(bool(visible))
+        self.set_image_tool_panel_visible("vibrance", visible)
 
     def set_image_crop_visible(self, visible: bool) -> None:
-        self.edit_crop_label.setVisible(bool(visible))
-        self.edit_crop_left_title.setVisible(bool(visible))
-        self.edit_crop_left_slider.setVisible(bool(visible))
-        self.edit_crop_left_value.setVisible(bool(visible))
-        self.edit_crop_right_title.setVisible(bool(visible))
-        self.edit_crop_right_slider.setVisible(bool(visible))
-        self.edit_crop_right_value.setVisible(bool(visible))
-        self.edit_crop_top_title.setVisible(bool(visible))
-        self.edit_crop_top_slider.setVisible(bool(visible))
-        self.edit_crop_top_value.setVisible(bool(visible))
-        self.edit_crop_bottom_title.setVisible(bool(visible))
-        self.edit_crop_bottom_slider.setVisible(bool(visible))
-        self.edit_crop_bottom_value.setVisible(bool(visible))
+        self.set_image_tool_panel_visible("crop", visible)
 
     def set_image_crop_values(self, left: float, top: float, right: float, bottom: float) -> None:
         self.edit_crop_left_slider.blockSignals(True)
@@ -1606,16 +1640,7 @@ class BoardPage(QtWidgets.QWidget):
         )
 
     def set_image_bcs_controls_visible(self, visible: bool) -> None:
-        self.edit_image_adjust_label.setVisible(bool(visible))
-        self.edit_image_adjust_brightness_title.setVisible(bool(visible))
-        self.edit_image_adjust_brightness_slider.setVisible(bool(visible))
-        self.edit_image_adjust_brightness_value.setVisible(bool(visible))
-        self.edit_image_adjust_contrast_title.setVisible(bool(visible))
-        self.edit_image_adjust_contrast_slider.setVisible(bool(visible))
-        self.edit_image_adjust_contrast_value.setVisible(bool(visible))
-        self.edit_image_adjust_saturation_title.setVisible(bool(visible))
-        self.edit_image_adjust_saturation_slider.setVisible(bool(visible))
-        self.edit_image_adjust_saturation_value.setVisible(bool(visible))
+        self.set_image_tool_panel_visible("bcs", visible)
 
     def set_image_tool_add_options(self, options: list[tuple[str, str]]) -> None:
         self.edit_image_tool_add_combo.blockSignals(True)
@@ -1676,6 +1701,109 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_image_adjust_contrast_slider.blockSignals(False)
         self.edit_image_adjust_saturation_slider.blockSignals(False)
         self.set_image_adjust_labels(brightness, contrast, saturation)
+
+    def current_image_tool_panel_state(self, panel: str) -> dict[str, float]:
+        key = str(panel or "").strip().lower()
+        spec = tool_spec_for_panel(key)
+        if spec is None:
+            return {}
+        values: dict[str, float] = {}
+        for control in getattr(spec, "ui_controls", ()):
+            control_key = str(getattr(control, "key", "") or "").strip()
+            if not control_key:
+                continue
+            current = self._current_image_tool_control_value(control_key)
+            if current is not None:
+                values[control_key] = current
+        return values
+
+    def set_image_tool_panel_state(self, panel: str, state: dict[str, object]) -> None:
+        key = str(panel or "").strip().lower()
+        values = dict(state) if isinstance(state, dict) else {}
+        spec = tool_spec_for_panel(key)
+        if spec is None:
+            return
+        merged = default_panel_state(key)
+        merged.update(values)
+        for control in getattr(spec, "ui_controls", ()):
+            control_key = str(getattr(control, "key", "") or "").strip()
+            if not control_key:
+                continue
+            self._set_image_tool_control_value(control_key, merged.get(control_key, getattr(control, "minimum", 0.0)))
+
+    def _current_image_tool_control_value(self, control_key: str) -> float | None:
+        key = str(control_key or "").strip().lower()
+        if key == "brightness":
+            return self.current_image_brightness()
+        if key == "contrast":
+            return self.current_image_contrast()
+        if key == "saturation":
+            return self.current_image_saturation()
+        if key == "amount":
+            return self.current_image_vibrance()
+        crop = {
+            "left": float(self.edit_crop_left_slider.value()) / 100.0,
+            "top": float(self.edit_crop_top_slider.value()) / 100.0,
+            "right": float(self.edit_crop_right_slider.value()) / 100.0,
+            "bottom": float(self.edit_crop_bottom_slider.value()) / 100.0,
+        }
+        return crop.get(key)
+
+    def image_tool_control_slider(self, control_key: str) -> QtWidgets.QSlider | None:
+        key = str(control_key or "").strip().lower()
+        sliders = {
+            "brightness": self.edit_image_adjust_brightness_slider,
+            "contrast": self.edit_image_adjust_contrast_slider,
+            "saturation": self.edit_image_adjust_saturation_slider,
+            "amount": self.edit_image_vibrance_slider,
+            "left": self.edit_crop_left_slider,
+            "top": self.edit_crop_top_slider,
+            "right": self.edit_crop_right_slider,
+            "bottom": self.edit_crop_bottom_slider,
+        }
+        return sliders.get(key)
+
+    def _set_image_tool_control_value(self, control_key: str, value: object) -> None:
+        key = str(control_key or "").strip().lower()
+        try:
+            numeric = float(value)
+        except Exception:
+            numeric = 0.0
+        if key == "brightness":
+            self.edit_image_adjust_brightness_slider.blockSignals(True)
+            self.edit_image_adjust_brightness_slider.setValue(int(round(numeric * 100.0)))
+            self.edit_image_adjust_brightness_slider.blockSignals(False)
+            self.edit_image_adjust_brightness_value.setText(f"{numeric:+.2f}")
+            return
+        if key == "contrast":
+            self.edit_image_adjust_contrast_slider.blockSignals(True)
+            self.edit_image_adjust_contrast_slider.setValue(int(round(numeric * 100.0)))
+            self.edit_image_adjust_contrast_slider.blockSignals(False)
+            self.edit_image_adjust_contrast_value.setText(f"{numeric:.2f}")
+            return
+        if key == "saturation":
+            self.edit_image_adjust_saturation_slider.blockSignals(True)
+            self.edit_image_adjust_saturation_slider.setValue(int(round(numeric * 100.0)))
+            self.edit_image_adjust_saturation_slider.blockSignals(False)
+            self.edit_image_adjust_saturation_value.setText(f"{numeric:.2f}")
+            return
+        if key == "amount":
+            self.set_image_vibrance_value(numeric)
+            return
+        crop_widgets = {
+            "left": (self.edit_crop_left_slider, self.edit_crop_left_value),
+            "top": (self.edit_crop_top_slider, self.edit_crop_top_value),
+            "right": (self.edit_crop_right_slider, self.edit_crop_right_value),
+            "bottom": (self.edit_crop_bottom_slider, self.edit_crop_bottom_value),
+        }
+        widgets = crop_widgets.get(key)
+        if widgets is None:
+            return
+        slider, label = widgets
+        slider.blockSignals(True)
+        slider.setValue(int(round(numeric * 100.0)))
+        slider.blockSignals(False)
+        label.setText(f"{int(round(numeric * 100.0))}%")
 
     def show_edit_preview_image(self, pixmap: QtGui.QPixmap, label: str = "") -> None:
         self.edit_preview_stack.setCurrentWidget(self.edit_image_preview)

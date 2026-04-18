@@ -6,6 +6,11 @@ Run
 Use the batch file so the venv and Qt paths are set:
 `run_launcher.bat`
 
+Tests
+-----
+Run the targeted refactor safety suite with the project venv:
+`venv\Scripts\python.exe -m unittest discover -s tests -v`
+
 Setup (Portable)
 ----------------
 1) Install Python 3.11+ from python.org (avoid Microsoft Store Python).
@@ -31,19 +36,29 @@ Core utilities:
 - `core/settings.py` settings IO + defaults
 - `core/fs.py` filesystem listings + helpers
 - `core/metadata.py` metadata loader
+- `core/board_edit/*` board edit session, tool stack helpers, crop handles, media runtime
+- `core/board_scene/*` board scene items and related scene-side structures
 
 UI:
 - `ui/pages/projects_page.py`
 - `ui/pages/server_page.py` (Asset Manager page)
 - `ui/pages/settings_page.py`
+- `ui/pages/board_page.py`
 
 Video:
 - `video/player.py` backend selection + OpenCV playback + zoom/pan widget
+
+Board / edit refactor note:
+- `docs/board_edit_refactor_devnote.md`
+- `docs/how_to_add_board_tool.md`
 
 Image tools (modular stack):
 - `tools/image_tools/registry.py` auto-discovers image tools and applies tool stacks
 - `tools/image_tools/bcs.py` brightness/contrast/saturation tool (`id: bcs`)
 - `tools/image_tools/vibrance.py` vibrance tool (`id: vibrance`)
+
+Edit tool specs:
+- `tools/edit_tools/*` declarative specs for board edit tools
 
 Tool plugin convention:
 - Add a new `tools/image_tools/<name>.py`

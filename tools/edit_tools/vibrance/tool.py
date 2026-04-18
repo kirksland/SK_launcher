@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tools.edit_tools.base import EditToolSpec
+from tools.edit_tools.base import EditToolSpec, ToolUiControlSpec
 from tools.edit_tools.registry import register_edit_tool
 
 
@@ -32,6 +32,10 @@ register_edit_tool(
         is_effective_fn=_is_effective,
         order=20,
         tags=("image", "color"),
+        ui_panel="vibrance",
+        ui_settings_keys=("amount",),
+        ui_controls=(
+            ToolUiControlSpec("amount", "Vibrance", -1.0, 1.0, display_signed=True),
+        ),
     )
 )
-

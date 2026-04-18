@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from tools.edit_tools.base import EditToolSpec
+from core.board_edit.handles import sanitize_crop
+from tools.edit_tools.base import EditToolSpec, ToolUiControlSpec
 from tools.edit_tools.registry import register_edit_tool
 
 
@@ -10,27 +11,12 @@ def _default_state() -> dict[str, float]:
 
 def _normalize_state(state: object) -> dict[str, float]:
     settings = dict(state) if isinstance(state, dict) else {}
-
-    def _axis(name: str) -> float:
-        try:
-            value = float(settings.get(name, 0.0))
-        except Exception:
-            value = 0.0
-        return max(0.0, min(0.95, value))
-
-    left = _axis("left")
-    top = _axis("top")
-    right = _axis("right")
-    bottom = _axis("bottom")
-    max_sum = 0.95
-    if left + right > max_sum:
-        scale = max_sum / max(1e-6, left + right)
-        left *= scale
-        right *= scale
-    if top + bottom > max_sum:
-        scale = max_sum / max(1e-6, top + bottom)
-        top *= scale
-        bottom *= scale
+    left, top, right, bottom = sanitize_crop(
+        settings.get("left", 0.0),
+        settings.get("top", 0.0),
+        settings.get("right", 0.0),
+        settings.get("bottom", 0.0),
+    )
     return {
         "left": left,
         "top": top,
@@ -54,5 +40,13 @@ register_edit_tool(
         is_effective_fn=_is_effective,
         order=30,
         tags=("image", "video", "spatial"),
+        ui_panel="crop",
+        ui_settings_keys=("left", "top", "right", "bottom"),
+        ui_controls=(
+            ToolUiControlSpec("left", "Left", 0.0, 0.9, display_scale=100.0, display_suffix="%", display_decimals=0),
+            ToolUiControlSpec("top", "Top", 0.0, 0.9, display_scale=100.0, display_suffix="%", display_decimals=0),
+            ToolUiControlSpec("right", "Right", 0.0, 0.9, display_scale=100.0, display_suffix="%", display_decimals=0),
+            ToolUiControlSpec("bottom", "Bottom", 0.0, 0.9, display_scale=100.0, display_suffix="%", display_decimals=0),
+        ),
     )
 )

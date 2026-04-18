@@ -4,6 +4,7 @@ from typing import Any
 
 from tools.edit_tools import get_edit_tool
 from tools.image_tools.registry import normalize_tool_stack
+from .handles import sanitize_crop
 
 
 def make_tool_entry(tool_id: str) -> dict[str, object]:
@@ -38,6 +39,72 @@ def normalize_tool_entries(stack: object) -> list[dict[str, object]]:
         if clean:
             normalized.append(clean)
     return normalized
+
+
+def find_tool_entry(stack: object, tool_id: str) -> dict[str, object] | None:
+    key = str(tool_id or "").strip().lower()
+    if not key:
+        return None
+    for entry in normalize_tool_entries(stack):
+        if str(entry.get("id", "")).strip().lower() == key:
+            return entry
+    return None
+
+
+def get_tool_settings(stack: object, tool_id: str) -> dict[str, Any] | None:
+    entry = find_tool_entry(stack, tool_id)
+    if entry is None:
+        return None
+    settings = entry.get("settings", {})
+    return dict(settings) if isinstance(settings, dict) else None
+
+
+def extract_bcs_settings(stack: object) -> tuple[float, float, float] | None:
+    settings = get_tool_settings(stack, "bcs")
+    if settings is None:
+        return None
+    try:
+        brightness = float(settings.get("brightness", 0.0))
+        contrast = float(settings.get("contrast", 1.0))
+        saturation = float(settings.get("saturation", 1.0))
+    except Exception:
+        return None
+    return brightness, contrast, saturation
+
+
+def extract_crop_settings(stack: object) -> tuple[float, float, float, float] | None:
+    settings = get_tool_settings(stack, "crop")
+    if settings is None:
+        return None
+    try:
+        return sanitize_crop(
+            settings.get("left", 0.0),
+            settings.get("top", 0.0),
+            settings.get("right", 0.0),
+            settings.get("bottom", 0.0),
+        )
+    except Exception:
+        return None
+
+
+def tool_entry_is_effective(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    tool_id = str(entry.get("id", "")).strip().lower()
+    spec = get_edit_tool(tool_id)
+    if spec is None:
+        return bool(entry.get("enabled", True))
+    settings = entry.get("settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
+    return spec.is_effective(settings)
+
+
+def tool_stack_is_effective(stack: object) -> bool:
+    tools = normalize_tool_entries(stack)
+    if not tools:
+        return False
+    return any(tool_entry_is_effective(entry) for entry in tools)
 
 
 def append_tool(stack: object, tool_id: str) -> tuple[list[dict[str, object]], int]:

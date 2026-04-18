@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tools.edit_tools.base import EditToolSpec
+from tools.edit_tools.base import EditToolSpec, ToolUiControlSpec
 from tools.edit_tools.registry import register_edit_tool
 
 
@@ -48,6 +48,13 @@ register_edit_tool(
         is_effective_fn=_is_effective,
         order=10,
         tags=("image", "color"),
+        stack_insert_at=0,
+        ui_panel="bcs",
+        ui_settings_keys=("brightness", "contrast", "saturation"),
+        ui_controls=(
+            ToolUiControlSpec("brightness", "Brightness", -1.0, 1.0, display_signed=True),
+            ToolUiControlSpec("contrast", "Contrast", 0.0, 2.0),
+            ToolUiControlSpec("saturation", "Saturation", 0.0, 2.0),
+        ),
     )
 )
-
