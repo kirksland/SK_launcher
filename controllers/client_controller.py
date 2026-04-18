@@ -2,11 +2,20 @@
 
 import os
 import shutil
-import time
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.client_sync import (
+    DEFAULT_SYNC_EXCLUDE_DIRS,
+    DEFAULT_SYNC_INCLUDE_EXTS,
+    available_sync_roots,
+    collect_changes,
+    compare_subdir,
+    resolve_local_project_path,
+    safe_mtime,
+    sync_roots_for_project,
+)
 from core.fs import find_projects, latest_preview_image, find_hips
 from core.settings import save_settings
 from core.sync import (
@@ -360,18 +369,16 @@ class ClientController:
         if local_path is None or not local_path.exists():
             self.w.client_status.setText("Local project not found.")
             return
-        exclude = {".git", ".skyforge_board_assets", ".skyforge_sync", "__pycache__"}
         include_roots = set(self._sync_roots_for(client_path, local_path))
         if not include_roots:
             self.w.client_status.setText("No sync roots selected.")
             return
-        include_exts = {".usd", ".usda", ".usdc", ".usdnc", ".abc", ".fbx", ".obj", ".png", ".jpg", ".jpeg", ".exr", ".tif", ".tiff", ".mov", ".mp4", ".txt", ".json"}
         manifest = build_manifest(
             local_path,
             time_budget=0.8,
-            exclude_dirs=exclude,
+            exclude_dirs=DEFAULT_SYNC_EXCLUDE_DIRS,
             include_roots=include_roots,
-            include_exts=include_exts,
+            include_exts=DEFAULT_SYNC_INCLUDE_EXTS,
         )
         save_manifest(local_path, manifest)
         self.w.client_status.setText("Baseline saved.")
@@ -415,8 +422,8 @@ class ClientController:
 
     def _refresh_sync_panel(self, client_path: Path) -> None:
         local_path = self._resolve_local_path(client_path)
-        client_mtime = self._safe_mtime(client_path)
-        local_mtime = self._safe_mtime(local_path) if local_path and local_path.exists() else 0.0
+        client_mtime = safe_mtime(client_path)
+        local_mtime = safe_mtime(local_path) if local_path and local_path.exists() else 0.0
         if local_path is None or not local_path.exists():
             status = "Not cloned"
         elif local_mtime > client_mtime:
@@ -443,64 +450,22 @@ class ClientController:
 
     @staticmethod
     def _safe_mtime(path: Path) -> float:
-        try:
-            return path.stat().st_mtime
-        except OSError:
-            return 0.0
+        return safe_mtime(path)
 
     def _resolve_local_path(self, client_path: Path) -> Optional[Path]:
-        client_id = client_path.name
-        for entry in self.w._asset_manager_projects:
-            if entry.get("client_id") == client_id and entry.get("local_path"):
-                return Path(str(entry.get("local_path")))
-        candidate = self.w.projects_dir / client_id
-        return candidate if candidate.exists() else None
+        return resolve_local_project_path(
+            client_path,
+            self.w._asset_manager_projects,
+            self.w.projects_dir,
+        )
 
     def _compare_subdir(self, local_root: Path, client_root: Path, subdir: str) -> str:
-        local_path = local_root / subdir
-        client_path = client_root / subdir
-        if not local_path.exists() and not client_path.exists():
-            return "missing"
-        if not local_path.exists():
-            return "missing local"
-        if not client_path.exists():
-            return "missing server"
-        local_latest = self._latest_mtime(local_path, max_entries=12000, time_budget=0.20)
-        client_latest = self._latest_mtime(client_path, max_entries=12000, time_budget=0.20)
-        if local_latest > client_latest:
-            return "local newer"
-        if client_latest > local_latest:
-            return "server newer"
-        return "same"
+        return compare_subdir(local_root, client_root, subdir)
 
     def _latest_mtime(self, root: Path, max_entries: int = 12000, time_budget: float = 0.20) -> float:
-        latest = 0.0
-        start = time.time()
-        count = 0
-        stack = [root]
-        while stack:
-            if count >= max_entries:
-                break
-            if time.time() - start > time_budget:
-                break
-            current = stack.pop()
-            try:
-                with os.scandir(current) as it:
-                    for entry in it:
-                        count += 1
-                        if count >= max_entries:
-                            break
-                        try:
-                            stat = entry.stat()
-                            if stat.st_mtime > latest:
-                                latest = stat.st_mtime
-                        except OSError:
-                            continue
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(Path(entry.path))
-            except OSError:
-                continue
-        return latest
+        from core.client_sync import latest_mtime
+
+        return latest_mtime(root, max_entries=max_entries, time_budget=time_budget)
 
     def _add_changed_files(self, local_root: Path, client_root: Path) -> None:
         items = self._collect_changes(local_root, client_root, max_items=60, time_budget=0.35)
@@ -519,7 +484,6 @@ class ClientController:
         local_path = self._resolve_local_path(client_path)
         if local_path is None or not local_path.exists():
             return
-        exclude = {".git", ".skyforge_board_assets", ".skyforge_sync", "__pycache__"}
         include_roots = set(self._sync_roots_for(client_path, local_path))
         if not include_roots:
             self.w.client_sync_push_list.clear()
@@ -530,13 +494,12 @@ class ClientController:
             self._last_conflicts = []
             self._update_change_dots()
             return
-        include_exts = {".usd", ".usda", ".usdc", ".usdnc", ".abc", ".fbx", ".obj", ".png", ".jpg", ".jpeg", ".exr", ".tif", ".tiff", ".mov", ".mp4", ".txt", ".json"}
         plan = build_sync_plan(
             local_path,
             client_path,
-            exclude_dirs=exclude,
+            exclude_dirs=DEFAULT_SYNC_EXCLUDE_DIRS,
             include_roots=include_roots,
-            include_exts=include_exts,
+            include_exts=DEFAULT_SYNC_INCLUDE_EXTS,
             time_budget=0.35,
         )
         diff = plan["diff"]
@@ -577,18 +540,16 @@ class ClientController:
             self.w.client_status.setText("Local project not found.")
             return
         self.w.client_status.setText(f"{mode.capitalize()} in progress...")
-        exclude = {".git", ".skyforge_board_assets", ".skyforge_sync", "__pycache__"}
         include_roots = set(self._sync_roots_for(client_path, local_path))
         if not include_roots:
             self.w.client_status.setText("No sync roots selected.")
             return
-        include_exts = {".usd", ".usda", ".usdc", ".usdnc", ".abc", ".fbx", ".obj", ".png", ".jpg", ".jpeg", ".exr", ".tif", ".tiff", ".mov", ".mp4", ".txt", ".json"}
         plan = build_sync_plan(
             local_path,
             client_path,
-            exclude_dirs=exclude,
+            exclude_dirs=DEFAULT_SYNC_EXCLUDE_DIRS,
             include_roots=include_roots,
-            include_exts=include_exts,
+            include_exts=DEFAULT_SYNC_INCLUDE_EXTS,
             time_budget=0.5,
         )
         diff = plan["diff"]
@@ -699,42 +660,21 @@ class ClientController:
         return store
 
     def _available_sync_roots(self, client_path: Path, local_path: Path) -> list[str]:
-        exclude = {".git", ".skyforge_board_assets", ".skyforge_sync", "__pycache__"}
-        server_dirs: set[str] = set()
-        local_dirs: set[str] = set()
-        try:
-            for entry in os.scandir(client_path):
-                if entry.is_dir():
-                    name = entry.name
-                    if name not in exclude:
-                        server_dirs.add(name)
-        except OSError:
-            pass
-        try:
-            for entry in os.scandir(local_path):
-                if entry.is_dir():
-                    name = entry.name
-                    if name not in exclude:
-                        local_dirs.add(name)
-        except OSError:
-            pass
-        roots = sorted(server_dirs & local_dirs, key=lambda v: v.lower())
-        return roots
+        return available_sync_roots(
+            client_path,
+            local_path,
+            exclude_dirs=DEFAULT_SYNC_EXCLUDE_DIRS,
+        )
 
     def _sync_roots_for(self, client_path: Path, local_path: Path) -> list[str]:
         client_id = client_path.name
         store = self._sync_roots_store()
-        roots = store.get(client_id)
         available = self._available_sync_roots(client_path, local_path)
-        if not isinstance(roots, list):
-            preferred = [r for r in ("assets", "shots") if r in available]
-            roots = preferred if preferred else available
+        roots, changed = sync_roots_for_project(client_id, available, store)
+        if changed:
             store[client_id] = list(roots)
             save_settings(self.w.settings)
-        cleaned = [str(r) for r in roots if isinstance(r, str)]
-        if available:
-            cleaned = [r for r in cleaned if r in available]
-        return cleaned
+        return roots
 
     def _on_tree_context_menu(self, pos: QtCore.QPoint) -> None:
         client_path = self._current_client_path()
@@ -842,57 +782,11 @@ class ClientController:
         max_items: int = 40,
         time_budget: float = 0.30,
     ) -> list[str]:
-        start = time.time()
-        results: list[str] = []
-        def walk(root: Path) -> dict[str, float]:
-            data: dict[str, float] = {}
-            stack = [root]
-            while stack and len(data) < 5000:
-                if time.time() - start > time_budget:
-                    break
-                current = stack.pop()
-                try:
-                    with os.scandir(current) as it:
-                        for entry in it:
-                            if time.time() - start > time_budget:
-                                break
-                            try:
-                                rel = str(Path(entry.path).relative_to(root))
-                            except Exception:
-                                continue
-                            try:
-                                stat = entry.stat()
-                            except OSError:
-                                continue
-                            if entry.is_dir(follow_symlinks=False):
-                                stack.append(Path(entry.path))
-                            else:
-                                data[rel] = stat.st_mtime
-                            if len(data) >= 5000:
-                                break
-                except OSError:
-                    continue
-            return data
-
-        local_map = walk(local_root)
-        client_map = walk(client_root)
-        keys = set(local_map.keys()) | set(client_map.keys())
-        for rel in sorted(keys):
-            if time.time() - start > time_budget:
-                break
-            if rel not in client_map:
-                results.append(f"+ {rel}")
-            elif rel not in local_map:
-                results.append(f"- {rel}")
-            else:
-                l = local_map[rel]
-                c = client_map[rel]
-                if l > c + 0.5:
-                    results.append(f"â†‘ {rel}")
-                elif c > l + 0.5:
-                    results.append(f"â†“ {rel}")
-            if len(results) >= max_items:
-                break
-        return results
+        return collect_changes(
+            local_root,
+            client_root,
+            max_items=max_items,
+            time_budget=time_budget,
+        )
 
 

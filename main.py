@@ -16,11 +16,14 @@ from core.settings import (
     DEFAULT_PROJECTS_DIR,
     DEFAULT_TEMPLATE_HIP,
     DEFAULT_SETTINGS,
+    active_settings_path,
+    is_first_run,
     load_settings,
     normalize_houdini_exe,
     normalize_asset_schema,
     normalize_asset_manager_projects,
     save_settings,
+    settings_startup_issues,
 )
 from core.houdini_env import build_houdini_env
 from controllers.asset_manager_controller import AssetManagerController
@@ -45,6 +48,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self.setWindowIcon(QtGui.QIcon(str(icon_path)))
         self.resize(1280, 620)
 
+        self._settings_path = active_settings_path()
+        self._is_first_run = is_first_run(self._settings_path)
         self.settings = load_settings()
         self.projects_dir = Path(self.settings["projects_dir"])
         self.server_repo_dir = Path(self.settings["server_repo_dir"])
@@ -328,6 +333,10 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings_use_assoc = self.settings_page.settings_use_assoc
         self.settings_houdini_exe = self.settings_page.settings_houdini_exe
         self.settings_save_btn = self.settings_page.settings_save_btn
+        self.settings_projects_browse_btn = self.settings_page.settings_projects_browse_btn
+        self.settings_server_browse_btn = self.settings_page.settings_server_browse_btn
+        self.settings_template_browse_btn = self.settings_page.settings_template_browse_btn
+        self.settings_houdini_browse_btn = self.settings_page.settings_houdini_browse_btn
 
         self.dev_add_box_btn = self.dev_page.add_box_btn
         self.dev_status = self.dev_page.status
@@ -414,6 +423,15 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.pages.currentChanged.connect(self._on_main_page_changed)
 
         self.settings_save_btn.clicked.connect(self.save_settings_from_ui)
+        self.settings_projects_browse_btn.clicked.connect(self._browse_settings_projects_dir)
+        self.settings_server_browse_btn.clicked.connect(self._browse_settings_server_dir)
+        self.settings_template_browse_btn.clicked.connect(self._browse_settings_template_hip)
+        self.settings_houdini_browse_btn.clicked.connect(self._browse_settings_houdini_exe)
+        self.settings_projects_dir.textChanged.connect(self._refresh_settings_validation)
+        self.settings_server_dir.textChanged.connect(self._refresh_settings_validation)
+        self.settings_template_hip.textChanged.connect(self._refresh_settings_validation)
+        self.settings_houdini_exe.textChanged.connect(self._refresh_settings_validation)
+        self.settings_use_assoc.toggled.connect(self._refresh_settings_validation)
         self.dev_add_box_btn.clicked.connect(self._dev_add_box_in_houdini)
         self.dev_picnc_browse_btn.clicked.connect(self._dev_browse_picnc)
         self.dev_picnc_out_browse_btn.clicked.connect(self._dev_browse_picnc_output)
@@ -438,6 +456,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
         status.setStyleSheet("QStatusBar { background: #1f2329; color: #9aa3ad; }")
         status.setSizeGripEnabled(False)
         status.hide()
+        self._refresh_settings_validation()
+        QtCore.QTimer.singleShot(0, self._handle_startup_configuration)
 
 
     @staticmethod
@@ -539,6 +559,88 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_controller.refresh_asset_manager()
         self.project_controller.refresh_project_watch_paths()
         self.asset_controller.refresh_asset_watch_paths()
+        self._is_first_run = False
+        self.settings_page.set_startup_context(False)
+        self._refresh_settings_validation()
+
+    def _handle_startup_configuration(self) -> None:
+        issues = settings_startup_issues(self.settings)
+        if not self._is_first_run and not issues:
+            return
+
+        self.pages.setCurrentIndex(4)
+        if self._is_first_run:
+            message = (
+                "Skyforge is starting with a fresh configuration.\n\n"
+                "Please review the Settings page and confirm your folders before using the app."
+            )
+        else:
+            issue_list = ", ".join(issues)
+            message = (
+                "Some required paths are missing or invalid.\n\n"
+                f"Please review Settings: {issue_list}"
+            )
+        self.settings_page.set_startup_context(True, message)
+        self._refresh_settings_validation()
+        QtWidgets.QMessageBox.information(self, APP_TITLE, message)
+
+    def _refresh_settings_validation(self) -> None:
+        snapshot = {
+            "projects_dir": self.settings_projects_dir.text().strip(),
+            "server_repo_dir": self.settings_server_dir.text().strip(),
+            "template_hip": self.settings_template_hip.text().strip(),
+            "use_file_association": self.settings_use_assoc.isChecked(),
+            "houdini_exe": normalize_houdini_exe(self.settings_houdini_exe.text()),
+        }
+        issues = settings_startup_issues(snapshot)
+        if issues:
+            self.settings_page.set_validation_summary(
+                "Configuration incomplete.\nMissing or invalid: " + ", ".join(issues),
+                ready=False,
+            )
+        else:
+            self.settings_page.set_validation_summary(
+                "Configuration looks ready for startup and distribution tests.",
+                ready=True,
+            )
+
+    def _browse_settings_projects_dir(self) -> None:
+        directory = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Select Projects Folder",
+            self.settings_projects_dir.text().strip() or str(self.projects_dir),
+        )
+        if directory:
+            self.settings_projects_dir.setText(directory)
+
+    def _browse_settings_server_dir(self) -> None:
+        directory = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Select Server Repo Folder",
+            self.settings_server_dir.text().strip() or str(self.server_repo_dir),
+        )
+        if directory:
+            self.settings_server_dir.setText(directory)
+
+    def _browse_settings_template_hip(self) -> None:
+        path, _selected = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select Template Hip",
+            self.settings_template_hip.text().strip() or str(Path(__file__).resolve().parent),
+            "Houdini Files (*.hip *.hiplc *.hipnc);;All Files (*.*)",
+        )
+        if path:
+            self.settings_template_hip.setText(path)
+
+    def _browse_settings_houdini_exe(self) -> None:
+        path, _selected = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select houdini.exe",
+            self.settings_houdini_exe.text().strip() or r"C:\Program Files\Side Effects Software",
+            "Executable (houdini.exe);;Executable Files (*.exe);;All Files (*.*)",
+        )
+        if path:
+            self.settings_houdini_exe.setText(path)
 
     def add_selected_project_to_asset_manager(self) -> None:
         item = self.project_grid.currentItem()

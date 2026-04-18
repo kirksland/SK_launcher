@@ -29,6 +29,15 @@ class SettingsPage(QtWidgets.QWidget):
         title.setStyleSheet(title_style())
         layout.addWidget(title)
 
+        self.settings_intro = QtWidgets.QLabel("")
+        self.settings_intro.setWordWrap(True)
+        self.settings_intro.setStyleSheet(
+            "QLabel { background: rgba(255, 214, 102, 0.12); border: 1px solid rgba(255, 214, 102, 0.35);"
+            " border-radius: 8px; padding: 10px; color: #d9dde3; }"
+        )
+        self.settings_intro.setVisible(False)
+        layout.addWidget(self.settings_intro)
+
         form = QtWidgets.QFormLayout()
         form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         form.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
@@ -37,13 +46,16 @@ class SettingsPage(QtWidgets.QWidget):
         layout.addLayout(form)
 
         self.settings_projects_dir = QtWidgets.QLineEdit(str(projects_dir))
-        form.addRow("Projects Folder", self.settings_projects_dir)
+        self.settings_projects_browse_btn = QtWidgets.QPushButton("Browse...")
+        form.addRow("Projects Folder", self._with_browse(self.settings_projects_dir, self.settings_projects_browse_btn))
 
         self.settings_server_dir = QtWidgets.QLineEdit(str(server_repo_dir))
-        form.addRow("Server Repo Folder", self.settings_server_dir)
+        self.settings_server_browse_btn = QtWidgets.QPushButton("Browse...")
+        form.addRow("Server Repo Folder", self._with_browse(self.settings_server_dir, self.settings_server_browse_btn))
 
         self.settings_template_hip = QtWidgets.QLineEdit(str(template_hip))
-        form.addRow("Template Hip", self.settings_template_hip)
+        self.settings_template_browse_btn = QtWidgets.QPushButton("Browse...")
+        form.addRow("Template Hip", self._with_browse(self.settings_template_hip, self.settings_template_browse_btn))
 
         self.settings_pattern = QtWidgets.QLineEdit(new_hip_pattern)
         form.addRow("New Hip Pattern", self.settings_pattern)
@@ -77,7 +89,16 @@ class SettingsPage(QtWidgets.QWidget):
 
         self.settings_houdini_exe = QtWidgets.QLineEdit(houdini_exe)
         self.settings_houdini_exe.setPlaceholderText("Optional: path to houdini.exe")
-        form.addRow("Houdini Executable", self.settings_houdini_exe)
+        self.settings_houdini_browse_btn = QtWidgets.QPushButton("Browse...")
+        form.addRow("Houdini Executable", self._with_browse(self.settings_houdini_exe, self.settings_houdini_browse_btn))
+
+        self.settings_status = QtWidgets.QLabel("")
+        self.settings_status.setWordWrap(True)
+        self.settings_status.setStyleSheet(
+            "QLabel { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);"
+            " border-radius: 8px; padding: 10px; color: #cfd5de; }"
+        )
+        layout.addWidget(self.settings_status)
 
 
         self._sync_houdini_version_selection()
@@ -103,3 +124,25 @@ class SettingsPage(QtWidgets.QWidget):
         path = self.settings_houdini_version.currentData()
         if isinstance(path, str) and path:
             self.settings_houdini_exe.setText(path)
+
+    @staticmethod
+    def _with_browse(field: QtWidgets.QLineEdit, button: QtWidgets.QPushButton) -> QtWidgets.QWidget:
+        row = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(field, 1)
+        layout.addWidget(button, 0)
+        return row
+
+    def set_startup_context(self, enabled: bool, message: str = "") -> None:
+        self.settings_intro.setVisible(enabled)
+        self.settings_intro.setText(message if enabled else "")
+
+    def set_validation_summary(self, text: str, *, ready: bool) -> None:
+        color = "#7bd88f" if ready else "#ffd166"
+        self.settings_status.setStyleSheet(
+            "QLabel { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);"
+            f" border-left: 4px solid {color}; border-radius: 8px; padding: 10px; color: #cfd5de; }}"
+        )
+        self.settings_status.setText(text)

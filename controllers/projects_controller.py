@@ -10,25 +10,23 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.fs import find_projects, list_hips_with_mtime, open_hip
 from core.houdini_env import build_houdini_env
+from core.project_catalog import (
+    filter_and_sort_projects,
+    prune_project_cache,
+    prune_project_selection,
+    scan_project_hips,
+)
+from core.project_runtime import (
+    JOB_INIT_MARKER,
+    PROJECT_SUBDIRS,
+    ensure_job_scripts_if_needed,
+    ensure_template_hip,
+    resolve_new_hip_name,
+    resolve_template_hip,
+)
 from core.settings import DEFAULT_TEMPLATE_HIP
 from core.watchers import update_watcher_paths
 from ui.widgets.project_card import ProjectCard
-
-PROJECT_SUBDIRS = [
-    "abc",
-    "audio",
-    "comp",
-    "desk",
-    "flip",
-    "geo",
-    "hda",
-    "render",
-    "scripts",
-    "sim",
-    "tex",
-    "video",
-]
-JOB_INIT_MARKER = ".skyforge_job_init"
 
 
 class ProjectsController:
@@ -72,15 +70,12 @@ class ProjectsController:
         projects = find_projects(self.w.projects_dir)
         self._prune_cache(projects, self.w._project_cache)
         self._prune_selection(projects)
-        query = self.w.search_input.text().strip().lower()
-        if query:
-            projects = [p for p in projects if query in p.name.lower()]
-
-        sort_mode = self.w.sort_combo.currentText()
-        if sort_mode.startswith("Date"):
-            projects.sort(key=self._get_project_latest_mtime, reverse=True)
-        else:
-            projects.sort(key=lambda p: p.name.lower())
+        projects = filter_and_sort_projects(
+            projects,
+            query=self.w.search_input.text(),
+            sort_mode=self.w.sort_combo.currentText(),
+            latest_mtime=self._get_project_latest_mtime,
+        )
 
         for project in projects:
             item = QtWidgets.QListWidgetItem()
@@ -160,75 +155,29 @@ class ProjectsController:
         self.refresh_projects()
 
     def _resolve_new_hip_name(self, project_name: str) -> str:
-        pattern = self.w._new_hip_pattern.strip() or "{projectName}_001.hipnc"
-        try:
-            return pattern.format(projectName=project_name)
-        except Exception:
-            return f"{project_name}_001.hipnc"
+        return resolve_new_hip_name(self.w._new_hip_pattern, project_name)
 
     def _resolve_template_hip(self) -> Optional[Path]:
-        launcher_default = Path(__file__).resolve().parents[1] / "untitled.hipnc"
-        candidates = [self.w._template_hip, DEFAULT_TEMPLATE_HIP, launcher_default]
-        for candidate in candidates:
-            if candidate and candidate.exists():
-                return candidate
-        return None
+        return resolve_template_hip(
+            self.w._template_hip,
+            DEFAULT_TEMPLATE_HIP,
+            Path(__file__).resolve().parents[1],
+        )
 
     def _ensure_template_hip(self, project_path: Path) -> Optional[Path]:
-        template = self._resolve_template_hip()
-        if template is None:
-            missing = "\n".join(
-                str(p)
-                for p in [
-                    self.w._template_hip,
-                    DEFAULT_TEMPLATE_HIP,
-                    Path(__file__).resolve().parents[1] / "untitled.hipnc",
-                ]
-                if p
-            )
-            self.w._warn(f"Template hip not found. Checked:\n{missing}")
-            return None
-
-        target_name = self._resolve_new_hip_name(project_path.name)
-        target = project_path / target_name
-        if not target.exists():
-            try:
-                target.write_bytes(template.read_bytes())
-            except Exception as exc:
-                self.w._warn(f"Failed to copy template hip:\n{exc}")
-                return None
+        target, error = ensure_template_hip(
+            project_path,
+            pattern=self.w._new_hip_pattern,
+            custom_template=self.w._template_hip,
+            default_template=DEFAULT_TEMPLATE_HIP,
+            launcher_root=Path(__file__).resolve().parents[1],
+        )
+        if error:
+            self.w._warn(error)
         return target
 
-    def _ensure_job_scripts(self, project_path: Path) -> None:
-        scripts_dir = project_path / "scripts"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-        content = (
-            "import os\n"
-            "try:\n"
-            "    import hou\n"
-            "except Exception:\n"
-            "    hou = None\n"
-            f"project_path = r\"{project_path}\"\n"
-            "os.environ[\"JOB\"] = project_path\n"
-            "if hou is not None:\n"
-            "    hou.putenv(\"JOB\", project_path)\n"
-        )
-        for name in ("123.py", "456.py"):
-            script_path = scripts_dir / name
-            try:
-                script_path.write_text(content, encoding="utf-8")
-            except Exception:
-                pass
-
     def _ensure_job_scripts_if_needed(self, project_path: Path) -> None:
-        marker = project_path / JOB_INIT_MARKER
-        if not marker.exists():
-            return
-        self._ensure_job_scripts(project_path)
-        try:
-            marker.unlink()
-        except Exception:
-            pass
+        ensure_job_scripts_if_needed(project_path, marker_name=JOB_INIT_MARKER)
 
     def open_selected_project(self) -> None:
         item = self.w.project_grid.currentItem()
@@ -423,16 +372,10 @@ class ProjectsController:
         update_watcher_paths(self._project_watcher, paths)
 
     def _prune_cache(self, projects: List[Path], cache: Dict[Path, Tuple[float, List[Path], float]]) -> None:
-        keep = set(projects)
-        for key in list(cache.keys()):
-            if key not in keep:
-                cache.pop(key, None)
+        prune_project_cache(projects, cache)
 
     def _prune_selection(self, projects: List[Path]) -> None:
-        keep = set(projects)
-        for key in list(self.w._project_hip_selection.keys()):
-            if key not in keep:
-                self.w._project_hip_selection.pop(key, None)
+        prune_project_selection(projects, self.w._project_hip_selection)
 
     def _scan_project_hips(
         self,
@@ -440,12 +383,11 @@ class ProjectsController:
         cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None,
     ) -> Tuple[List[Path], float]:
         cache = cache or self.w._project_cache
-        cached = cache.get(project_path)
-        if cached and cached[0] == self._scan_token:
-            return cached[1], cached[2]
-        hips, latest = list_hips_with_mtime(project_path)
-        cache[project_path] = (self._scan_token, hips, latest)
-        return hips, latest
+        return scan_project_hips(
+            project_path,
+            scan_token=self._scan_token,
+            cache=cache,
+        )
 
     def _get_project_hips(
         self, project_path: Path, cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None

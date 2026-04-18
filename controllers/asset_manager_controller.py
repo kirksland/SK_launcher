@@ -6,12 +6,27 @@ from typing import List, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.asset_details import (
+    build_asset_meta_text,
+    empty_versions_message,
+    entity_type_for_path,
+    normalize_list_context,
+    pick_best_context,
+    read_history_note,
+)
+from core.asset_browser import (
+    entity_prefixes,
+    existing_project_paths,
+    filter_asset_entries,
+    filter_entity_dirs,
+    list_project_entities,
+    resolved_filter_choice,
+)
 from core.fs import (
     latest_preview_image,
     list_preview_images,
     list_review_videos,
     list_usd_versions,
-    name_prefix,
 )
 from core.metadata import load_metadata
 from core.settings import save_settings
@@ -29,16 +44,11 @@ class AssetManagerController:
 
     def refresh_asset_manager(self, *_: object) -> None:
         self.w.asset_grid.clear()
-        entries = list(self.w._asset_manager_projects)
-        query = self.w.asset_search_input.text().strip().lower()
-        if query:
-            entries = [e for e in entries if query in str(e.get("local_path", "")).lower()]
-
-        projects: List[Path] = []
-        for entry in entries:
-            path = Path(str(entry.get("local_path", "")))
-            if path.exists() and path.is_dir():
-                projects.append(path)
+        entries = filter_asset_entries(
+            self.w._asset_manager_projects,
+            self.w.asset_search_input.text(),
+        )
+        projects = existing_project_paths(entries)
 
         self.w.project_controller.prune_cache(projects, self.w._asset_cache)
 
@@ -56,13 +66,17 @@ class AssetManagerController:
         self.w.asset_status.setText(f"{self.w.asset_grid.count()} project(s) found.")
         self._refresh_asset_watch_paths()
 
+    @staticmethod
+    def _clear_asset_detail_lists(window: QtWidgets.QMainWindow) -> None:
+        window.asset_shots_list.clear()
+        window.asset_assets_list.clear()
+        window.asset_versions_list.clear()
+        window.asset_history_list.clear()
+
     def open_asset_details(self, item: QtWidgets.QListWidgetItem) -> None:
         project_path = Path(str(item.data(QtCore.Qt.ItemDataRole.UserRole)))
         self.w.asset_details_title.setText(project_path.name)
-        self.w.asset_shots_list.clear()
-        self.w.asset_assets_list.clear()
-        self.w.asset_versions_list.clear()
-        self.w.asset_history_list.clear()
+        self._clear_asset_detail_lists(self.w)
 
         # Clear detail fields until an entity is selected
         self.w.asset_preview.clear()
@@ -149,15 +163,11 @@ class AssetManagerController:
 
     def _refresh_asset_entity_lists(self, target: str) -> None:
         project_root = getattr(self.w, "_asset_current_project_root", self.w.test_pipeline_root)
-        shots_root = project_root / "shots"
-        assets_root = project_root / "assets"
-
-        shots = sorted([p for p in shots_root.iterdir() if p.is_dir()]) if shots_root.exists() else []
-        assets = sorted([p for p in assets_root.iterdir() if p.is_dir()]) if assets_root.exists() else []
+        shots, assets = list_project_entities(project_root)
 
         # Build filter options from prefixes
-        shot_prefixes = sorted({name_prefix(p.name) for p in shots})
-        asset_prefixes = sorted({name_prefix(p.name) for p in assets})
+        shot_prefixes = entity_prefixes(shots)
+        asset_prefixes = entity_prefixes(assets)
 
         prev_shot_filter = self.w.asset_shots_filter.currentText() if self.w.asset_shots_filter.count() else "All"
         prev_asset_filter = self.w.asset_assets_filter.currentText() if self.w.asset_assets_filter.count() else "All"
@@ -167,10 +177,9 @@ class AssetManagerController:
         self.w.asset_shots_filter.addItem("All")
         for p in shot_prefixes:
             self.w.asset_shots_filter.addItem(p)
-        if prev_shot_filter in [self.w.asset_shots_filter.itemText(i) for i in range(self.w.asset_shots_filter.count())]:
-            self.w.asset_shots_filter.setCurrentText(prev_shot_filter)
-        else:
-            self.w.asset_shots_filter.setCurrentText("All")
+        self.w.asset_shots_filter.setCurrentText(
+            resolved_filter_choice(prev_shot_filter, ["All", *shot_prefixes])
+        )
         self.w.asset_shots_filter.blockSignals(False)
 
         self.w.asset_assets_filter.blockSignals(True)
@@ -178,10 +187,9 @@ class AssetManagerController:
         self.w.asset_assets_filter.addItem("All")
         for p in asset_prefixes:
             self.w.asset_assets_filter.addItem(p)
-        if prev_asset_filter in [self.w.asset_assets_filter.itemText(i) for i in range(self.w.asset_assets_filter.count())]:
-            self.w.asset_assets_filter.setCurrentText(prev_asset_filter)
-        else:
-            self.w.asset_assets_filter.setCurrentText("All")
+        self.w.asset_assets_filter.setCurrentText(
+            resolved_filter_choice(prev_asset_filter, ["All", *asset_prefixes])
+        )
         self.w.asset_assets_filter.blockSignals(False)
 
         # Apply filters
@@ -195,11 +203,12 @@ class AssetManagerController:
 
         if target in ("both", "shots"):
             self.w.asset_shots_list.clear()
-            for shot_dir in shots:
-                if shot_filter != "All" and name_prefix(shot_dir.name) != shot_filter:
-                    continue
-                if active_tab == 0 and search_text and search_text not in shot_dir.name.lower():
-                    continue
+            visible_shots = filter_entity_dirs(
+                shots,
+                prefix_filter=shot_filter,
+                search_text=search_text if active_tab == 0 else "",
+            )
+            for shot_dir in visible_shots:
                 shot_item = QtWidgets.QListWidgetItem(shot_dir.name)
                 shot_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(shot_dir))
                 preview = latest_preview_image(shot_dir)
@@ -212,11 +221,12 @@ class AssetManagerController:
 
         if target in ("both", "assets"):
             self.w.asset_assets_list.clear()
-            for asset_dir in assets:
-                if asset_filter != "All" and name_prefix(asset_dir.name) != asset_filter:
-                    continue
-                if active_tab == 1 and search_text and search_text not in asset_dir.name.lower():
-                    continue
+            visible_assets = filter_entity_dirs(
+                assets,
+                prefix_filter=asset_filter,
+                search_text=search_text if active_tab == 1 else "",
+            )
+            for asset_dir in visible_assets:
                 asset_item = QtWidgets.QListWidgetItem(asset_dir.name)
                 asset_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(asset_dir))
                 preview = latest_preview_image(asset_dir)
@@ -297,7 +307,7 @@ class AssetManagerController:
 
     def _load_entity_details(self, entity_dir: Path) -> None:
         self.w._asset_current_entity = entity_dir
-        self.w._asset_current_entity_type = "shot" if entity_dir.parent.name == "shots" else "asset"
+        self.w._asset_current_entity_type = entity_type_for_path(entity_dir)
         self.w._preview_images = list_preview_images(entity_dir)
         self.w._preview_index = 0
         if self.w._preview_images:
@@ -323,14 +333,8 @@ class AssetManagerController:
         context = self.w.asset_context_combo.currentText()
         if self.w._asset_current_entity_type == "shot":
             context = self._pick_best_context(entity_dir, context)
-        normalized = context.strip().lower()
-        list_context = None if normalized in ("all", "tous", "toutes") else context
-        self.w.asset_meta.setText(
-            f"Owner: {owner}\n"
-            f"Status: {status}\n"
-            f"Context: {context}\n"
-            f"Entity: {entity_dir.name}"
-        )
+        list_context = normalize_list_context(context)
+        self.w.asset_meta.setText(build_asset_meta_text(owner, status, context, entity_dir.name))
 
         self.w.asset_versions_list.clear()
         usd_versions = list_usd_versions(
@@ -373,27 +377,13 @@ class AssetManagerController:
                 row.selection_changed.connect(sync_item_data_and_preview)
                 sync_item_data()
         else:
-            if self.w._asset_current_entity_type == "shot":
-                self.w.asset_versions_list.addItem("No published USD/Video for this context")
-            else:
-                self.w.asset_versions_list.addItem("No published USD for this context")
+            self.w.asset_versions_list.addItem(empty_versions_message(self.w._asset_current_entity_type))
 
         if not self.w._preview_images and video_versions:
             self.w.asset_video_controller.preview_first_frame(video_versions[0])
 
         self.w.asset_history_list.clear()
-        notes_path = entity_dir / "notes.txt"
-        if notes_path.exists():
-            try:
-                note = notes_path.read_text(encoding="utf-8").strip()
-            except Exception:
-                note = ""
-            if note:
-                self.w.asset_history_list.addItem(note)
-            else:
-                self.w.asset_history_list.addItem("No history yet")
-        else:
-            self.w.asset_history_list.addItem("No history yet")
+        self.w.asset_history_list.addItem(read_history_note(entity_dir))
 
     def _update_preview_label(self) -> None:
         total = len(getattr(self.w, "_preview_images", []))
@@ -472,11 +462,6 @@ class AssetManagerController:
             self._load_entity_details(Path(entity))
 
     def _pick_best_context(self, entity_dir: Path, current: str) -> str:
-        if self.w._asset_current_entity_type != "shot":
-            return current
-        if current.strip().lower() in ("all", "tous", "toutes"):
-            return current
-
         def has_content(ctx: str) -> bool:
             if list_usd_versions(
                 entity_dir,
@@ -488,18 +473,18 @@ class AssetManagerController:
                 return True
             return False
 
-        if current and has_content(current):
-            return current
-
         contexts = [self.w.asset_context_combo.itemText(i) for i in range(self.w.asset_context_combo.count())]
-        for ctx in contexts:
-            if has_content(ctx):
-                if ctx != current:
-                    self.w.asset_context_combo.blockSignals(True)
-                    self.w.asset_context_combo.setCurrentText(ctx)
-                    self.w.asset_context_combo.blockSignals(False)
-                return ctx
-        return current
+        chosen = pick_best_context(
+            entity_type=self.w._asset_current_entity_type,
+            current=current,
+            contexts=contexts,
+            has_content=has_content,
+        )
+        if chosen != current:
+            self.w.asset_context_combo.blockSignals(True)
+            self.w.asset_context_combo.setCurrentText(chosen)
+            self.w.asset_context_combo.blockSignals(False)
+        return chosen
 
     def on_asset_version_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         kind = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)

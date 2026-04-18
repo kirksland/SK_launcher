@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-DEFAULT_PROJECTS_DIR = Path(r"C:\Users\justi\Documents\HoudiniProjects")
-DEFAULT_TEMPLATE_HIP = Path(r"C:\Users\justi\Documents\HoudiniProjects\newProject2\newfile_001.hipnc")
-SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings.json"
+LAUNCHER_ROOT = Path(__file__).resolve().parent.parent
+LEGACY_SETTINGS_PATH = LAUNCHER_ROOT / "settings.json"
+
+
+def _documents_dir() -> Path:
+    home = Path.home()
+    documents = home / "Documents"
+    return documents if documents.exists() else home
+
+
+DEFAULT_PROJECTS_DIR = _documents_dir() / "HoudiniProjects"
+DEFAULT_TEMPLATE_HIP = LAUNCHER_ROOT / "untitled.hipnc"
+DEFAULT_SERVER_REPO_DIR = _documents_dir() / "StudioProject"
 
 DEFAULT_ASSET_SCHEMA = {
     "usd_search": ["publish", "root"],
@@ -19,11 +30,42 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "new_hip_pattern": "{projectName}_001.hipnc",
     "use_file_association": True,
     "houdini_exe": "",
-    "server_repo_dir": r"C:\Users\justi\Documents\studio project\StudioProject",
+    "server_repo_dir": str(DEFAULT_SERVER_REPO_DIR),
     "video_backend": "auto",
     "asset_manager_projects": [],
     "asset_schema": DEFAULT_ASSET_SCHEMA,
 }
+
+
+def user_settings_dir() -> Path:
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        return Path(appdata) / "SkyforgeLauncher"
+    return _documents_dir() / "SkyforgeLauncher"
+
+
+def user_settings_path() -> Path:
+    return user_settings_dir() / "settings.json"
+
+
+def active_settings_path(
+    *,
+    explicit_path: Optional[Path] = None,
+    legacy_path: Path = LEGACY_SETTINGS_PATH,
+    user_path: Optional[Path] = None,
+) -> Path:
+    if explicit_path is not None:
+        return explicit_path
+    env_path = os.getenv("SKYFORGE_SETTINGS_PATH", "").strip()
+    if env_path:
+        return Path(env_path)
+    if legacy_path.exists():
+        return legacy_path
+    return user_path or user_settings_path()
+
+
+def is_first_run(settings_path: Optional[Path] = None) -> bool:
+    return not active_settings_path(explicit_path=settings_path).exists()
 
 
 def _default_settings_with_latest_houdini() -> Dict[str, object]:
@@ -35,11 +77,12 @@ def _default_settings_with_latest_houdini() -> Dict[str, object]:
     return defaults
 
 
-def load_settings() -> Dict[str, object]:
-    if not SETTINGS_PATH.exists():
+def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
+    resolved_path = active_settings_path(explicit_path=settings_path)
+    if not resolved_path.exists():
         return _default_settings_with_latest_houdini()
     try:
-        data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        data = json.loads(resolved_path.read_text(encoding="utf-8"))
     except Exception:
         return _default_settings_with_latest_houdini()
     merged = DEFAULT_SETTINGS.copy()
@@ -62,8 +105,31 @@ def load_settings() -> Dict[str, object]:
     return merged
 
 
-def save_settings(settings: Dict[str, object]) -> None:
-    SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+def save_settings(settings: Dict[str, object], settings_path: Optional[Path] = None) -> None:
+    resolved_path = active_settings_path(explicit_path=settings_path)
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
+
+def settings_startup_issues(settings: Dict[str, object]) -> List[str]:
+    issues: List[str] = []
+
+    projects_dir = str(settings.get("projects_dir", "")).strip()
+    server_repo_dir = str(settings.get("server_repo_dir", "")).strip()
+    template_hip = str(settings.get("template_hip", "")).strip()
+    use_assoc = bool(settings.get("use_file_association", True))
+    houdini_exe = str(settings.get("houdini_exe", "")).strip()
+
+    if not projects_dir or not Path(projects_dir).exists():
+        issues.append("Projects Folder")
+    if not server_repo_dir or not Path(server_repo_dir).exists():
+        issues.append("Server Repo Folder")
+    if not template_hip or not Path(template_hip).exists():
+        issues.append("Template Hip")
+    if not use_assoc and (not houdini_exe or not Path(houdini_exe).exists()):
+        issues.append("Houdini Executable")
+
+    return issues
 
 
 def normalize_asset_manager_projects(raw: object) -> List[Dict[str, Optional[str]]]:

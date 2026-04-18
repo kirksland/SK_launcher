@@ -28,17 +28,22 @@ def discover_board_tools(force: bool = False) -> dict[str, BoardToolCapabilities
         _BOARD_TOOLS_DISCOVERED = False
 
     pkg_name = "tools.board_tools"
-    pkg_dir = Path(__file__).resolve().parent
-    if not pkg_dir.exists():
+    package = _import_or_reload(pkg_name, force=force)
+    search_paths = list(getattr(package, "__path__", [])) if package is not None else []
+    if not search_paths:
+        pkg_dir = Path(__file__).resolve().parent
+        if pkg_dir.exists():
+            search_paths = [str(pkg_dir)]
+    if not search_paths:
         return {}
 
-    for mod in pkgutil.iter_modules([str(pkg_dir)]):
+    for mod in pkgutil.iter_modules(search_paths):
         name = str(mod.name)
         if name.startswith("_") or name in {"registry", "base", "edit", "image"}:
             continue
         package_name = f"{pkg_name}.{name}"
-        package = _import_or_reload(package_name, force=force)
-        if package is None:
+        tool_package = _import_or_reload(package_name, force=force)
+        if tool_package is None:
             continue
         has_tool = _import_or_reload(f"{package_name}.tool", force=force) is not None
         has_image = _import_or_reload(f"{package_name}.image", force=force) is not None

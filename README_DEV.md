@@ -20,6 +20,23 @@ Setup (Portable)
 4) Launch:
    `run_launcher.bat`
 
+First-run test
+--------------
+To simulate a new user config without touching your real local settings:
+`run_first_launch_test.bat`
+
+To reset that fresh test profile:
+`run_first_launch_test.bat reset`
+
+Build (Windows)
+---------------
+Install build-only dependency and produce a local PyInstaller build:
+`build_windows.bat`
+
+PyInstaller inputs:
+- `skyforge_launcher.spec`
+- `requirements-build.txt`
+
 Quick glossary
 --------------
 - `venv`: a private Python environment for this project only.
