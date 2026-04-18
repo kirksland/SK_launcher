@@ -87,6 +87,24 @@ def extract_bcs_settings(stack: object) -> tuple[float, float, float] | None:
     return None
 
 
+def extract_crop_settings(stack: object) -> tuple[float, float, float, float] | None:
+    for entry in normalize_tool_stack(stack):
+        if entry.get("id") != "crop":
+            continue
+        settings = entry.get("settings", {})
+        if not isinstance(settings, dict):
+            return None
+        try:
+            left = float(settings.get("left", 0.0))
+            top = float(settings.get("top", 0.0))
+            right = float(settings.get("right", 0.0))
+            bottom = float(settings.get("bottom", 0.0))
+        except Exception:
+            return None
+        return left, top, right, bottom
+    return None
+
+
 def apply_image_tool_stack(rgb: object, stack: object) -> object:
     _discover_tools()
     output = rgb
@@ -102,4 +120,3 @@ def apply_image_tool_stack(rgb: object, stack: object) -> object:
             settings = {}
         output = apply_fn(output, settings)
     return output
-

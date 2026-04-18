@@ -470,7 +470,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
     def _on_main_page_changed(self, index: int) -> None:
         # Ensure board visuals/overrides are freshly applied when entering the Board page.
         if int(index) == 2 and hasattr(self, "board_controller") and self.board_controller is not None:
-            QtCore.QTimer.singleShot(0, self.board_controller.load_board)
+            QtCore.QTimer.singleShot(0, self.board_controller.ensure_board_loaded)
 
     def set_clients_badge(self, enabled: bool) -> None:
         if self._nav_clients_btn is None or self._nav_clients_badge is None:

@@ -138,6 +138,22 @@ class VideoController:
         play_button.clicked.connect(self.toggle_play)
         slider.sliderMoved.connect(self.seek)
 
+    def is_playing(self) -> bool:
+        if self._video_backend == "qt" and self._player and QtMultimedia is not None:
+            try:
+                return (
+                    self._player.playbackState()
+                    == QtMultimedia.QMediaPlayer.PlaybackState.PlayingState
+                )
+            except Exception:
+                return False
+        if self._video_backend == "opencv":
+            return bool(self._cv_playing)
+        return False
+
+    def play_label(self) -> str:
+        return "Pause" if self.is_playing() else "Play"
+
     def play_path(self, path: Path) -> None:
         self._show_video_widget()
         if self._video_backend == "qt" and self._player:

@@ -13,7 +13,13 @@ from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from core.houdini_env import build_houdini_env
-from tools.image_tools.registry import apply_image_tool_stack, build_bcs_stack, extract_bcs_settings, normalize_tool_stack
+from tools.image_tools.registry import (
+    apply_image_tool_stack,
+    build_bcs_stack,
+    extract_bcs_settings,
+    extract_crop_settings,
+    normalize_tool_stack,
+)
 from video.player import VideoController, VideoPreviewLabel
 
 try:
@@ -87,6 +93,50 @@ def _draw_corner_badge(painter: QtGui.QPainter, label: str, color: QtGui.QColor)
         label,
     )
     painter.restore()
+
+
+def _sanitize_crop_settings(left: float, top: float, right: float, bottom: float) -> tuple[float, float, float, float]:
+    try:
+        left = float(left)
+    except Exception:
+        left = 0.0
+    try:
+        top = float(top)
+    except Exception:
+        top = 0.0
+    try:
+        right = float(right)
+    except Exception:
+        right = 0.0
+    try:
+        bottom = float(bottom)
+    except Exception:
+        bottom = 0.0
+    left = max(0.0, min(0.95, left))
+    top = max(0.0, min(0.95, top))
+    right = max(0.0, min(0.95, right))
+    bottom = max(0.0, min(0.95, bottom))
+    max_sum = 0.95
+    if left + right > max_sum:
+        scale = max_sum / max(1e-6, left + right)
+        left *= scale
+        right *= scale
+    if top + bottom > max_sum:
+        scale = max_sum / max(1e-6, top + bottom)
+        top *= scale
+        bottom *= scale
+    return left, top, right, bottom
+
+
+def _crop_source_rect(pixmap: QtGui.QPixmap, crop_norm: tuple[float, float, float, float]) -> QtCore.QRectF:
+    left, top, right, bottom = _sanitize_crop_settings(*crop_norm)
+    width = float(max(1, pixmap.width()))
+    height = float(max(1, pixmap.height()))
+    x = width * left
+    y = height * top
+    w = max(1.0, width * max(0.01, 1.0 - left - right))
+    h = max(1.0, height * max(0.01, 1.0 - top - bottom))
+    return QtCore.QRectF(x, y, w, h)
 
 
 class _VideoToSequenceWorker(QtCore.QObject):
@@ -636,7 +686,9 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
         self._pixmap = self._proxy_pixmap
         self._override_pixmap: Optional[QtGui.QPixmap] = None
         self._logical_size = controller._get_image_size(path, fallback=self._pixmap.size())
-        self._rect = QtCore.QRectF(0, 0, float(self._logical_size.width()), float(self._logical_size.height()))
+        self._base_size = QtCore.QSizeF(float(self._logical_size.width()), float(self._logical_size.height()))
+        self._crop_norm = (0.0, 0.0, 0.0, 0.0)
+        self._rect = QtCore.QRectF(0, 0, self._base_size.width(), self._base_size.height())
         self.setTransformOriginPoint(self._rect.center())
 
     def set_quality(self, quality: str) -> None:
@@ -680,6 +732,23 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
     def boundingRect(self) -> QtCore.QRectF:  # type: ignore[override]
         return self._rect
 
+    def set_crop_norm(self, left: float, top: float, right: float, bottom: float) -> None:
+        left, top, right, bottom = _sanitize_crop_settings(left, top, right, bottom)
+        if self._crop_norm == (left, top, right, bottom):
+            return
+        self.prepareGeometryChange()
+        self._crop_norm = (left, top, right, bottom)
+        width_factor = max(0.01, 1.0 - left - right)
+        height_factor = max(0.01, 1.0 - top - bottom)
+        self._rect = QtCore.QRectF(
+            0,
+            0,
+            self._base_size.width() * width_factor,
+            self._base_size.height() * height_factor,
+        )
+        self.setTransformOriginPoint(self._rect.center())
+        self.update()
+
     def paint(
         self,
         painter: QtGui.QPainter,
@@ -688,7 +757,7 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
     ) -> None:
         if self._pixmap is None or self._pixmap.isNull():
             return
-        painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+        painter.drawPixmap(self._rect, self._pixmap, _crop_source_rect(self._pixmap, self._crop_norm))
         border_pen = QtGui.QPen(QtGui.QColor(74, 163, 255, 140), 2)
         border_pen.setCosmetic(True)
         painter.setPen(border_pen)
@@ -717,7 +786,9 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
         if self._pixmap is None or self._pixmap.isNull():
             self._pixmap = controller._build_media_placeholder("VIDEO", path.name)
         self._override_pixmap: Optional[QtGui.QPixmap] = None
-        self._rect = QtCore.QRectF(0, 0, float(self._pixmap.width()), float(self._pixmap.height()))
+        self._base_size = QtCore.QSizeF(float(self._pixmap.width()), float(self._pixmap.height()))
+        self._crop_norm = (0.0, 0.0, 0.0, 0.0)
+        self._rect = QtCore.QRectF(0, 0, self._base_size.width(), self._base_size.height())
         self.setTransformOriginPoint(self._rect.center())
 
     def file_name(self) -> str:
@@ -732,6 +803,23 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
     def boundingRect(self) -> QtCore.QRectF:  # type: ignore[override]
         return self._rect
 
+    def set_crop_norm(self, left: float, top: float, right: float, bottom: float) -> None:
+        left, top, right, bottom = _sanitize_crop_settings(left, top, right, bottom)
+        if self._crop_norm == (left, top, right, bottom):
+            return
+        self.prepareGeometryChange()
+        self._crop_norm = (left, top, right, bottom)
+        width_factor = max(0.01, 1.0 - left - right)
+        height_factor = max(0.01, 1.0 - top - bottom)
+        self._rect = QtCore.QRectF(
+            0,
+            0,
+            self._base_size.width() * width_factor,
+            self._base_size.height() * height_factor,
+        )
+        self.setTransformOriginPoint(self._rect.center())
+        self.update()
+
     def paint(
         self,
         painter: QtGui.QPainter,
@@ -739,11 +827,11 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
         widget: Optional[QtWidgets.QWidget] = None,
     ) -> None:
         if self._override_pixmap is not None and not self._override_pixmap.isNull():
-            painter.drawPixmap(self._rect, self._override_pixmap, self._override_pixmap.rect())
+            painter.drawPixmap(self._rect, self._override_pixmap, _crop_source_rect(self._override_pixmap, self._crop_norm))
         else:
             if self._pixmap is None or self._pixmap.isNull():
                 return
-            painter.drawPixmap(self._rect, self._pixmap, self._pixmap.rect())
+            painter.drawPixmap(self._rect, self._pixmap, _crop_source_rect(self._pixmap, self._crop_norm))
         border_pen = QtGui.QPen(QtGui.QColor(242, 193, 78, 140), 2)
         border_pen.setCosmetic(True)
         painter.setPen(border_pen)
@@ -1022,10 +1110,13 @@ class BoardController:
     def __init__(self, window: QtWidgets.QMainWindow) -> None:
         self.w = window
         self._project_root: Optional[Path] = None
+        self._loaded_project_root: Optional[Path] = None
+        self._board_state_loaded: bool = False
         self._dirty = False
         self._loading = False
         self._saving = False
         self._last_save_ts = 0.0
+        self._board_state: dict = {"items": [], "image_display_overrides": {}}
         self._pixmap_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
         self._video_thumb_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
         self._sequence_thumb_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
@@ -1049,6 +1140,7 @@ class BoardController:
         self._apply_sequence_map: dict[str, QtWidgets.QGraphicsItem] = {}
         self._apply_note_map: dict[str, BoardNoteItem] = {}
         self._apply_payload_ref: Optional[dict] = None
+        self._scene_interaction_depth = 0
         self._apply_phase = "idle"
         self._apply_base_label: Optional[str] = None
         self._convert_thread: Optional[QtCore.QThread] = None
@@ -1060,6 +1152,10 @@ class BoardController:
         self._edit_seq_playing: bool = False
         self._edit_seq_timer: Optional[QtCore.QTimer] = None
         self._edit_seq_fps: int = 24
+        self._edit_video_playing: bool = False
+        self._edit_video_timer: Optional[QtCore.QTimer] = None
+        self._edit_video_fps: float = 24.0
+        self._edit_video_playback_dim: int = 960
         self._edit_video_path: Optional[Path] = None
         self._edit_video_total: int = 0
         self._edit_video_playhead: int = 0
@@ -1078,9 +1174,13 @@ class BoardController:
         self._edit_image_contrast: float = 1.0
         self._edit_image_saturation: float = 1.0
         self._edit_image_vibrance: float = 0.0
+        self._edit_crop_left: float = 0.0
+        self._edit_crop_top: float = 0.0
+        self._edit_crop_right: float = 0.0
+        self._edit_crop_bottom: float = 0.0
         self._edit_tool_stack: list[dict[str, object]] = []
         self._edit_selected_tool_index: int = -1
-        self._edit_tool_defs: list[tuple[str, str]] = [("bcs", "BCS"), ("vibrance", "Vibrance")]
+        self._edit_tool_defs: list[tuple[str, str]] = [("bcs", "BCS"), ("vibrance", "Vibrance"), ("crop", "Crop")]
         self._edit_image_thread: Optional[QtCore.QThread] = None
         self._edit_image_worker: Optional[_ImageAdjustPreviewWorker] = None
         self._edit_preview_timer: Optional[QtCore.QTimer] = None
@@ -1109,6 +1209,7 @@ class BoardController:
         self.w.board_page.groups_tree.itemChanged.connect(self._on_group_tree_item_changed)
         self.w.board_page.edit_sequence_slider.valueChanged.connect(self._on_edit_sequence_slider)
         self.w.board_page.edit_sequence_play_btn.clicked.connect(self._toggle_edit_sequence_play)
+        self.w.board_page.edit_timeline_play_btn.clicked.connect(self._toggle_edit_timeline_play)
         self.w.board_page.edit_sequence_timeline.playheadChanged.connect(self._on_edit_sequence_timeline_playhead)
         self.w.board_page.edit_timeline.playheadChanged.connect(self._on_edit_timeline_playhead)
         self.w.board_page.edit_timeline.scrubStateChanged.connect(self._on_edit_timeline_scrub_state)
@@ -1130,21 +1231,34 @@ class BoardController:
         self.w.board_page.edit_image_vibrance_slider.valueChanged.connect(self._on_edit_image_vibrance_changed)
         self.w.board_page.edit_image_vibrance_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
         self.w.board_page.edit_image_vibrance_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_crop_left_slider.valueChanged.connect(self._on_edit_crop_changed)
+        self.w.board_page.edit_crop_top_slider.valueChanged.connect(self._on_edit_crop_changed)
+        self.w.board_page.edit_crop_right_slider.valueChanged.connect(self._on_edit_crop_changed)
+        self.w.board_page.edit_crop_bottom_slider.valueChanged.connect(self._on_edit_crop_changed)
+        self.w.board_page.edit_crop_left_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_crop_left_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_crop_top_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_crop_top_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_crop_right_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_crop_right_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self.w.board_page.edit_crop_bottom_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
+        self.w.board_page.edit_crop_bottom_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
         self.w.board_page.edit_exr_gamma_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
         self.w.board_page.edit_exr_gamma_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
         self.w.board_page.edit_image_adjust_reset_btn.clicked.connect(self._reset_edit_image_adjustments)
         self.w.board_page.edit_image_tool_list.currentRowChanged.connect(self._on_edit_tool_stack_selection_changed)
         self.w.board_page.edit_image_tool_add_btn.clicked.connect(self._on_edit_tool_stack_add_clicked)
         self.w.board_page.edit_image_tool_remove_btn.clicked.connect(self._on_edit_tool_stack_remove_clicked)
+        self.w.board_page.imageToolRemoveRequested.connect(self._on_edit_tool_stack_remove_index)
         self.w.board_page.edit_image_tool_up_btn.clicked.connect(self._on_edit_tool_stack_up_clicked)
         self.w.board_page.edit_image_tool_down_btn.clicked.connect(self._on_edit_tool_stack_down_clicked)
-        self.w.board_page.edit_tool_exit.clicked.connect(self.exit_focus_mode)
         self._edit_focus_kind: Optional[str] = None
         self._focus_item: Optional[QtWidgets.QGraphicsItem] = None
         self._focus_overlay: Optional[QtWidgets.QGraphicsRectItem] = None
         self._focus_saved: dict[int, tuple[bool, float]] = {}
         self._focus_video_path: Optional[Path] = None
         self._focus_video_cap = None
+        self._focus_video_cap_frame_index: int = -1
         self._video_preview_timer: Optional[QtCore.QTimer] = None
         self._video_preview_pending: Optional[int] = None
         self._shutting_down: bool = False
@@ -1169,6 +1283,88 @@ class BoardController:
                 handle.write(line + "\n")
         except Exception:
             pass
+
+    @staticmethod
+    def _clone_payload(payload: Optional[dict]) -> dict:
+        if not isinstance(payload, dict):
+            return {"items": [], "image_display_overrides": {}}
+        try:
+            cloned = json.loads(json.dumps(payload))
+        except Exception:
+            cloned = {"items": [], "image_display_overrides": {}}
+        if not isinstance(cloned, dict):
+            return {"items": [], "image_display_overrides": {}}
+        items = cloned.get("items", [])
+        if not isinstance(items, list):
+            cloned["items"] = []
+        overrides = cloned.get("image_display_overrides", {})
+        if not isinstance(overrides, dict):
+            cloned["image_display_overrides"] = {}
+        return cloned
+
+    def _sync_board_state_from_scene(self) -> dict:
+        payload = self._build_payload()
+        self._board_state = self._clone_payload(payload)
+        return self._clone_payload(self._board_state)
+
+    def _current_board_state(self) -> dict:
+        return self._clone_payload(self._board_state)
+
+    def _set_board_state(self, payload: Optional[dict]) -> dict:
+        self._board_state = self._clone_payload(payload)
+        return self._clone_payload(self._board_state)
+
+    def _sync_board_state_overrides(self) -> dict:
+        items = self._board_state.get("items", [])
+        media_ids = {
+            str(entry.get("file", ""))
+            for entry in items
+            if isinstance(entry, dict) and entry.get("type") in ("image", "video")
+        }
+        self._board_state["image_display_overrides"] = {
+            key: value
+            for key, value in self._image_exr_display_overrides.items()
+            if key in media_ids and isinstance(value, dict)
+        }
+        return self._clone_payload(self._board_state)
+
+    def _commit_scene_mutation(
+        self,
+        *,
+        history: bool = True,
+        save: bool = False,
+        reveal_items: Optional[list[QtWidgets.QGraphicsItem]] = None,
+        update_groups: bool = True,
+    ) -> dict:
+        if update_groups:
+            self._schedule_group_tree_update()
+        state = self._sync_board_state_from_scene()
+        self._refresh_scene_workspace()
+        self._dirty = True
+        if history:
+            self._schedule_history_snapshot()
+        if reveal_items:
+            self._reveal_scene_items(reveal_items)
+        if save:
+            self.save_board()
+        return state
+
+    def begin_scene_interaction(self) -> None:
+        self._scene_interaction_depth += 1
+
+    def end_scene_interaction(self, *, history: bool = True, update_groups: bool = True) -> dict:
+        if self._scene_interaction_depth > 0:
+            self._scene_interaction_depth -= 1
+        if self._scene_interaction_depth > 0:
+            return self._clone_payload(self._board_state)
+        return self._commit_scene_mutation(history=history, update_groups=update_groups)
+
+    def ensure_board_loaded(self) -> None:
+        if self._project_root is None:
+            return
+        if self._board_state_loaded and self._loaded_project_root == self._project_root:
+            return
+        self.load_board()
 
     def _ui_alive(self) -> bool:
         if self._shutting_down:
@@ -1291,6 +1487,7 @@ class BoardController:
                 return
         if self._project_root and self._dirty:
             self.save_board()
+        project_changed = project_root != self._project_root
         self._project_root = project_root
         enabled = project_root is not None
         self.w.board_add_image_btn.setEnabled(enabled)
@@ -1303,12 +1500,19 @@ class BoardController:
             base_label = f"Project: {project_root.name}"
             self._apply_base_label = base_label
             self.w.board_page.project_label.setText(f"{base_label} (loading...)")
+            if project_changed:
+                self._loaded_project_root = None
+                self._board_state_loaded = False
+                self._set_board_state({"items": [], "image_display_overrides": {}})
             self._schedule_board_load()
             if self._history_index < 0:
-                self._reset_history(self._build_payload())
+                self._reset_history(self._current_board_state())
         else:
             self.w.board_page.project_label.setText("No project selected")
             self._scene.clear()
+            self._set_board_state({"items": [], "image_display_overrides": {}})
+            self._loaded_project_root = None
+            self._board_state_loaded = False
         self._dirty = False
 
     def add_image(self) -> None:
@@ -1360,14 +1564,14 @@ class BoardController:
         item.setData(0, "image")
         item.setData(1, dest.name)
         if scene_pos is None:
-            scene_pos = self._scene.sceneRect().center()
+            scene_pos = self._current_view_scene_center()
         item.setPos(scene_pos)
         logical_w = item.boundingRect().width()
         if logical_w > 600:
             scale = 600 / max(1.0, logical_w)
             item.setScale(scale)
         self._scene.addItem(item)
-        self._dirty = True
+        self._commit_scene_mutation(history=False, update_groups=False)
         self._update_view_quality()
         self.update_visible_items()
         self._schedule_history_snapshot()
@@ -1475,14 +1679,14 @@ class BoardController:
         item.setData(0, "video")
         item.setData(1, dest.name)
         if scene_pos is None:
-            scene_pos = self._scene.sceneRect().center()
+            scene_pos = self._current_view_scene_center()
         item.setPos(scene_pos)
         logical_w = item.boundingRect().width()
         if logical_w > 600:
             scale = 600 / max(1.0, logical_w)
             item.setScale(scale)
         self._scene.addItem(item)
-        self._dirty = True
+        self._commit_scene_mutation(history=False, update_groups=False)
         self._update_view_quality()
         self._schedule_history_snapshot()
         return item
@@ -1608,9 +1812,12 @@ class BoardController:
                 img.setSelected(False)
             for sel in prev_selected:
                 sel.setSelected(True)
-        self._reveal_scene_items(added_items)
-        self._schedule_group_tree_update()
-        self.save_board()
+        self._commit_scene_mutation(
+            history=True,
+            save=True,
+            reveal_items=added_items,
+            update_groups=True,
+        )
 
     def add_sequence(self) -> None:
         if not self._project_root:
@@ -1651,14 +1858,14 @@ class BoardController:
         item.setData(0, "sequence")
         item.setData(1, self._relative_to_project(dir_path))
         if scene_pos is None:
-            scene_pos = self._scene.sceneRect().center()
+            scene_pos = self._current_view_scene_center()
         item.setPos(scene_pos)
         logical_w = item.boundingRect().width()
         if logical_w > 600:
             scale = 600 / max(1.0, logical_w)
             item.setScale(scale)
         self._scene.addItem(item)
-        self._dirty = True
+        self._commit_scene_mutation(history=False, update_groups=False)
         self._update_view_quality()
         self._schedule_history_snapshot()
         return item
@@ -1726,8 +1933,7 @@ class BoardController:
                 if group is not None:
                     group.add_member(seq_item)
                     group.update_bounds()
-            self._dirty = True
-            self._schedule_history_snapshot()
+            self._commit_scene_mutation(history=True, update_groups=True)
             self._notify("Video converted to sequence.")
 
         def _on_cancel() -> None:
@@ -1777,11 +1983,11 @@ class BoardController:
         item = BoardNoteItem("New note...")
         item.setData(0, "note")
         if scene_pos is None:
-            scene_pos = self._scene.sceneRect().center()
+            scene_pos = self._current_view_scene_center()
         item.setPos(scene_pos)
         item.setSelected(True)
         self._scene.addItem(item)
-        self._dirty = True
+        self._commit_scene_mutation(history=False, update_groups=True)
         self.edit_note(item)
 
     def add_group(self) -> None:
@@ -1802,7 +2008,7 @@ class BoardController:
         for item in items:
             group.add_member(item)
         group.update_bounds()
-        self._dirty = True
+        self._commit_scene_mutation(history=False, update_groups=True)
 
     def ungroup_selected(self) -> None:
         groups = [i for i in self._scene.selectedItems() if isinstance(i, BoardGroupItem)]
@@ -1816,7 +2022,7 @@ class BoardController:
             for member in group.members():
                 member.setSelected(True)
             self._scene.removeItem(group)
-        self._dirty = True
+        self._commit_scene_mutation(history=False, update_groups=True)
 
     def try_add_item_to_group(
         self, item: QtWidgets.QGraphicsItem, scene_pos: Optional[QtCore.QPointF]
@@ -1827,8 +2033,7 @@ class BoardController:
             if group.contains_scene_point(scene_pos):
                 group.add_member(item)
                 group.update_bounds()
-                self._dirty = True
-                self._schedule_history_snapshot()
+                self._commit_scene_mutation(history=True, update_groups=True)
                 return
 
     def handle_item_drop(self, items: list[QtWidgets.QGraphicsItem]) -> None:
@@ -1859,8 +2064,19 @@ class BoardController:
                 current_group.update_bounds()
             if target_group is not None:
                 target_group.update_bounds()
-        self._dirty = True
-        self._schedule_history_snapshot()
+
+    def delete_selected_items(self) -> None:
+        selected = list(self._scene.selectedItems())
+        if not selected:
+            return
+        self.begin_scene_interaction()
+        try:
+            for item in selected:
+                if item.scene() is self._scene:
+                    self._scene.removeItem(item)
+            self._prune_empty_groups()
+        finally:
+            self.end_scene_interaction(history=True, update_groups=True)
 
     def remove_selected_from_groups(self) -> None:
         removed = False
@@ -1871,8 +2087,7 @@ class BoardController:
                 group.update_bounds()
                 removed = True
         if removed:
-            self._dirty = True
-            self._schedule_history_snapshot()
+            self._commit_scene_mutation(history=True, update_groups=True)
 
     def add_selected_to_group(self, group_key: int) -> None:
         group = self._group_tree_refs.get(int(group_key))
@@ -1884,8 +2099,7 @@ class BoardController:
             if item.data(0) in ("image", "note", "video", "sequence"):
                 group.add_member(item)
         group.update_bounds()
-        self._dirty = True
-        self._schedule_history_snapshot()
+        self._commit_scene_mutation(history=True, update_groups=True)
 
     def select_group_members(self, group_item: BoardGroupItem) -> None:
         for item in self._scene.selectedItems():
@@ -1896,6 +2110,16 @@ class BoardController:
     def _groups(self) -> list[BoardGroupItem]:
         return [i for i in self._scene.items() if isinstance(i, BoardGroupItem)]
 
+    def _prune_empty_groups(self) -> bool:
+        removed = False
+        for item in list(self._scene.items()):
+            if isinstance(item, BoardGroupItem):
+                item.update_bounds()
+                if not item.members():
+                    self._scene.removeItem(item)
+                    removed = True
+        return removed
+
     def _find_group_for_item(self, item: QtWidgets.QGraphicsItem) -> Optional[BoardGroupItem]:
         for group in self._groups():
             if item in group.members():
@@ -1903,6 +2127,7 @@ class BoardController:
         return None
 
     def fit_view(self) -> None:
+        self._refresh_scene_workspace()
         rect = self._scene.itemsBoundingRect()
         if rect.isNull():
             return
@@ -1915,6 +2140,44 @@ class BoardController:
             return self._scene.sceneRect().center()
         return view.mapToScene(viewport_rect.center())
 
+    def _workspace_item_bounds(self) -> QtCore.QRectF:
+        rect = QtCore.QRectF()
+        for item in self._scene.items():
+            if item is self._focus_overlay:
+                continue
+            kind = item.data(0)
+            if kind not in {"image", "video", "sequence", "note", "group"}:
+                continue
+            rect = rect.united(item.sceneBoundingRect())
+        return rect
+
+    def _refresh_scene_workspace(self, extra_rect: Optional[QtCore.QRectF] = None) -> None:
+        workspace = self._workspace_item_bounds()
+        if extra_rect is not None and extra_rect.isValid() and not extra_rect.isNull():
+            workspace = workspace.united(extra_rect)
+        view_pad = 4000.0
+        min_half_extent = 5000.0
+        center = self._current_view_scene_center()
+        viewport_rect = QtCore.QRectF(
+            center.x() - view_pad,
+            center.y() - view_pad,
+            view_pad * 2.0,
+            view_pad * 2.0,
+        )
+        base_rect = QtCore.QRectF(
+            -min_half_extent,
+            -min_half_extent,
+            min_half_extent * 2.0,
+            min_half_extent * 2.0,
+        )
+        if workspace.isNull():
+            workspace = viewport_rect
+        else:
+            workspace = workspace.united(viewport_rect)
+        workspace = workspace.united(base_rect).adjusted(-view_pad, -view_pad, view_pad, view_pad)
+        if workspace.isValid() and not workspace.isNull():
+            self._scene.setSceneRect(workspace)
+
     def _reveal_scene_items(self, items: list[QtWidgets.QGraphicsItem]) -> None:
         if not items:
             return
@@ -1925,6 +2188,7 @@ class BoardController:
             rect = rect.united(item.sceneBoundingRect())
         if rect.isNull():
             return
+        self._refresh_scene_workspace(extra_rect=rect)
         view = self.w.board_page.view
         margins = 80
         view.ensureVisible(rect.adjusted(-margins, -margins, margins, margins))
@@ -1981,6 +2245,7 @@ class BoardController:
             y = col_heights[col_idx]
             item.setPos(item.pos() + QtCore.QPointF(x - rect.left(), y - rect.top()))
             col_heights[col_idx] = y + rect.height() + spacing
+        self._commit_scene_mutation(history=True, update_groups=True)
 
     def save_board(self) -> None:
         if not self._project_root:
@@ -1995,12 +2260,14 @@ class BoardController:
             )
             return
         self._commit_current_focus_image_override()
-        data = self._build_payload()
+        data = self._sync_board_state_overrides()
         try:
             self._saving = True
             self._last_save_ts = time.time()
             board_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             self._dirty = False
+            self._loaded_project_root = self._project_root
+            self._board_state_loaded = True
         except Exception as exc:
             self._notify(f"Failed to save board:\n{exc}")
         finally:
@@ -2035,7 +2302,7 @@ class BoardController:
     def _should_block_empty_board_save(self, existing_payload: Optional[dict]) -> bool:
         if not self._project_root:
             return False
-        current_count = self._payload_item_count(self._build_payload())
+        current_count = self._payload_item_count(self._current_board_state())
         existing_count = self._payload_item_count(existing_payload)
         if current_count != 0 or existing_count <= 0:
             return False
@@ -2068,17 +2335,24 @@ class BoardController:
         print(f"[BOARD] Load board: {board_path}")
         self._loading = True
         if not board_path.exists():
-            self._start_apply_payload({"items": []})
+            payload = {"items": [], "image_display_overrides": {}}
+            self._set_board_state(payload)
+            self._loaded_project_root = self._project_root
+            self._board_state_loaded = True
+            self._start_apply_payload(payload)
             return
         try:
             payload = json.loads(board_path.read_text(encoding="utf-8"))
         except Exception:
             return
+        payload = self._set_board_state(payload)
+        self._loaded_project_root = self._project_root
+        self._board_state_loaded = True
         self._start_apply_payload(payload)
 
     def _schedule_board_load(self) -> None:
         # Defer heavy loading to keep UI responsive on click.
-        QtCore.QTimer.singleShot(40, self.load_board)
+        QtCore.QTimer.singleShot(40, self.ensure_board_loaded)
 
     def _parse_image_display_overrides(self, payload: dict) -> dict[str, dict[str, object]]:
         raw = payload.get("image_display_overrides")
@@ -2111,6 +2385,7 @@ class BoardController:
         return parsed
 
     def _start_apply_payload(self, payload: dict) -> None:
+        payload = self._set_board_state(payload)
         if self._apply_timer is not None and self._apply_timer.isActive():
             self._apply_timer.stop()
         self._scene.blockSignals(True)
@@ -2206,6 +2481,9 @@ class BoardController:
                 self._scene.addItem(item)
                 if filename:
                     self._apply_video_map[str(filename)] = item
+                    override = self._image_exr_display_overrides.get(str(filename))
+                    if isinstance(override, dict):
+                        self._apply_override_to_video_item(item, override)
             elif entry.get("type") == "sequence":
                 dir_text = str(entry.get("dir", ""))
                 dir_path = self._resolve_project_path(dir_text)
@@ -2282,10 +2560,11 @@ class BoardController:
         self._scene.blockSignals(False)
         self._dirty = False
         self._loading = False
+        applied_state = self._sync_board_state_from_scene()
+        self._refresh_scene_workspace()
         self._update_view_quality()
         self.update_visible_items()
-        if self._apply_payload_ref is not None:
-            self._reset_history(self._apply_payload_ref)
+        self._reset_history(applied_state)
         if self._apply_base_label:
             self.w.board_page.project_label.setText(self._apply_base_label)
         QtCore.QTimer.singleShot(0, self._fit_view_after_load)
@@ -2297,6 +2576,11 @@ class BoardController:
         path = item.file_path()
         brightness, contrast, saturation = self._coerce_color_adjustments(override)
         tool_stack = self._tool_stack_from_override(override)
+        crop = extract_crop_settings(tool_stack)
+        if crop is not None:
+            item.set_crop_norm(*crop)
+        else:
+            item.set_crop_norm(*self._default_crop_settings())
         channel = str(override.get("channel", "")).strip()
         if channel and path.suffix.lower() == ".exr":
             gamma = float(override.get("gamma", 2.2))
@@ -2321,6 +2605,19 @@ class BoardController:
                 tool_stack,
             )
 
+    def _apply_override_to_video_item(self, item: BoardVideoItem, override: dict[str, object]) -> None:
+        if item.scene() is None:
+            return
+        tool_stack = self._tool_stack_from_override(override)
+        crop = extract_crop_settings(tool_stack)
+        if crop is not None:
+            item.set_crop_norm(*crop)
+        else:
+            item.set_crop_norm(*self._default_crop_settings())
+        pixmap = self._get_video_frame_pixmap(item.file_path(), 0, 1024)
+        if pixmap is not None:
+            item.set_override_pixmap(pixmap)
+
     def _schedule_post_load_reapply(self) -> None:
         if not self._ui_alive():
             return
@@ -2335,14 +2632,18 @@ class BoardController:
         if not self._ui_alive() or self._loading:
             return
         for scene_item in list(self._scene.items()):
-            if not isinstance(scene_item, BoardImageItem):
+            if not isinstance(scene_item, (BoardImageItem, BoardVideoItem)):
                 continue
             filename = str(scene_item.data(1) or "").strip()
             if not filename:
                 continue
             override = self._image_exr_display_overrides.get(filename)
-            if isinstance(override, dict):
+            if not isinstance(override, dict):
+                continue
+            if isinstance(scene_item, BoardImageItem):
                 self._apply_override_to_image_item(scene_item, override)
+            else:
+                self._apply_override_to_video_item(scene_item, override)
 
     def _fit_view_after_load(self) -> None:
         rect = self._scene.itemsBoundingRect()
@@ -2429,7 +2730,7 @@ class BoardController:
             )
             item.set_text(text_edit.text())
             item.set_note_style(size_spin.value(), align_flag, selected_color)
-            self._dirty = True
+            self._commit_scene_mutation(history=True, update_groups=True)
 
         color_btn.clicked.connect(pick_color)
         dialog.finished.connect(lambda _result: apply_changes())
@@ -2547,7 +2848,24 @@ class BoardController:
 
     def _show_edit_panel_for_video(self, path: Path) -> None:
         self._edit_image_path = None
-        self.w.board_page.set_image_adjust_controls_visible(False)
+        self._edit_tool_defs = [("crop", "Crop")]
+        self._edit_tool_stack = [self._tool_entry_from_id("crop")]
+        self._edit_selected_tool_index = 0
+        self._edit_crop_left, self._edit_crop_top, self._edit_crop_right, self._edit_crop_bottom = self._default_crop_settings()
+        if isinstance(self._focus_item, BoardVideoItem):
+            filename = str(self._focus_item.data(1) or "").strip()
+            override = self._image_exr_display_overrides.get(filename)
+            self._edit_tool_stack = self._tool_stack_from_override(override)
+        self.w.board_page.set_image_adjust_controls_visible(True)
+        self._sync_tool_stack_ui()
+        self._apply_crop_to_focus_item()
+        self.w.board_page.edit_timeline_play_btn.setText("Play")
+        if self._edit_video_timer is None:
+            self._edit_video_timer = QtCore.QTimer(self.w)
+            self._edit_video_timer.timeout.connect(self._advance_edit_video_frame)
+        else:
+            self._edit_video_timer.stop()
+        self._edit_video_playing = False
         info = [
             f"Type: Video",
             f"Name: {path.name}",
@@ -2564,6 +2882,8 @@ class BoardController:
             self.w.board_page.show_edit_preview_video()
             self._edit_video_controller.preview_first_frame(path)
             self._edit_video_controller.play_path(path)
+            self._edit_video_controller.toggle_play()
+            self.w.board_page.edit_timeline_play_btn.setText("Play")
         self._focus_video_path = path
         self._ensure_focus_video_cap()
         self._init_edit_video_timeline(path)
@@ -2574,6 +2894,7 @@ class BoardController:
     def _show_edit_panel_for_sequence(self, dir_path: Path) -> None:
         self._edit_image_path = None
         self.w.board_page.set_image_adjust_controls_visible(False)
+        self.w.board_page.edit_timeline_play_btn.setText("Play")
         frames = self._sequence_frame_paths(dir_path)
         info = [
             "Type: Sequence",
@@ -2594,6 +2915,7 @@ class BoardController:
             self._edit_seq_timer.timeout.connect(self._advance_edit_sequence_frame)
         self._edit_seq_playing = False
         self.w.board_page.edit_sequence_play_btn.setText("Play")
+        self.w.board_page.edit_timeline_play_btn.setText("Play")
         self._edit_video_playhead = 0
         if frames:
             self.w.board_page.edit_sequence_slider.blockSignals(True)
@@ -2616,16 +2938,16 @@ class BoardController:
     def _show_edit_panel_for_image(self, path: Path) -> None:
         size = self._get_image_size(path)
         info = [
-            "Type: Image",
-            f"Name: {path.name}",
-            f"Size: {size.width()} x {size.height()}",
-            f"Path: {path}",
+            f"{path.name}",
+            f"{size.width()} x {size.height()}",
         ]
         self._edit_image_path = path
+        self._edit_tool_defs = [("bcs", "BCS"), ("vibrance", "Vibrance"), ("crop", "Crop")]
         self._edit_tool_stack = build_bcs_stack(*self._default_color_adjustments())
         self._edit_selected_tool_index = 0
         self._edit_image_brightness, self._edit_image_contrast, self._edit_image_saturation = self._default_color_adjustments()
         self._edit_image_vibrance = self._default_vibrance()
+        self._edit_crop_left, self._edit_crop_top, self._edit_crop_right, self._edit_crop_bottom = self._default_crop_settings()
         if isinstance(self._focus_item, BoardImageItem):
             filename = str(self._focus_item.data(1) or "").strip()
             override = self._image_exr_display_overrides.get(filename)
@@ -2646,6 +2968,7 @@ class BoardController:
                     break
         self.w.board_page.set_image_adjust_controls_visible(True)
         self._sync_tool_stack_ui()
+        self._apply_crop_to_focus_item()
         preview = self._get_display_pixmap(path, max_dim=1024)
         self.w.board_page.show_edit_preview_image(preview)
         if path.suffix.lower() == ".exr":
@@ -2672,7 +2995,7 @@ class BoardController:
                 "Edit Mode: Image",
                 info,
                 list_items=["Loading channels..."],
-                footer="EXR channels and metadata will appear here.",
+                footer="",
             )
             self._load_exr_channels_into_panel(path)
         else:
@@ -2684,7 +3007,7 @@ class BoardController:
                 "Edit Mode: Image",
                 info,
                 list_items=None,
-                footer="Edit/export options will appear here.",
+                footer="",
             )
         self.w.board_page.set_timeline_bar_visible(False)
         self.w.board_page.set_edit_preview_visible(False)
@@ -2716,14 +3039,18 @@ class BoardController:
         self._edit_video_path = path
         self._edit_video_playhead = 0
         total = 0
+        fps = 24.0
         if cv2 is not None:
             try:
                 cap = cv2.VideoCapture(str(path))
                 if cap.isOpened():
                     total = int(cap.get(7) or 0)  # CAP_PROP_FRAME_COUNT
+                    fps = float(cap.get(5) or 24.0)  # CAP_PROP_FPS
                 cap.release()
             except Exception:
                 total = 0
+                fps = 24.0
+        self._edit_video_fps = max(1.0, float(fps))
         self._edit_video_total = max(0, total)
         if self._edit_video_total <= 0:
             self._edit_video_clips = []
@@ -2749,11 +3076,18 @@ class BoardController:
             self._on_edit_sequence_timeline_playhead(int(frame))
             return
         self._edit_video_playhead = max(0, min(int(frame), max(0, self._edit_video_total - 1)))
-        if self._edit_video_controller is not None and not self._edit_timeline_scrubbing:
+        if (
+            self._edit_video_controller is not None
+            and not self._edit_timeline_scrubbing
+            and not self._edit_video_playing
+        ):
             self._edit_video_controller.seek_frame(self._edit_video_playhead)
         if isinstance(self._focus_item, BoardVideoItem):
-            delay = 140 if self._edit_timeline_scrubbing else 40
-            self._schedule_video_focus_preview(self._edit_video_playhead, delay_ms=delay)
+            if self._edit_video_playing:
+                self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
+            else:
+                delay = 140 if self._edit_timeline_scrubbing else 40
+                self._schedule_video_focus_preview(self._edit_video_playhead, delay_ms=delay)
         if hasattr(self.w.board_page, "edit_timeline_frame_label"):
             self.w.board_page.edit_timeline_frame_label.setText(f"Frame: {self._edit_video_playhead}")
 
@@ -2941,11 +3275,42 @@ class BoardController:
             self._edit_seq_timer.stop()
             self._edit_seq_playing = False
             self.w.board_page.edit_sequence_play_btn.setText("Play")
+            self.w.board_page.edit_timeline_play_btn.setText("Play")
         else:
             interval = int(1000 / max(1, self._edit_seq_fps))
             self._edit_seq_timer.start(max(1, interval))
             self._edit_seq_playing = True
             self.w.board_page.edit_sequence_play_btn.setText("Pause")
+            self.w.board_page.edit_timeline_play_btn.setText("Pause")
+
+    def _toggle_edit_timeline_play(self) -> None:
+        if self._edit_focus_kind == "sequence":
+            self._toggle_edit_sequence_play()
+            return
+        if self._edit_focus_kind == "video":
+            if self._edit_video_total <= 0:
+                return
+            if self._edit_video_timer is None:
+                self._edit_video_timer = QtCore.QTimer(self.w)
+                self._edit_video_timer.timeout.connect(self._advance_edit_video_frame)
+            if self._edit_video_playing:
+                self._edit_video_timer.stop()
+                self._edit_video_playing = False
+                self.w.board_page.edit_timeline_play_btn.setText("Play")
+            else:
+                interval = int(1000 / max(1.0, self._edit_video_fps))
+                self._edit_video_timer.start(max(1, interval))
+                self._edit_video_playing = True
+                self.w.board_page.edit_timeline_play_btn.setText("Pause")
+
+    def _advance_edit_video_frame(self) -> None:
+        if self._edit_video_total <= 0:
+            return
+        nxt = self._edit_video_playhead + 1
+        if nxt >= self._edit_video_total:
+            nxt = 0
+        self.w.board_page.edit_timeline.set_playhead(nxt)
+        self._on_edit_timeline_playhead(nxt)
 
     def _advance_edit_sequence_frame(self) -> None:
         if not self._edit_seq_frames:
@@ -3024,11 +3389,20 @@ class BoardController:
     def _default_vibrance() -> float:
         return 0.0
 
+    @staticmethod
+    def _default_crop_settings() -> tuple[float, float, float, float]:
+        return 0.0, 0.0, 0.0, 0.0
+
+    def _default_edit_tool_stack(self) -> list[dict[str, object]]:
+        if self._edit_focus_kind == "video":
+            return [self._tool_entry_from_id("crop")]
+        b, c, s = self._default_color_adjustments()
+        return build_bcs_stack(b, c, s)
+
     def _ensure_edit_tool_stack(self) -> None:
         tools = normalize_tool_stack(self._edit_tool_stack)
         if not tools:
-            b, c, s = self._default_color_adjustments()
-            tools = build_bcs_stack(b, c, s)
+            tools = self._default_edit_tool_stack()
         self._edit_tool_stack = [dict(t) for t in tools]
         if self._edit_selected_tool_index < 0 or self._edit_selected_tool_index >= len(self._edit_tool_stack):
             self._edit_selected_tool_index = 0
@@ -3048,6 +3422,18 @@ class BoardController:
                 "enabled": True,
                 "settings": {"amount": self._default_vibrance()},
             }
+        if key == "crop":
+            left, top, right, bottom = self._default_crop_settings()
+            return {
+                "id": "crop",
+                "enabled": True,
+                "settings": {
+                    "left": left,
+                    "top": top,
+                    "right": right,
+                    "bottom": bottom,
+                },
+            }
         b, c, s = self._default_color_adjustments()
         return {
             "id": "bcs",
@@ -3064,9 +3450,13 @@ class BoardController:
     def _sync_edit_values_from_tool_stack(self) -> None:
         b, c, s = self._default_color_adjustments()
         vib = self._default_vibrance()
+        crop_left, crop_top, crop_right, crop_bottom = self._default_crop_settings()
         bcs = extract_bcs_settings(self._edit_tool_stack)
         if bcs is not None:
             b, c, s = bcs
+        crop = extract_crop_settings(self._edit_tool_stack)
+        if crop is not None:
+            crop_left, crop_top, crop_right, crop_bottom = _sanitize_crop_settings(*crop)
         for entry in normalize_tool_stack(self._edit_tool_stack):
             if str(entry.get("id", "")) == "vibrance":
                 settings = entry.get("settings", {})
@@ -3080,6 +3470,10 @@ class BoardController:
         self._edit_image_contrast = max(0.0, min(2.0, float(c)))
         self._edit_image_saturation = max(0.0, min(2.0, float(s)))
         self._edit_image_vibrance = max(-1.0, min(1.0, float(vib)))
+        self._edit_crop_left = crop_left
+        self._edit_crop_top = crop_top
+        self._edit_crop_right = crop_right
+        self._edit_crop_bottom = crop_bottom
 
     def _sync_tool_stack_ui(self) -> None:
         self._ensure_edit_tool_stack()
@@ -3099,10 +3493,17 @@ class BoardController:
             self._edit_image_saturation,
         )
         self.w.board_page.set_image_vibrance_value(self._edit_image_vibrance)
+        self.w.board_page.set_image_crop_values(
+            self._edit_crop_left,
+            self._edit_crop_top,
+            self._edit_crop_right,
+            self._edit_crop_bottom,
+        )
         selected = self._selected_tool_entry()
         selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
         self.w.board_page.set_image_bcs_controls_visible(selected_id in ("", "bcs"))
         self.w.board_page.set_image_vibrance_visible(selected_id == "vibrance")
+        self.w.board_page.set_image_crop_visible(selected_id == "crop")
 
     def _current_edit_tool_stack(self) -> list[dict[str, object]]:
         self._ensure_edit_tool_stack()
@@ -3110,13 +3511,32 @@ class BoardController:
 
     def _tool_stack_from_override(self, override: object) -> list[dict[str, object]]:
         if not isinstance(override, dict):
-            b, c, s = self._default_color_adjustments()
-            return build_bcs_stack(b, c, s)
+            return self._default_edit_tool_stack()
         stack = normalize_tool_stack(override.get("tool_stack"))
         if stack:
             return stack
         b, c, s = self._coerce_color_adjustments(override)
-        return build_bcs_stack(b, c, s)
+        tools = build_bcs_stack(b, c, s)
+        crop = _sanitize_crop_settings(
+            override.get("crop_left", 0.0),
+            override.get("crop_top", 0.0),
+            override.get("crop_right", 0.0),
+            override.get("crop_bottom", 0.0),
+        )
+        if any(abs(v) > 1e-6 for v in crop):
+            tools.append(
+                {
+                    "id": "crop",
+                    "enabled": True,
+                    "settings": {
+                        "left": crop[0],
+                        "top": crop[1],
+                        "right": crop[2],
+                        "bottom": crop[3],
+                    },
+                }
+            )
+        return tools
 
     def _coerce_color_adjustments(self, override: object) -> tuple[float, float, float]:
         b_def, c_def, s_def = self._default_color_adjustments()
@@ -3155,6 +3575,41 @@ class BoardController:
             and abs(float(saturation) - s_def) < 1e-6
         )
 
+    def _crop_is_default(self, left: float, top: float, right: float, bottom: float) -> bool:
+        return (
+            abs(float(left)) < 1e-6
+            and abs(float(top)) < 1e-6
+            and abs(float(right)) < 1e-6
+            and abs(float(bottom)) < 1e-6
+        )
+
+    def _tool_entry_is_effective(self, entry: dict[str, object]) -> bool:
+        tool_id = str(entry.get("id", "")).strip().lower()
+        settings = entry.get("settings", {})
+        if not isinstance(settings, dict):
+            settings = {}
+        if tool_id == "bcs":
+            return not self._color_adjustments_are_default(
+                settings.get("brightness", 0.0),
+                settings.get("contrast", 1.0),
+                settings.get("saturation", 1.0),
+            )
+        if tool_id == "vibrance":
+            try:
+                amount = float(settings.get("amount", 0.0))
+            except Exception:
+                amount = 0.0
+            return abs(amount) > 1e-6
+        if tool_id == "crop":
+            left, top, right, bottom = _sanitize_crop_settings(
+                settings.get("left", 0.0),
+                settings.get("top", 0.0),
+                settings.get("right", 0.0),
+                settings.get("bottom", 0.0),
+            )
+            return not self._crop_is_default(left, top, right, bottom)
+        return bool(entry.get("enabled", True))
+
     def _tool_stack_is_effective(
         self,
         stack: object,
@@ -3165,9 +3620,7 @@ class BoardController:
         tools = normalize_tool_stack(stack)
         if not tools:
             return not self._color_adjustments_are_default(brightness, contrast, saturation)
-        if len(tools) == 1 and str(tools[0].get("id", "")) == "bcs":
-            return not self._color_adjustments_are_default(brightness, contrast, saturation)
-        return True
+        return any(self._tool_entry_is_effective(entry) for entry in tools)
 
     def _set_bcs_in_tool_stack(self, brightness: float, contrast: float, saturation: float) -> None:
         self._ensure_edit_tool_stack()
@@ -3217,6 +3670,37 @@ class BoardController:
         )
         self._edit_selected_tool_index = len(self._edit_tool_stack) - 1
 
+    def _set_crop_in_tool_stack(self, left: float, top: float, right: float, bottom: float, add_if_missing: bool = True) -> None:
+        self._ensure_edit_tool_stack()
+        left, top, right, bottom = _sanitize_crop_settings(left, top, right, bottom)
+        for idx, entry in enumerate(self._edit_tool_stack):
+            if str(entry.get("id", "")).strip().lower() == "crop":
+                settings = entry.get("settings", {})
+                if not isinstance(settings, dict):
+                    settings = {}
+                settings["left"] = left
+                settings["top"] = top
+                settings["right"] = right
+                settings["bottom"] = bottom
+                entry["settings"] = settings
+                self._edit_selected_tool_index = idx
+                return
+        if not add_if_missing:
+            return
+        self._edit_tool_stack.append(
+            {
+                "id": "crop",
+                "enabled": True,
+                "settings": {
+                    "left": left,
+                    "top": top,
+                    "right": right,
+                    "bottom": bottom,
+                },
+            }
+        )
+        self._edit_selected_tool_index = len(self._edit_tool_stack) - 1
+
     def _on_edit_tool_stack_selection_changed(self, row: int) -> None:
         self._edit_selected_tool_index = int(row)
         self._sync_tool_stack_ui()
@@ -3237,16 +3721,29 @@ class BoardController:
         if self._edit_image_path is None:
             return
         idx = self.w.board_page.current_image_tool_stack_index()
+        self._remove_edit_tool_stack_index(idx)
+
+    def _on_edit_tool_stack_remove_index(self, idx: int) -> None:
+        if self._edit_image_path is None:
+            return
+        self._remove_edit_tool_stack_index(int(idx))
+
+    def _remove_edit_tool_stack_index(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._edit_tool_stack):
             return
         self._edit_tool_stack.pop(idx)
         if not self._edit_tool_stack:
-            self._edit_tool_stack = [self._tool_entry_from_id("bcs")]
+            self._edit_tool_stack = self._default_edit_tool_stack()
             self._edit_selected_tool_index = 0
         else:
             self._edit_selected_tool_index = max(0, min(idx, len(self._edit_tool_stack) - 1))
         self._sync_tool_stack_ui()
-        self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+        if isinstance(self._focus_item, BoardVideoItem):
+            self._commit_current_focus_video_override()
+            self._apply_crop_to_focus_item()
+            self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
+        else:
+            self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
 
     def _on_edit_tool_stack_up_clicked(self) -> None:
         idx = self.w.board_page.current_image_tool_stack_index()
@@ -3312,13 +3809,59 @@ class BoardController:
         else:
             self._schedule_edit_preview_update()
 
+    def _apply_crop_to_focus_item(self) -> None:
+        if isinstance(self._focus_item, (BoardImageItem, BoardVideoItem)):
+            self._focus_item.set_crop_norm(
+                self._edit_crop_left,
+                self._edit_crop_top,
+                self._edit_crop_right,
+                self._edit_crop_bottom,
+            )
+            group = self._find_group_for_item(self._focus_item)
+            if group is not None:
+                group.update_bounds()
+            self._refresh_scene_workspace()
+
+    def _on_edit_crop_changed(self, *_: object) -> None:
+        left, top, right, bottom = self.w.board_page.current_image_crop_settings()
+        left, top, right, bottom = _sanitize_crop_settings(left, top, right, bottom)
+        self._edit_crop_left = left
+        self._edit_crop_top = top
+        self._edit_crop_right = right
+        self._edit_crop_bottom = bottom
+        self.w.board_page.set_image_crop_values(left, top, right, bottom)
+        self._set_crop_in_tool_stack(left, top, right, bottom)
+        self._apply_crop_to_focus_item()
+        if isinstance(self._focus_item, BoardImageItem):
+            self._commit_current_focus_image_override()
+            if self._edit_image_path is not None:
+                if self._edit_exr_path is not None:
+                    channel = self.w.board_page.current_exr_channel_value()
+                    if channel:
+                        self._edit_exr_channel = str(channel)
+                        self._schedule_edit_preview_update(channel=str(channel))
+                else:
+                    self._schedule_edit_preview_update()
+            return
+        if isinstance(self._focus_item, BoardVideoItem):
+            self._commit_current_focus_video_override()
+            self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
+
     def _reset_edit_image_adjustments(self) -> None:
         b_def, c_def, s_def = self._default_color_adjustments()
         v_def = self._default_vibrance()
+        crop_def = self._default_crop_settings()
         self.w.board_page.set_image_adjust_values(b_def, c_def, s_def)
         self.w.board_page.set_image_vibrance_value(v_def)
+        self.w.board_page.set_image_crop_values(*crop_def)
         self._set_bcs_in_tool_stack(b_def, c_def, s_def)
         self._set_vibrance_in_tool_stack(v_def, add_if_missing=False)
+        self._set_crop_in_tool_stack(*crop_def, add_if_missing=False)
+        self._apply_crop_to_focus_item()
+        if isinstance(self._focus_item, BoardVideoItem):
+            self._commit_current_focus_video_override()
+            self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
+            return
         self._on_edit_image_adjust_changed()
 
     def _on_edit_preview_slider_pressed(self) -> None:
@@ -3391,6 +3934,7 @@ class BoardController:
         if not effective:
             if filename in self._image_exr_display_overrides:
                 self._image_exr_display_overrides.pop(filename, None)
+                self._sync_board_state_overrides()
                 self._dirty = True
             return
         current = self._image_exr_display_overrides.get(filename)
@@ -3398,6 +3942,10 @@ class BoardController:
         merged["brightness"] = float(self._edit_image_brightness)
         merged["contrast"] = float(self._edit_image_contrast)
         merged["saturation"] = float(self._edit_image_saturation)
+        merged["crop_left"] = float(self._edit_crop_left)
+        merged["crop_top"] = float(self._edit_crop_top)
+        merged["crop_right"] = float(self._edit_crop_right)
+        merged["crop_bottom"] = float(self._edit_crop_bottom)
         merged["tool_stack"] = tool_stack
         if self._edit_exr_path is not None:
             channel_value = str(self._edit_exr_channel or "").strip()
@@ -3406,6 +3954,31 @@ class BoardController:
             merged["gamma"] = float(self._edit_exr_gamma)
             merged["srgb"] = bool(self._edit_exr_srgb)
         self._image_exr_display_overrides[filename] = merged
+        self._sync_board_state_overrides()
+        self._dirty = True
+
+    def _commit_current_focus_video_override(self) -> None:
+        if not isinstance(self._focus_item, BoardVideoItem):
+            return
+        filename = str(self._focus_item.data(1) or "").strip()
+        if not filename:
+            return
+        tool_stack = self._current_edit_tool_stack()
+        if not self._tool_stack_is_effective(tool_stack, 0.0, 1.0, 1.0):
+            if filename in self._image_exr_display_overrides:
+                self._image_exr_display_overrides.pop(filename, None)
+                self._sync_board_state_overrides()
+                self._dirty = True
+            return
+        current = self._image_exr_display_overrides.get(filename)
+        merged = dict(current) if isinstance(current, dict) else {}
+        merged["crop_left"] = float(self._edit_crop_left)
+        merged["crop_top"] = float(self._edit_crop_top)
+        merged["crop_right"] = float(self._edit_crop_right)
+        merged["crop_bottom"] = float(self._edit_crop_bottom)
+        merged["tool_stack"] = tool_stack
+        self._image_exr_display_overrides[filename] = merged
+        self._sync_board_state_overrides()
         self._dirty = True
 
     def _handle_exr_info_finished(
@@ -3495,6 +4068,7 @@ class BoardController:
                                 "saturation": float(self._edit_image_saturation),
                                 "tool_stack": self._current_edit_tool_stack(),
                             }
+                            self._sync_board_state_overrides()
                             self._dirty = True
                 else:
                     self.w.board_page.show_edit_preview_image(pixmap, label=f"Channel: {channel}")
@@ -3521,6 +4095,7 @@ class BoardController:
                         ):
                             self._image_exr_display_overrides.pop(filename, None)
                             self._focus_item.set_override_pixmap(None)
+                            self._sync_board_state_overrides()
                         else:
                             self._focus_item.set_override_pixmap(pixmap)
                             current = self._image_exr_display_overrides.get(filename)
@@ -3530,6 +4105,7 @@ class BoardController:
                             merged["saturation"] = float(self._edit_image_saturation)
                             merged["tool_stack"] = current_stack
                             self._image_exr_display_overrides[filename] = merged
+                            self._sync_board_state_overrides()
                         self._dirty = True
                     else:
                         self._focus_item.set_override_pixmap(pixmap)
@@ -3558,6 +4134,7 @@ class BoardController:
             obj.setEnabled(False)
             obj.setOpacity(0.15)
         # Add overlay
+        self._refresh_scene_workspace(extra_rect=item.sceneBoundingRect())
         overlay = QtWidgets.QGraphicsRectItem(scene.sceneRect())
         overlay.setBrush(QtGui.QColor(0, 0, 0, 120))
         overlay.setPen(QtCore.Qt.PenStyle.NoPen)
@@ -3587,14 +4164,25 @@ class BoardController:
                 filename = str(self._focus_item.data(1) or "").strip()
                 if not filename or filename not in self._image_exr_display_overrides:
                     self._focus_item.set_override_pixmap(None)
+                    self._focus_item.set_crop_norm(*self._default_crop_settings())
             if isinstance(self._focus_item, BoardVideoItem):
-                self._focus_item.set_override_pixmap(None)
+                filename = str(self._focus_item.data(1) or "").strip()
+                override = self._image_exr_display_overrides.get(filename)
+                if isinstance(override, dict):
+                    self._apply_override_to_video_item(self._focus_item, override)
+                else:
+                    self._focus_item.set_override_pixmap(None)
+                    self._focus_item.set_crop_norm(*self._default_crop_settings())
             if isinstance(self._focus_item, BoardSequenceItem):
                 self._focus_item.set_override_pixmap(None)
             self._focus_item.setZValue(0)
         self._focus_item = None
         self._edit_focus_kind = None
         self._edit_timeline_scrubbing = False
+        if self._edit_video_timer is not None and self._edit_video_timer.isActive():
+            self._edit_video_timer.stop()
+        self._edit_video_playing = False
+        self.w.board_page.edit_timeline_play_btn.setText("Play")
         if self._video_preview_timer is not None and self._video_preview_timer.isActive():
             self._video_preview_timer.stop()
         self._video_preview_pending = None
@@ -3831,11 +4419,13 @@ class BoardController:
             return
         if self._group_tree_is_editing():
             return
-        for item in list(self._scene.items()):
-            if isinstance(item, BoardGroupItem):
-                item.update_bounds()
-                if not item.members():
-                    self._scene.removeItem(item)
+        self._prune_empty_groups()
+        if self._scene_interaction_depth > 0:
+            self._refresh_scene_workspace()
+            self._update_view_quality()
+            return
+        self._sync_board_state_from_scene()
+        self._refresh_scene_workspace()
         self._dirty = True
         self._update_view_quality()
         self._schedule_history_snapshot()
@@ -4086,8 +4676,10 @@ class BoardController:
             cap = cv2.VideoCapture(str(self._focus_video_path))
             if cap.isOpened():
                 self._focus_video_cap = cap
+                self._focus_video_cap_frame_index = -1
         except Exception:
             self._focus_video_cap = None
+            self._focus_video_cap_frame_index = -1
 
     def _release_focus_video_cap(self) -> None:
         try:
@@ -4096,6 +4688,7 @@ class BoardController:
         except Exception:
             pass
         self._focus_video_cap = None
+        self._focus_video_cap_frame_index = -1
 
     def _schedule_video_focus_preview(self, frame_index: int, delay_ms: int = 40, immediate: bool = False) -> None:
         self._video_preview_pending = int(frame_index)
@@ -4119,26 +4712,51 @@ class BoardController:
         if not isinstance(self._focus_item, BoardVideoItem):
             return
         self._ensure_focus_video_cap()
-        pixmap = self._get_focus_video_frame_pixmap(idx, max_dim=self._max_display_dim)
+        max_dim = self._edit_video_playback_dim if self._edit_video_playing else self._max_display_dim
+        pixmap = self._get_focus_video_frame_pixmap(
+            idx,
+            max_dim=max_dim,
+            prefer_fast=bool(self._edit_video_playing),
+        )
         if pixmap is not None:
             self._focus_item.set_override_pixmap(pixmap)
 
-    def _get_focus_video_frame_pixmap(self, frame_index: int, max_dim: int) -> Optional[QtGui.QPixmap]:
+    def _get_focus_video_frame_pixmap(
+        self,
+        frame_index: int,
+        max_dim: int,
+        prefer_fast: bool = False,
+    ) -> Optional[QtGui.QPixmap]:
         if cv2 is None:
             return None
         if self._focus_video_cap is None:
             return None
         try:
-            self._focus_video_cap.set(1, int(frame_index))  # CAP_PROP_POS_FRAMES
+            target_frame = max(0, int(frame_index))
+            sequential_read = target_frame == (self._focus_video_cap_frame_index + 1)
+            if not sequential_read:
+                self._focus_video_cap.set(1, target_frame)  # CAP_PROP_POS_FRAMES
             ok, frame = self._focus_video_cap.read()
             if not ok or frame is None:
                 return None
+            self._focus_video_cap_frame_index = target_frame
+            if max_dim > 0:
+                h, w = frame.shape[:2]
+                largest_dim = max(w, h)
+                if largest_dim > max_dim:
+                    scale = float(max_dim) / float(largest_dim)
+                    new_size = (
+                        max(1, int(round(w * scale))),
+                        max(1, int(round(h * scale))),
+                    )
+                    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+                    frame = cv2.resize(frame, new_size, interpolation=interpolation)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             bytes_per_line = ch * w
             image = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
-            pixmap = QtGui.QPixmap.fromImage(image)
-            if pixmap.width() > max_dim or pixmap.height() > max_dim:
+            pixmap = QtGui.QPixmap.fromImage(image.copy())
+            if not prefer_fast and max_dim > 0 and (pixmap.width() > max_dim or pixmap.height() > max_dim):
                 pixmap = pixmap.scaled(
                     max_dim,
                     max_dim,
@@ -4239,13 +4857,14 @@ class BoardController:
         if self._history_index <= 0:
             return
         self._history_index -= 1
-        payload = json.loads(self._history[self._history_index])
+        payload = self._set_board_state(json.loads(self._history[self._history_index]))
         self._loading = True
         self._scene.blockSignals(True)
         self._scene.clear()
         self._apply_payload(payload)
         self._scene.blockSignals(False)
         self._loading = False
+        self._refresh_scene_workspace()
         self._dirty = True
         self._update_view_quality()
         self.update_visible_items()
@@ -4254,13 +4873,14 @@ class BoardController:
         if self._history_index >= len(self._history) - 1:
             return
         self._history_index += 1
-        payload = json.loads(self._history[self._history_index])
+        payload = self._set_board_state(json.loads(self._history[self._history_index]))
         self._loading = True
         self._scene.blockSignals(True)
         self._scene.clear()
         self._apply_payload(payload)
         self._scene.blockSignals(False)
         self._loading = False
+        self._refresh_scene_workspace()
         self._dirty = True
         self._update_view_quality()
         self.update_visible_items()
@@ -4321,10 +4941,16 @@ class BoardController:
                     "color": item.color_hex(),
                     "members": members,
                 })
+        media_ids = set(image_ids)
+        media_ids.update(
+            str(item.data(1) or "")
+            for item in self._scene.items()
+            if item.data(0) == "video"
+        )
         data["image_display_overrides"] = {
             key: value
             for key, value in self._image_exr_display_overrides.items()
-            if key in image_ids and isinstance(value, dict)
+            if key in media_ids and isinstance(value, dict)
         }
         return data
 
@@ -4401,6 +5027,9 @@ class BoardController:
                 self._scene.addItem(item)
                 if filename:
                     video_map[str(filename)] = item
+                    override = self._image_exr_display_overrides.get(str(filename))
+                    if isinstance(override, dict):
+                        self._apply_override_to_video_item(item, override)
             elif entry.get("type") == "sequence":
                 dir_text = str(entry.get("dir", ""))
                 dir_path = self._resolve_project_path(dir_text)
@@ -4479,7 +5108,7 @@ class BoardController:
 
     def _capture_history_snapshot(self) -> None:
         self._history_timer = None
-        payload = self._build_payload()
+        payload = self._current_board_state()
         serialized = json.dumps(payload, sort_keys=True)
         if self._history and self._history[self._history_index] == serialized:
             return
@@ -4489,6 +5118,7 @@ class BoardController:
         self._history_index = len(self._history) - 1
 
     def _reset_history(self, payload: dict) -> None:
+        payload = self._set_board_state(payload)
         serialized = json.dumps(payload, sort_keys=True)
         self._history = [serialized]
         self._history_index = 0
@@ -5059,9 +5689,7 @@ class BoardController:
                 self._edit_seq_dir = dest_path
                 self._edit_seq_frames = self._sequence_frame_paths(dest_path)
 
-        self._dirty = True
-        self._schedule_group_tree_update()
-        self._schedule_history_snapshot()
+        self._commit_scene_mutation(history=True, update_groups=True)
         self._notify(f"Renamed to: {dest_path.name}")
         return True
 

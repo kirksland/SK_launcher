@@ -29,6 +29,65 @@ class _GroupsTree(QtWidgets.QTreeWidget):
             mime.setText(urls[0].toLocalFile())
         return mime
 
+
+class _ToolStackRow(QtWidgets.QWidget):
+    removeRequested = QtCore.Signal()
+
+    def __init__(self, label: str, muted: bool, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._muted = bool(muted)
+        self._selected = False
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(10, 4, 6, 4)
+        layout.setSpacing(6)
+        self.label = QtWidgets.QLabel(label)
+        self.label.setStyleSheet("background: transparent;")
+        layout.addWidget(self.label, 1)
+        self.remove_btn = QtWidgets.QToolButton()
+        self.remove_btn.setText("x")
+        self.remove_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.remove_btn.setAutoRaise(True)
+        self.remove_btn.setFixedSize(16, 16)
+        self.remove_btn.clicked.connect(self.removeRequested)
+        layout.addWidget(self.remove_btn, 0)
+        self.setFixedHeight(32)
+        self._apply_style()
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = bool(selected)
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        tone = "#87919d" if self._muted else "#d8dde5"
+        if self._selected:
+            bg = "rgba(242,193,78,34)"
+            border = "rgba(242,193,78,110)"
+        else:
+            bg = "rgba(255,255,255,7)"
+            border = "rgba(255,255,255,14)"
+        self.setStyleSheet(
+            "background: %s;"
+            "border: 1px solid %s;"
+            "border-radius: 11px;"
+            % (bg, border)
+        )
+        self.label.setStyleSheet(f"color: {tone}; background: transparent; border: 0;")
+        self.remove_btn.setStyleSheet(
+            "QToolButton {"
+            "background: rgba(255,255,255,8);"
+            "border: 1px solid rgba(255,255,255,14);"
+            "border-radius: 8px;"
+            "padding: 0px;"
+            "color: #cfd6df;"
+            "}"
+            "QToolButton:hover {"
+            "background: rgba(255,120,120,28);"
+            "border: 1px solid rgba(255,120,120,76);"
+            "color: #ffb7b7;"
+            "}"
+        )
+
 from ui.utils.styles import (
     PALETTE,
     border_only_style,
@@ -102,15 +161,24 @@ class BoardView(QtWidgets.QGraphicsView):
         if event.modifiers() & QtCore.Qt.KeyboardModifier.AltModifier:
             items = self.scene().selectedItems()
             if items:
+                controller = self._resolve_controller()
+                if controller is not None and hasattr(controller, "begin_scene_interaction"):
+                    controller.begin_scene_interaction()
                 factor = 1.08 if event.angleDelta().y() > 0 else 0.92
-                for item in items:
-                    item.setScale(max(0.05, min(8.0, item.scale() * factor)))
+                try:
+                    for item in items:
+                        item.setScale(max(0.05, min(8.0, item.scale() * factor)))
+                finally:
+                    if controller is not None and hasattr(controller, "end_scene_interaction"):
+                        controller.end_scene_interaction(history=True, update_groups=True)
                 event.accept()
                 self._schedule_quality_update()
+                self._notify_overlay_position()
                 return
         factor = 1.2 if event.angleDelta().y() > 0 else 0.85
         self.scale(factor, factor)
         self._schedule_quality_update()
+        self._notify_overlay_position()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if event.button() == QtCore.Qt.MouseButton.LeftButton and event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier:
@@ -127,6 +195,9 @@ class BoardView(QtWidgets.QGraphicsView):
             return
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self._move_start_positions = {id(i): i.pos() for i in self.scene().selectedItems()}
+            controller = self._resolve_controller()
+            if controller is not None and hasattr(controller, "begin_scene_interaction"):
+                controller.begin_scene_interaction()
         if event.button() == QtCore.Qt.MouseButton.LeftButton and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
             items = [i for i in self.scene().selectedItems() if i.data(0) in ("image", "note", "video", "sequence")]
             if items:
@@ -154,11 +225,13 @@ class BoardView(QtWidgets.QGraphicsView):
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
             event.accept()
             self._schedule_quality_update()
+            self._notify_overlay_position()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if getattr(self, "_scaling", False) and event.button() == QtCore.Qt.MouseButton.LeftButton:
+            controller = self._resolve_controller()
             self._scaling = False
             for overlay in self._scale_overlays:
                 self.scene().removeItem(overlay)
@@ -167,7 +240,10 @@ class BoardView(QtWidgets.QGraphicsView):
             self._scale_start_values = []
             self._scale_start_positions = []
             event.accept()
+            if controller is not None and hasattr(controller, "end_scene_interaction"):
+                controller.end_scene_interaction(history=True, update_groups=True)
             self._schedule_quality_update()
+            self._notify_overlay_position()
             return
         if self._panning and event.button() in (
             QtCore.Qt.MouseButton.MiddleButton,
@@ -180,6 +256,7 @@ class BoardView(QtWidgets.QGraphicsView):
             self._schedule_quality_update()
             return
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            controller = self._resolve_controller()
             if self._rubberband_add:
                 for item in self._rubberband_prev:
                     item.setSelected(True)
@@ -191,10 +268,12 @@ class BoardView(QtWidgets.QGraphicsView):
                 if start is not None and (item.pos() - start).manhattanLength() > 2:
                     moved.append(item)
             if moved:
-                controller = self._resolve_controller()
                 if controller is not None and hasattr(controller, "handle_item_drop"):
                     controller.handle_item_drop(moved)
+            if controller is not None and hasattr(controller, "end_scene_interaction"):
+                controller.end_scene_interaction(history=bool(moved), update_groups=True)
             self._schedule_quality_update()
+            self._notify_overlay_position()
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
@@ -258,6 +337,9 @@ class BoardView(QtWidgets.QGraphicsView):
 
     def _on_custom_context_menu(self, pos: QtCore.QPoint) -> None:
         self._show_context_menu(pos, self.viewport().mapToGlobal(pos))
+
+    def focusNextPrevChild(self, next: bool) -> bool:  # type: ignore[override]
+        return False
 
     def _show_context_menu(self, view_pos: QtCore.QPoint, global_pos: QtCore.QPoint) -> None:
         controller = self._resolve_controller()
@@ -361,6 +443,12 @@ class BoardView(QtWidgets.QGraphicsView):
         self.viewport().update()
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
+        if event.key() == QtCore.Qt.Key.Key_Tab:
+            page = self.parent()
+            if page is not None and hasattr(page, "show_tool_add_menu"):
+                if page.show_tool_add_menu(QtGui.QCursor.pos()):
+                    event.accept()
+                    return
         if event.matches(QtGui.QKeySequence.StandardKey.Undo):
             parent = self.parent()
             controller = getattr(parent, "_controller", None)
@@ -382,8 +470,12 @@ class BoardView(QtWidgets.QGraphicsView):
                 if flags & QtCore.Qt.TextInteractionFlag.TextEditorInteraction:
                     super().keyPressEvent(event)
                     return
-            for item in self.scene().selectedItems():
-                self.scene().removeItem(item)
+            controller = self._resolve_controller()
+            if controller is not None and hasattr(controller, "delete_selected_items"):
+                controller.delete_selected_items()
+            else:
+                for item in self.scene().selectedItems():
+                    self.scene().removeItem(item)
             event.accept()
             self._schedule_quality_update()
             return
@@ -398,6 +490,12 @@ class BoardView(QtWidgets.QGraphicsView):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        page = self.parent()
+        if page is not None and hasattr(page, "_position_edit_overlay"):
+            try:
+                page._position_edit_overlay()
+            except Exception:
+                pass
         self._schedule_quality_update()
 
     def _schedule_quality_update(self) -> None:
@@ -414,6 +512,14 @@ class BoardView(QtWidgets.QGraphicsView):
         controller = getattr(parent, "_controller", None)
         if controller is not None and hasattr(controller, "update_visible_items"):
             controller.update_visible_items()
+
+    def _notify_overlay_position(self) -> None:
+        page = self.parent()
+        if page is not None and hasattr(page, "_position_edit_overlay"):
+            try:
+                page._position_edit_overlay()
+            except Exception:
+                pass
 
     def _begin_scale(self, event: QtGui.QMouseEvent, items: list[QtWidgets.QGraphicsItem]) -> None:
         self._scaling = True
@@ -729,12 +835,16 @@ class _TimelineWidget(QtWidgets.QWidget):
 
 
 class BoardPage(QtWidgets.QWidget):
+    imageToolRemoveRequested = QtCore.Signal(int)
+
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._controller = None
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.setAcceptDrops(True)
         layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         header = QtWidgets.QHBoxLayout()
         layout.addLayout(header)
@@ -808,27 +918,80 @@ class BoardPage(QtWidgets.QWidget):
         splitter.addWidget(self.view)
         splitter.setStretchFactor(1, 1)
 
-        # Edit panel (accordion on the right)
+        # Edit overlay (floating over the board view)
         self.edit_panel = QtWidgets.QFrame()
-        self.edit_panel.setMinimumWidth(240)
+        self.edit_panel.setParent(self)
+        self.edit_panel.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.edit_panel.setMinimumWidth(320)
+        self.edit_panel.setMaximumWidth(380)
         self.edit_panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        self.edit_panel.setStyleSheet(subtle_panel_frame_style(bg_key="app_bg"))
+        self.edit_panel.setStyleSheet(
+            "QFrame {"
+            "background: rgba(24, 28, 34, 232);"
+            "border: 1px solid rgba(255,255,255,32);"
+            "border-radius: 18px;"
+            "}"
+            "QLabel { background: transparent; }"
+            "QPushButton, QToolButton, QComboBox {"
+            "background: rgba(255,255,255,8);"
+            "border: 1px solid rgba(255,255,255,18);"
+            "border-radius: 10px;"
+            "padding: 6px 10px;"
+            "}"
+            "QPushButton:hover, QToolButton:hover, QComboBox:hover {"
+            "background: rgba(255,255,255,14);"
+            "}"
+            "QListWidget {"
+            "background: rgba(255,255,255,8);"
+            "border: 1px solid rgba(255,255,255,18);"
+            "border-radius: 14px;"
+            "padding: 8px;"
+            "outline: none;"
+            "}"
+            "QListWidget::item {"
+            "background: rgba(255,255,255,6);"
+            "border: 1px solid rgba(255,255,255,14);"
+            "border-radius: 12px;"
+            "padding: 10px 12px;"
+            "margin: 4px 0;"
+            "}"
+            "QListWidget::item:selected {"
+            "background: rgba(242,193,78,38);"
+            "border: 1px solid rgba(242,193,78,110);"
+            "}"
+            "QSlider::groove:horizontal {"
+            "height: 6px;"
+            "background: rgba(255,255,255,18);"
+            "border-radius: 3px;"
+            "}"
+            "QSlider::handle:horizontal {"
+            "background: #f2c14e;"
+            "width: 14px;"
+            "margin: -5px 0;"
+            "border-radius: 7px;"
+            "}"
+        )
+        shadow = QtWidgets.QGraphicsDropShadowEffect(self.edit_panel)
+        shadow.setBlurRadius(38)
+        shadow.setOffset(0, 14)
+        shadow.setColor(QtGui.QColor(0, 0, 0, 150))
+        self.edit_panel.setGraphicsEffect(shadow)
         edit_layout = QtWidgets.QVBoxLayout(self.edit_panel)
-        edit_layout.setContentsMargins(10, 10, 10, 10)
-        edit_layout.setSpacing(8)
+        edit_layout.setContentsMargins(16, 16, 16, 16)
+        edit_layout.setSpacing(10)
 
         edit_header = QtWidgets.QHBoxLayout()
         edit_layout.addLayout(edit_header)
         self.edit_title = QtWidgets.QLabel("Edit Mode")
-        self.edit_title.setStyleSheet(f"color: {PALETTE['light_text']}; font-weight: bold;")
+        self.edit_title.setStyleSheet(f"color: {PALETTE['light_text']}; font-weight: bold; font-size: 16px;")
         edit_header.addWidget(self.edit_title, 1)
         self.edit_close_btn = QtWidgets.QToolButton()
         self.edit_close_btn.setText("×")
         self.edit_close_btn.setAutoRaise(True)
-        self.edit_close_btn.setStyleSheet(tool_button_style(padding="2px 6px", radius=4))
+        self.edit_close_btn.setStyleSheet(tool_button_style(padding="4px 8px", radius=8))
         edit_header.addWidget(self.edit_close_btn, 0)
 
         self.edit_info = QtWidgets.QLabel("")
@@ -837,23 +1000,17 @@ class BoardPage(QtWidgets.QWidget):
         edit_layout.addWidget(self.edit_info, 0)
 
         self.edit_toolbar = QtWidgets.QHBoxLayout()
-        self.edit_tool_crop = QtWidgets.QToolButton()
-        self.edit_tool_crop.setText("Crop")
-        self.edit_tool_crop.setEnabled(False)
-        self.edit_toolbar.addWidget(self.edit_tool_crop, 0)
-        self.edit_tool_levels = QtWidgets.QToolButton()
-        self.edit_tool_levels.setText("Levels")
-        self.edit_tool_levels.setEnabled(False)
-        self.edit_toolbar.addWidget(self.edit_tool_levels, 0)
-        self.edit_tool_export = QtWidgets.QToolButton()
-        self.edit_tool_export.setText("Export")
-        self.edit_tool_export.setEnabled(False)
-        self.edit_toolbar.addWidget(self.edit_tool_export, 0)
         self.edit_tool_exit = QtWidgets.QToolButton()
         self.edit_tool_exit.setText("Exit Focus")
+        self.edit_tool_exit.setVisible(False)
         self.edit_toolbar.addWidget(self.edit_tool_exit, 0)
         self.edit_toolbar.addStretch(1)
         edit_layout.addLayout(self.edit_toolbar)
+
+        self.edit_tool_hint = QtWidgets.QLabel("")
+        self.edit_tool_hint.setStyleSheet("color: #f2c14e; font-size: 11px;")
+        self.edit_tool_hint.setVisible(False)
+        edit_layout.addWidget(self.edit_tool_hint, 0)
 
         self.edit_exr_channel_row = QtWidgets.QHBoxLayout()
         self.edit_exr_channel_label = QtWidgets.QLabel("Channel")
@@ -884,13 +1041,36 @@ class BoardPage(QtWidgets.QWidget):
         edit_layout.addLayout(self.edit_exr_gamma_row)
 
         self.edit_image_tools_label = QtWidgets.QLabel("Tool Stack")
-        self.edit_image_tools_label.setStyleSheet(muted_text_style())
+        self.edit_image_tools_label.setStyleSheet("color: #98a2ad; font-size: 11px; letter-spacing: 0.08em;")
         self.edit_image_tools_label.setVisible(False)
         edit_layout.addWidget(self.edit_image_tools_label, 0)
 
+        self.edit_image_tool_empty = QtWidgets.QLabel("No active tools")
+        self.edit_image_tool_empty.setStyleSheet("color: #6f7a86; font-size: 12px; padding: 2px 2px 6px 2px;")
+        self.edit_image_tool_empty.setVisible(False)
+        edit_layout.addWidget(self.edit_image_tool_empty, 0)
+
         self.edit_image_tool_list = QtWidgets.QListWidget()
         self.edit_image_tool_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.edit_image_tool_list.setMaximumHeight(108)
+        self.edit_image_tool_list.setMaximumHeight(116)
+        self.edit_image_tool_list.setUniformItemSizes(True)
+        self.edit_image_tool_list.setSpacing(6)
+        self.edit_image_tool_list.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.edit_image_tool_list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.edit_image_tool_list.setStyleSheet(
+            "QListWidget {"
+            "background: transparent;"
+            "border: none;"
+            "padding: 0px;"
+            "outline: none;"
+            "}"
+            "QListWidget::item {"
+            "background: transparent;"
+            "border: none;"
+            "padding: 0px;"
+            "margin: 0px;"
+            "}"
+        )
         self.edit_image_tool_list.setVisible(False)
         edit_layout.addWidget(self.edit_image_tool_list, 0)
 
@@ -900,7 +1080,6 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_image_tool_add_btn = QtWidgets.QPushButton("Add")
         self.edit_image_tool_remove_btn = QtWidgets.QPushButton("Remove")
         self.edit_image_tool_add_row.addWidget(self.edit_image_tool_add_combo, 1)
-        self.edit_image_tool_add_row.addWidget(self.edit_image_tool_add_btn, 0)
         self.edit_image_tool_add_row.addWidget(self.edit_image_tool_remove_btn, 0)
         edit_layout.addLayout(self.edit_image_tool_add_row)
         self.edit_image_tool_add_combo.setVisible(False)
@@ -908,14 +1087,17 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_image_tool_remove_btn.setVisible(False)
 
         self.edit_image_tool_order_row = QtWidgets.QHBoxLayout()
-        self.edit_image_tool_up_btn = QtWidgets.QPushButton("Up")
-        self.edit_image_tool_down_btn = QtWidgets.QPushButton("Down")
+        self.edit_image_tool_up_btn = QtWidgets.QPushButton("↑")
+        self.edit_image_tool_down_btn = QtWidgets.QPushButton("↓")
+        self.edit_image_tool_up_btn.setFixedWidth(32)
+        self.edit_image_tool_down_btn.setFixedWidth(32)
         self.edit_image_tool_order_row.addWidget(self.edit_image_tool_up_btn, 0)
         self.edit_image_tool_order_row.addWidget(self.edit_image_tool_down_btn, 0)
         self.edit_image_tool_order_row.addStretch(1)
         edit_layout.addLayout(self.edit_image_tool_order_row)
         self.edit_image_tool_up_btn.setVisible(False)
         self.edit_image_tool_down_btn.setVisible(False)
+        self.edit_image_tool_list.currentRowChanged.connect(self._refresh_tool_stack_row_selection)
 
         self.edit_image_adjust_label = QtWidgets.QLabel("Image Adjustments")
         self.edit_image_adjust_label.setStyleSheet(muted_text_style())
@@ -974,6 +1156,63 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_image_vibrance_row.addWidget(self.edit_image_vibrance_value, 0)
         edit_layout.addLayout(self.edit_image_vibrance_row)
 
+        self.edit_crop_label = QtWidgets.QLabel("Crop")
+        self.edit_crop_label.setStyleSheet(muted_text_style())
+        self.edit_crop_label.setVisible(False)
+        edit_layout.addWidget(self.edit_crop_label, 0)
+
+        self.edit_crop_left_row = QtWidgets.QHBoxLayout()
+        self.edit_crop_left_title = QtWidgets.QLabel("Left")
+        self.edit_crop_left_title.setStyleSheet(muted_text_style())
+        self.edit_crop_left_value = QtWidgets.QLabel("0%")
+        self.edit_crop_left_value.setStyleSheet(muted_text_style())
+        self.edit_crop_left_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_crop_left_slider.setRange(0, 90)
+        self.edit_crop_left_slider.setValue(0)
+        self.edit_crop_left_row.addWidget(self.edit_crop_left_title, 0)
+        self.edit_crop_left_row.addWidget(self.edit_crop_left_slider, 1)
+        self.edit_crop_left_row.addWidget(self.edit_crop_left_value, 0)
+        edit_layout.addLayout(self.edit_crop_left_row)
+
+        self.edit_crop_right_row = QtWidgets.QHBoxLayout()
+        self.edit_crop_right_title = QtWidgets.QLabel("Right")
+        self.edit_crop_right_title.setStyleSheet(muted_text_style())
+        self.edit_crop_right_value = QtWidgets.QLabel("0%")
+        self.edit_crop_right_value.setStyleSheet(muted_text_style())
+        self.edit_crop_right_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_crop_right_slider.setRange(0, 90)
+        self.edit_crop_right_slider.setValue(0)
+        self.edit_crop_right_row.addWidget(self.edit_crop_right_title, 0)
+        self.edit_crop_right_row.addWidget(self.edit_crop_right_slider, 1)
+        self.edit_crop_right_row.addWidget(self.edit_crop_right_value, 0)
+        edit_layout.addLayout(self.edit_crop_right_row)
+
+        self.edit_crop_top_row = QtWidgets.QHBoxLayout()
+        self.edit_crop_top_title = QtWidgets.QLabel("Top")
+        self.edit_crop_top_title.setStyleSheet(muted_text_style())
+        self.edit_crop_top_value = QtWidgets.QLabel("0%")
+        self.edit_crop_top_value.setStyleSheet(muted_text_style())
+        self.edit_crop_top_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_crop_top_slider.setRange(0, 90)
+        self.edit_crop_top_slider.setValue(0)
+        self.edit_crop_top_row.addWidget(self.edit_crop_top_title, 0)
+        self.edit_crop_top_row.addWidget(self.edit_crop_top_slider, 1)
+        self.edit_crop_top_row.addWidget(self.edit_crop_top_value, 0)
+        edit_layout.addLayout(self.edit_crop_top_row)
+
+        self.edit_crop_bottom_row = QtWidgets.QHBoxLayout()
+        self.edit_crop_bottom_title = QtWidgets.QLabel("Bottom")
+        self.edit_crop_bottom_title.setStyleSheet(muted_text_style())
+        self.edit_crop_bottom_value = QtWidgets.QLabel("0%")
+        self.edit_crop_bottom_value.setStyleSheet(muted_text_style())
+        self.edit_crop_bottom_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.edit_crop_bottom_slider.setRange(0, 90)
+        self.edit_crop_bottom_slider.setValue(0)
+        self.edit_crop_bottom_row.addWidget(self.edit_crop_bottom_title, 0)
+        self.edit_crop_bottom_row.addWidget(self.edit_crop_bottom_slider, 1)
+        self.edit_crop_bottom_row.addWidget(self.edit_crop_bottom_value, 0)
+        edit_layout.addLayout(self.edit_crop_bottom_row)
+
         self.edit_image_adjust_reset_btn = QtWidgets.QPushButton("Reset Adjustments")
         self.edit_image_adjust_reset_btn.setVisible(False)
         edit_layout.addWidget(self.edit_image_adjust_reset_btn, 0)
@@ -982,7 +1221,7 @@ class BoardPage(QtWidgets.QWidget):
 
         # Preview stack (image / video / sequence)
         self.edit_preview_stack = QtWidgets.QStackedWidget()
-        self.edit_preview_stack.setMinimumHeight(180)
+        self.edit_preview_stack.setMinimumHeight(140)
         edit_layout.addWidget(self.edit_preview_stack, 1)
 
         self.edit_image_preview = VideoPreviewLabel()
@@ -1009,6 +1248,8 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_video_controls.addWidget(self.edit_video_play_btn, 0)
         self.edit_video_controls.addWidget(self.edit_video_slider, 1)
         video_layout.addLayout(self.edit_video_controls, 0)
+        self.edit_video_play_btn.setVisible(False)
+        self.edit_video_slider.setVisible(False)
         self.edit_preview_stack.addWidget(self.edit_video_panel)
 
         self.edit_sequence_panel = QtWidgets.QWidget()
@@ -1028,6 +1269,8 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_sequence_controls.addWidget(self.edit_sequence_play_btn, 0)
         self.edit_sequence_controls.addWidget(self.edit_sequence_slider, 1)
         seq_layout.addLayout(self.edit_sequence_controls, 0)
+        self.edit_sequence_play_btn.setVisible(False)
+        self.edit_sequence_slider.setVisible(False)
 
         self.edit_sequence_timeline = _TimelineWidget()
         seq_layout.addWidget(self.edit_sequence_timeline, 0)
@@ -1050,7 +1293,30 @@ class BoardPage(QtWidgets.QWidget):
         edit_layout.addWidget(self.edit_footer, 0)
 
         self.edit_panel.setVisible(False)
-        splitter.addWidget(self.edit_panel)
+        self.edit_panel.raise_()
+
+        self.focus_exit_btn = QtWidgets.QToolButton(self)
+        self.focus_exit_btn.setText("Exit Focus")
+        self.focus_exit_btn.setVisible(False)
+        self.focus_exit_btn.setAutoRaise(True)
+        self.focus_exit_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.focus_exit_btn.setStyleSheet(
+            "QToolButton {"
+            "background: rgba(24, 28, 34, 228);"
+            "border: 1px solid rgba(255,255,255,26);"
+            "border-radius: 12px;"
+            "padding: 8px 12px;"
+            "}"
+            "QToolButton:hover {"
+            "background: rgba(255,255,255,14);"
+            "}"
+        )
+        exit_shadow = QtWidgets.QGraphicsDropShadowEffect(self.focus_exit_btn)
+        exit_shadow.setBlurRadius(26)
+        exit_shadow.setOffset(0, 8)
+        exit_shadow.setColor(QtGui.QColor(0, 0, 0, 120))
+        self.focus_exit_btn.setGraphicsEffect(exit_shadow)
+        self.focus_exit_btn.clicked.connect(self._on_exit_focus)
 
         self.grid_toggle.toggled.connect(self.view.set_show_grid)
         self.groups_toggle.toggled.connect(self.groups_panel.setVisible)
@@ -1063,6 +1329,9 @@ class BoardPage(QtWidgets.QWidget):
         self._exit_focus_shortcut = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_Escape), self)
         self._exit_focus_shortcut.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
         self._exit_focus_shortcut.activated.connect(self._on_exit_focus)
+        self._tool_add_shortcut = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_Tab), self.view)
+        self._tool_add_shortcut.setContext(QtCore.Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._tool_add_shortcut.activated.connect(lambda: self.show_tool_add_menu(QtGui.QCursor.pos()))
 
         footer = QtWidgets.QHBoxLayout()
         layout.addLayout(footer)
@@ -1085,19 +1354,89 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_timeline = _TimelineWidget()
         timeline_layout.addWidget(self.edit_timeline, 0)
         timeline_actions = QtWidgets.QHBoxLayout()
+        self.edit_timeline_play_btn = QtWidgets.QPushButton("Play")
         self.edit_timeline_frame_label = QtWidgets.QLabel("Frame: 0")
         self.edit_timeline_frame_label.setStyleSheet(muted_text_style())
         self.edit_timeline_split_btn = QtWidgets.QPushButton("Split")
         self.edit_timeline_export_btn = QtWidgets.QPushButton("Export Segment")
+        timeline_actions.addWidget(self.edit_timeline_play_btn, 0)
         timeline_actions.addWidget(self.edit_timeline_frame_label, 0)
         timeline_actions.addWidget(self.edit_timeline_split_btn, 0)
         timeline_actions.addWidget(self.edit_timeline_export_btn, 0)
         timeline_actions.addStretch(1)
         timeline_layout.addLayout(timeline_actions, 0)
         layout.insertWidget(layout.count() - 1, self.edit_timeline_bar, 0)
+        self._position_edit_overlay()
 
     def set_edit_panel_visible(self, visible: bool) -> None:
         self.edit_panel.setVisible(bool(visible))
+        self.focus_exit_btn.setVisible(bool(visible))
+        if visible:
+            self._position_edit_overlay()
+            self.edit_panel.raise_()
+            self.focus_exit_btn.raise_()
+
+    def _position_edit_overlay(self) -> None:
+        if self.edit_panel is None:
+            return
+        viewport = self.view.viewport()
+        top_left = viewport.mapTo(self, QtCore.QPoint(0, 0))
+        anchor = QtCore.QRect(top_left, viewport.size())
+        inset = 14
+        panel_w = min(self.edit_panel.maximumWidth(), max(self.edit_panel.minimumWidth(), 344))
+        panel_w = min(panel_w, max(260, anchor.width() - (inset * 2)))
+        available_h = max(220, anchor.height() - (inset * 2))
+        panel_h = min(available_h, 620)
+        x = anchor.right() - panel_w - inset
+        y = anchor.top() + inset
+        self.edit_panel.setGeometry(x, y, panel_w, panel_h)
+        self.focus_exit_btn.adjustSize()
+        btn_x = anchor.left() + inset
+        btn_y = anchor.top() + inset
+        self.focus_exit_btn.move(btn_x, btn_y)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._position_edit_overlay()
+
+    def show_tool_add_menu(self, global_pos: QtCore.QPoint) -> bool:
+        if not self.edit_panel.isVisible():
+            return False
+        if not self.edit_image_tool_list.isVisible():
+            return False
+        if self.edit_image_tool_add_combo.count() <= 0:
+            return False
+        menu = QtWidgets.QMenu(self)
+        menu.setStyleSheet(
+            "QMenu {"
+            "background: rgba(24, 28, 34, 245);"
+            "color: #d8dde5;"
+            "border: 1px solid rgba(255,255,255,26);"
+            "padding: 8px;"
+            "border-radius: 12px;"
+            "}"
+            "QMenu::item {"
+            "padding: 8px 28px 8px 12px;"
+            "border-radius: 8px;"
+            "margin: 2px 0;"
+            "}"
+            "QMenu::item:selected {"
+            "background: rgba(242,193,78,38);"
+            "}"
+        )
+        for idx in range(self.edit_image_tool_add_combo.count()):
+            label = self.edit_image_tool_add_combo.itemText(idx)
+            tool_id = self.edit_image_tool_add_combo.itemData(idx)
+            action = menu.addAction(f"Add {label}")
+            action.setData(tool_id)
+        chosen = menu.exec(global_pos)
+        if chosen is not None:
+            tool_id = chosen.data()
+            idx = self.edit_image_tool_add_combo.findData(tool_id)
+            if idx >= 0:
+                self.edit_image_tool_add_combo.setCurrentIndex(idx)
+                self.edit_image_tool_add_btn.click()
+        return True
 
     def set_edit_preview_visible(self, visible: bool) -> None:
         self.edit_preview_stack.setVisible(bool(visible))
@@ -1114,6 +1453,7 @@ class BoardPage(QtWidgets.QWidget):
     ) -> None:
         self.edit_title.setText(title)
         self.edit_info.setText("\n".join([line for line in info_lines if line]))
+        self.edit_info.setVisible(bool(self.edit_info.text().strip()))
         self.edit_list.clear()
         if list_items:
             self.edit_list.addItems(list_items)
@@ -1121,6 +1461,7 @@ class BoardPage(QtWidgets.QWidget):
         else:
             self.edit_list.setVisible(False)
         self.edit_footer.setText(footer)
+        self.edit_footer.setVisible(bool(str(footer).strip()))
         self.set_edit_panel_visible(True)
 
     def set_exr_channels(self, channels: list[object]) -> None:
@@ -1164,10 +1505,8 @@ class BoardPage(QtWidgets.QWidget):
     def set_image_adjust_controls_visible(self, visible: bool) -> None:
         controls = [
             self.edit_image_tools_label,
+            self.edit_image_tool_empty,
             self.edit_image_tool_list,
-            self.edit_image_tool_add_combo,
-            self.edit_image_tool_add_btn,
-            self.edit_image_tool_remove_btn,
             self.edit_image_tool_up_btn,
             self.edit_image_tool_down_btn,
             self.edit_image_adjust_label,
@@ -1183,10 +1522,28 @@ class BoardPage(QtWidgets.QWidget):
             self.edit_image_vibrance_title,
             self.edit_image_vibrance_slider,
             self.edit_image_vibrance_value,
+            self.edit_crop_label,
+            self.edit_crop_left_title,
+            self.edit_crop_left_slider,
+            self.edit_crop_left_value,
+            self.edit_crop_right_title,
+            self.edit_crop_right_slider,
+            self.edit_crop_right_value,
+            self.edit_crop_top_title,
+            self.edit_crop_top_slider,
+            self.edit_crop_top_value,
+            self.edit_crop_bottom_title,
+            self.edit_crop_bottom_slider,
+            self.edit_crop_bottom_value,
             self.edit_image_adjust_reset_btn,
         ]
         for widget in controls:
             widget.setVisible(bool(visible))
+        self.edit_image_tool_add_combo.setVisible(False)
+        self.edit_image_tool_add_btn.setVisible(False)
+        self.edit_image_tool_remove_btn.setVisible(False)
+        self.edit_image_tool_add_row.setEnabled(bool(visible))
+        self.edit_image_tool_order_row.setEnabled(bool(visible))
 
     def current_image_brightness(self) -> float:
         return float(self.edit_image_adjust_brightness_slider.value()) / 100.0
@@ -1216,6 +1573,47 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_image_vibrance_slider.setVisible(bool(visible))
         self.edit_image_vibrance_value.setVisible(bool(visible))
 
+    def set_image_crop_visible(self, visible: bool) -> None:
+        self.edit_crop_label.setVisible(bool(visible))
+        self.edit_crop_left_title.setVisible(bool(visible))
+        self.edit_crop_left_slider.setVisible(bool(visible))
+        self.edit_crop_left_value.setVisible(bool(visible))
+        self.edit_crop_right_title.setVisible(bool(visible))
+        self.edit_crop_right_slider.setVisible(bool(visible))
+        self.edit_crop_right_value.setVisible(bool(visible))
+        self.edit_crop_top_title.setVisible(bool(visible))
+        self.edit_crop_top_slider.setVisible(bool(visible))
+        self.edit_crop_top_value.setVisible(bool(visible))
+        self.edit_crop_bottom_title.setVisible(bool(visible))
+        self.edit_crop_bottom_slider.setVisible(bool(visible))
+        self.edit_crop_bottom_value.setVisible(bool(visible))
+
+    def set_image_crop_values(self, left: float, top: float, right: float, bottom: float) -> None:
+        self.edit_crop_left_slider.blockSignals(True)
+        self.edit_crop_top_slider.blockSignals(True)
+        self.edit_crop_right_slider.blockSignals(True)
+        self.edit_crop_bottom_slider.blockSignals(True)
+        self.edit_crop_left_slider.setValue(int(round(float(left) * 100.0)))
+        self.edit_crop_top_slider.setValue(int(round(float(top) * 100.0)))
+        self.edit_crop_right_slider.setValue(int(round(float(right) * 100.0)))
+        self.edit_crop_bottom_slider.setValue(int(round(float(bottom) * 100.0)))
+        self.edit_crop_left_slider.blockSignals(False)
+        self.edit_crop_top_slider.blockSignals(False)
+        self.edit_crop_right_slider.blockSignals(False)
+        self.edit_crop_bottom_slider.blockSignals(False)
+        self.edit_crop_left_value.setText(f"{int(round(float(left) * 100.0))}%")
+        self.edit_crop_top_value.setText(f"{int(round(float(top) * 100.0))}%")
+        self.edit_crop_right_value.setText(f"{int(round(float(right) * 100.0))}%")
+        self.edit_crop_bottom_value.setText(f"{int(round(float(bottom) * 100.0))}%")
+
+    def current_image_crop_settings(self) -> tuple[float, float, float, float]:
+        return (
+            float(self.edit_crop_left_slider.value()) / 100.0,
+            float(self.edit_crop_top_slider.value()) / 100.0,
+            float(self.edit_crop_right_slider.value()) / 100.0,
+            float(self.edit_crop_bottom_slider.value()) / 100.0,
+        )
+
     def set_image_bcs_controls_visible(self, visible: bool) -> None:
         self.edit_image_adjust_label.setVisible(bool(visible))
         self.edit_image_adjust_brightness_title.setVisible(bool(visible))
@@ -1242,15 +1640,39 @@ class BoardPage(QtWidgets.QWidget):
     def set_image_tool_stack_items(self, items: list[tuple[str, bool]], selected_index: int = -1) -> None:
         self.edit_image_tool_list.blockSignals(True)
         self.edit_image_tool_list.clear()
-        for label, enabled in items:
-            prefix = "ON" if enabled else "OFF"
-            self.edit_image_tool_list.addItem(f"[{prefix}] {label}")
+        for idx, (label, enabled) in enumerate(items):
+            item = QtWidgets.QListWidgetItem()
+            item.setSizeHint(QtCore.QSize(0, 32))
+            self.edit_image_tool_list.addItem(item)
+            row = _ToolStackRow(label, muted=not enabled)
+            row.removeRequested.connect(lambda _checked=False, row_idx=idx: self.imageToolRemoveRequested.emit(row_idx))
+            self.edit_image_tool_list.setItemWidget(item, row)
+        has_items = bool(items)
+        self.edit_image_tool_list.setVisible(has_items)
+        self.edit_image_tool_empty.setVisible(not has_items and self.edit_image_tools_label.isVisible())
         if items and selected_index >= 0 and selected_index < len(items):
             self.edit_image_tool_list.setCurrentRow(int(selected_index))
+        elif items:
+            self.edit_image_tool_list.setCurrentRow(0)
+        row_h = 38
+        visible_rows = max(1, min(3, len(items)))
+        frame = 6
+        self.edit_image_tool_list.setMaximumHeight(frame + (row_h * visible_rows))
+        can_reorder = len(items) > 1
+        self.edit_image_tool_up_btn.setVisible(can_reorder)
+        self.edit_image_tool_down_btn.setVisible(can_reorder)
         self.edit_image_tool_list.blockSignals(False)
+        self._refresh_tool_stack_row_selection(self.edit_image_tool_list.currentRow())
 
     def current_image_tool_stack_index(self) -> int:
         return int(self.edit_image_tool_list.currentRow())
+
+    def _refresh_tool_stack_row_selection(self, current_row: int) -> None:
+        for idx in range(self.edit_image_tool_list.count()):
+            item = self.edit_image_tool_list.item(idx)
+            row = self.edit_image_tool_list.itemWidget(item)
+            if isinstance(row, _ToolStackRow):
+                row.set_selected(idx == int(current_row))
 
     def set_image_adjust_values(self, brightness: float, contrast: float, saturation: float) -> None:
         self.edit_image_adjust_brightness_slider.blockSignals(True)
