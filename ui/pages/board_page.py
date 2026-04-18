@@ -181,6 +181,14 @@ class BoardView(QtWidgets.QGraphicsView):
         self._notify_overlay_position()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        controller = self._resolve_controller()
+        if controller is not None and hasattr(controller, "handle_view_mouse_press"):
+            try:
+                if controller.handle_view_mouse_press(self.mapToScene(event.pos()), event):
+                    event.accept()
+                    return
+            except Exception:
+                pass
         if event.button() == QtCore.Qt.MouseButton.LeftButton and event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier:
             item = self.itemAt(event.pos())
             if item is not None:
@@ -214,6 +222,14 @@ class BoardView(QtWidgets.QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        controller = self._resolve_controller()
+        if controller is not None and hasattr(controller, "handle_view_mouse_move"):
+            try:
+                if controller.handle_view_mouse_move(self.mapToScene(event.pos()), event):
+                    event.accept()
+                    return
+            except Exception:
+                pass
         if getattr(self, "_scaling", False):
             self._update_scale(event)
             event.accept()
@@ -230,6 +246,14 @@ class BoardView(QtWidgets.QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        controller = self._resolve_controller()
+        if controller is not None and hasattr(controller, "handle_view_mouse_release"):
+            try:
+                if controller.handle_view_mouse_release(self.mapToScene(event.pos()), event):
+                    event.accept()
+                    return
+            except Exception:
+                pass
         if getattr(self, "_scaling", False) and event.button() == QtCore.Qt.MouseButton.LeftButton:
             controller = self._resolve_controller()
             self._scaling = False
@@ -835,6 +859,7 @@ class _TimelineWidget(QtWidgets.QWidget):
 
 
 class BoardPage(QtWidgets.QWidget):
+    imageToolAddRequested = QtCore.Signal(str)
     imageToolRemoveRequested = QtCore.Signal(int)
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -999,14 +1024,6 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_info.setWordWrap(True)
         edit_layout.addWidget(self.edit_info, 0)
 
-        self.edit_toolbar = QtWidgets.QHBoxLayout()
-        self.edit_tool_exit = QtWidgets.QToolButton()
-        self.edit_tool_exit.setText("Exit Focus")
-        self.edit_tool_exit.setVisible(False)
-        self.edit_toolbar.addWidget(self.edit_tool_exit, 0)
-        self.edit_toolbar.addStretch(1)
-        edit_layout.addLayout(self.edit_toolbar)
-
         self.edit_tool_hint = QtWidgets.QLabel("")
         self.edit_tool_hint.setStyleSheet("color: #f2c14e; font-size: 11px;")
         self.edit_tool_hint.setVisible(False)
@@ -1077,14 +1094,9 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_image_tool_add_row = QtWidgets.QHBoxLayout()
         self.edit_image_tool_add_combo = QtWidgets.QComboBox()
         self.edit_image_tool_add_combo.setMinimumWidth(120)
-        self.edit_image_tool_add_btn = QtWidgets.QPushButton("Add")
-        self.edit_image_tool_remove_btn = QtWidgets.QPushButton("Remove")
         self.edit_image_tool_add_row.addWidget(self.edit_image_tool_add_combo, 1)
-        self.edit_image_tool_add_row.addWidget(self.edit_image_tool_remove_btn, 0)
         edit_layout.addLayout(self.edit_image_tool_add_row)
         self.edit_image_tool_add_combo.setVisible(False)
-        self.edit_image_tool_add_btn.setVisible(False)
-        self.edit_image_tool_remove_btn.setVisible(False)
 
         self.edit_image_tool_order_row = QtWidgets.QHBoxLayout()
         self.edit_image_tool_up_btn = QtWidgets.QPushButton("↑")
@@ -1241,15 +1253,6 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_video_host_layout.setContentsMargins(0, 0, 0, 0)
         self.edit_video_host_layout.setSpacing(0)
         video_layout.addWidget(self.edit_video_host, 1)
-        self.edit_video_controls = QtWidgets.QHBoxLayout()
-        self.edit_video_play_btn = QtWidgets.QPushButton("Play")
-        self.edit_video_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.edit_video_slider.setRange(0, 0)
-        self.edit_video_controls.addWidget(self.edit_video_play_btn, 0)
-        self.edit_video_controls.addWidget(self.edit_video_slider, 1)
-        video_layout.addLayout(self.edit_video_controls, 0)
-        self.edit_video_play_btn.setVisible(False)
-        self.edit_video_slider.setVisible(False)
         self.edit_preview_stack.addWidget(self.edit_video_panel)
 
         self.edit_sequence_panel = QtWidgets.QWidget()
@@ -1262,16 +1265,6 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_sequence_preview = VideoPreviewLabel()
         self.edit_sequence_preview.setStyleSheet("color: #9aa3ad;")
         seq_layout.addWidget(self.edit_sequence_preview, 1)
-        self.edit_sequence_controls = QtWidgets.QHBoxLayout()
-        self.edit_sequence_play_btn = QtWidgets.QPushButton("Play")
-        self.edit_sequence_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.edit_sequence_slider.setRange(0, 0)
-        self.edit_sequence_controls.addWidget(self.edit_sequence_play_btn, 0)
-        self.edit_sequence_controls.addWidget(self.edit_sequence_slider, 1)
-        seq_layout.addLayout(self.edit_sequence_controls, 0)
-        self.edit_sequence_play_btn.setVisible(False)
-        self.edit_sequence_slider.setVisible(False)
-
         self.edit_sequence_timeline = _TimelineWidget()
         seq_layout.addWidget(self.edit_sequence_timeline, 0)
         self.edit_sequence_timeline.setVisible(False)
@@ -1435,7 +1428,7 @@ class BoardPage(QtWidgets.QWidget):
             idx = self.edit_image_tool_add_combo.findData(tool_id)
             if idx >= 0:
                 self.edit_image_tool_add_combo.setCurrentIndex(idx)
-                self.edit_image_tool_add_btn.click()
+                self.imageToolAddRequested.emit(str(tool_id))
         return True
 
     def set_edit_preview_visible(self, visible: bool) -> None:
@@ -1540,8 +1533,6 @@ class BoardPage(QtWidgets.QWidget):
         for widget in controls:
             widget.setVisible(bool(visible))
         self.edit_image_tool_add_combo.setVisible(False)
-        self.edit_image_tool_add_btn.setVisible(False)
-        self.edit_image_tool_remove_btn.setVisible(False)
         self.edit_image_tool_add_row.setEnabled(bool(visible))
         self.edit_image_tool_order_row.setEnabled(bool(visible))
 

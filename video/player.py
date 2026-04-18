@@ -132,11 +132,17 @@ class VideoController:
             self._container = self._build_widget()
         return self._container
 
-    def bind_controls(self, play_button: QtWidgets.QPushButton, slider: QtWidgets.QSlider) -> None:
+    def bind_controls(
+        self,
+        play_button: Optional[QtWidgets.QPushButton],
+        slider: Optional[QtWidgets.QSlider],
+    ) -> None:
         self._play_button = play_button
         self._slider = slider
-        play_button.clicked.connect(self.toggle_play)
-        slider.sliderMoved.connect(self.seek)
+        if play_button is not None:
+            play_button.clicked.connect(self.toggle_play)
+        if slider is not None:
+            slider.sliderMoved.connect(self.seek)
 
     def is_playing(self) -> bool:
         if self._video_backend == "qt" and self._player and QtMultimedia is not None:
@@ -166,6 +172,21 @@ class VideoController:
             except Exception:
                 pass
         elif self._video_backend == "opencv":
+            self._play_video_opencv(path)
+
+    def load_path(self, path: Path) -> None:
+        self._show_video_widget()
+        if self._video_backend == "qt" and self._player:
+            try:
+                url = QtCore.QUrl.fromLocalFile(str(path))
+                self._player.setSource(url)  # type: ignore[attr-defined]
+                self._player.pause()
+                if self._play_button:
+                    self._play_button.setText("Play")
+            except Exception:
+                pass
+            return
+        if self._video_backend == "opencv":
             self._play_video_opencv(path)
 
     def preview_first_frame(self, path: Path) -> None:

@@ -12,14 +12,33 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
-from core.houdini_env import build_houdini_env
-from tools.image_tools.registry import (
-    apply_image_tool_stack,
-    build_bcs_stack,
-    extract_bcs_settings,
-    extract_crop_settings,
-    normalize_tool_stack,
+from core.board_edit.handles import (
+    CropHandleDragState,
+    CropHandleLayout,
+    apply_crop_drag,
+    build_crop_handle_layout,
+    hit_test_crop_handle,
 )
+from core.board_edit.media_runtime import (
+    SequencePlaybackRuntime,
+    VideoPlaybackRuntime,
+    clamp_playhead,
+    frame_label_text,
+    loop_next_playhead,
+    play_button_label,
+)
+from core.board_edit.session import EditSessionState
+from core.board_edit.tool_stack import (
+    append_tool,
+    make_tool_entry,
+    move_tool,
+    normalize_tool_entries,
+    remove_tool_at,
+    upsert_tool_settings,
+)
+from core.houdini_env import build_houdini_env
+from tools.edit_tools import available_tools_for_kind, discover_edit_tools, get_edit_tool
+from tools.image_tools.registry import apply_image_tool_stack, build_bcs_stack, extract_bcs_settings, extract_crop_settings, normalize_tool_stack
 from video.player import VideoController, VideoPreviewLabel
 
 try:
@@ -689,7 +708,7 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
         self._base_size = QtCore.QSizeF(float(self._logical_size.width()), float(self._logical_size.height()))
         self._crop_norm = (0.0, 0.0, 0.0, 0.0)
         self._rect = QtCore.QRectF(0, 0, self._base_size.width(), self._base_size.height())
-        self.setTransformOriginPoint(self._rect.center())
+        self.setTransformOriginPoint(self._base_size.width() * 0.5, self._base_size.height() * 0.5)
 
     def set_quality(self, quality: str) -> None:
         if self._override_pixmap is not None:
@@ -738,15 +757,16 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
             return
         self.prepareGeometryChange()
         self._crop_norm = (left, top, right, bottom)
+        x = self._base_size.width() * left
+        y = self._base_size.height() * top
         width_factor = max(0.01, 1.0 - left - right)
         height_factor = max(0.01, 1.0 - top - bottom)
         self._rect = QtCore.QRectF(
-            0,
-            0,
+            x,
+            y,
             self._base_size.width() * width_factor,
             self._base_size.height() * height_factor,
         )
-        self.setTransformOriginPoint(self._rect.center())
         self.update()
 
     def paint(
@@ -789,7 +809,7 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
         self._base_size = QtCore.QSizeF(float(self._pixmap.width()), float(self._pixmap.height()))
         self._crop_norm = (0.0, 0.0, 0.0, 0.0)
         self._rect = QtCore.QRectF(0, 0, self._base_size.width(), self._base_size.height())
-        self.setTransformOriginPoint(self._rect.center())
+        self.setTransformOriginPoint(self._base_size.width() * 0.5, self._base_size.height() * 0.5)
 
     def file_name(self) -> str:
         return self._path.name
@@ -809,15 +829,16 @@ class BoardVideoItem(QtWidgets.QGraphicsItem):
             return
         self.prepareGeometryChange()
         self._crop_norm = (left, top, right, bottom)
+        x = self._base_size.width() * left
+        y = self._base_size.height() * top
         width_factor = max(0.01, 1.0 - left - right)
         height_factor = max(0.01, 1.0 - top - bottom)
         self._rect = QtCore.QRectF(
-            0,
-            0,
+            x,
+            y,
             self._base_size.width() * width_factor,
             self._base_size.height() * height_factor,
         )
-        self.setTransformOriginPoint(self._rect.center())
         self.update()
 
     def paint(
@@ -1149,11 +1170,7 @@ class BoardController:
         self._edit_video_controller: Optional[VideoController] = None
         self._edit_seq_frames: list[Path] = []
         self._edit_seq_dir: Optional[Path] = None
-        self._edit_seq_playing: bool = False
-        self._edit_seq_timer: Optional[QtCore.QTimer] = None
         self._edit_seq_fps: int = 24
-        self._edit_video_playing: bool = False
-        self._edit_video_timer: Optional[QtCore.QTimer] = None
         self._edit_video_fps: float = 24.0
         self._edit_video_playback_dim: int = 960
         self._edit_video_path: Optional[Path] = None
@@ -1169,18 +1186,10 @@ class BoardController:
         self._edit_exr_gamma: float = 2.2
         self._edit_exr_srgb: bool = True
         self._edit_exr_channel: Optional[str] = None
+        self._edit_session = EditSessionState()
         self._edit_image_path: Optional[Path] = None
-        self._edit_image_brightness: float = 0.0
-        self._edit_image_contrast: float = 1.0
-        self._edit_image_saturation: float = 1.0
-        self._edit_image_vibrance: float = 0.0
-        self._edit_crop_left: float = 0.0
-        self._edit_crop_top: float = 0.0
-        self._edit_crop_right: float = 0.0
-        self._edit_crop_bottom: float = 0.0
-        self._edit_tool_stack: list[dict[str, object]] = []
-        self._edit_selected_tool_index: int = -1
-        self._edit_tool_defs: list[tuple[str, str]] = [("bcs", "BCS"), ("vibrance", "Vibrance"), ("crop", "Crop")]
+        self._edit_tool_specs = discover_edit_tools()
+        self._edit_tool_defs: list[tuple[str, str]] = []
         self._edit_image_thread: Optional[QtCore.QThread] = None
         self._edit_image_worker: Optional[_ImageAdjustPreviewWorker] = None
         self._edit_preview_timer: Optional[QtCore.QTimer] = None
@@ -1201,14 +1210,18 @@ class BoardController:
         self._segment_thread: Optional[QtCore.QThread] = None
         self._segment_worker: Optional[_VideoSegmentWorker] = None
         self._segment_dialog: Optional[QtWidgets.QProgressDialog] = None
+        self._sequence_playback = SequencePlaybackRuntime(self.w)
+        self._sequence_playback.tick.connect(self._advance_edit_sequence_frame)
+        self._sequence_playback.stateChanged.connect(self._on_sequence_play_state_changed)
+        self._video_playback = VideoPlaybackRuntime(self.w)
+        self._video_playback.tick.connect(self._advance_edit_video_frame)
+        self._video_playback.stateChanged.connect(self._on_video_play_state_changed)
         self._scene = self.w.board_page.scene
         self._scene.changed.connect(self._on_scene_changed)
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
         self.w.board_page.groups_tree.itemClicked.connect(self._on_group_tree_clicked)
         self.w.board_page.groups_tree.itemDoubleClicked.connect(self._on_group_tree_double_clicked)
         self.w.board_page.groups_tree.itemChanged.connect(self._on_group_tree_item_changed)
-        self.w.board_page.edit_sequence_slider.valueChanged.connect(self._on_edit_sequence_slider)
-        self.w.board_page.edit_sequence_play_btn.clicked.connect(self._toggle_edit_sequence_play)
         self.w.board_page.edit_timeline_play_btn.clicked.connect(self._toggle_edit_timeline_play)
         self.w.board_page.edit_sequence_timeline.playheadChanged.connect(self._on_edit_sequence_timeline_playhead)
         self.w.board_page.edit_timeline.playheadChanged.connect(self._on_edit_timeline_playhead)
@@ -1247,14 +1260,16 @@ class BoardController:
         self.w.board_page.edit_exr_gamma_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
         self.w.board_page.edit_image_adjust_reset_btn.clicked.connect(self._reset_edit_image_adjustments)
         self.w.board_page.edit_image_tool_list.currentRowChanged.connect(self._on_edit_tool_stack_selection_changed)
-        self.w.board_page.edit_image_tool_add_btn.clicked.connect(self._on_edit_tool_stack_add_clicked)
-        self.w.board_page.edit_image_tool_remove_btn.clicked.connect(self._on_edit_tool_stack_remove_clicked)
+        self.w.board_page.imageToolAddRequested.connect(self._on_edit_tool_stack_add_clicked)
         self.w.board_page.imageToolRemoveRequested.connect(self._on_edit_tool_stack_remove_index)
         self.w.board_page.edit_image_tool_up_btn.clicked.connect(self._on_edit_tool_stack_up_clicked)
         self.w.board_page.edit_image_tool_down_btn.clicked.connect(self._on_edit_tool_stack_down_clicked)
-        self._edit_focus_kind: Optional[str] = None
         self._focus_item: Optional[QtWidgets.QGraphicsItem] = None
         self._focus_overlay: Optional[QtWidgets.QGraphicsRectItem] = None
+        self._focus_handle_frame: Optional[QtWidgets.QGraphicsRectItem] = None
+        self._focus_handle_items: dict[str, QtWidgets.QGraphicsRectItem] = {}
+        self._focus_crop_layout: Optional[CropHandleLayout] = None
+        self._focus_crop_drag: Optional[CropHandleDragState] = None
         self._focus_saved: dict[int, tuple[bool, float]] = {}
         self._focus_video_path: Optional[Path] = None
         self._focus_video_cap = None
@@ -1262,6 +1277,46 @@ class BoardController:
         self._video_preview_timer: Optional[QtCore.QTimer] = None
         self._video_preview_pending: Optional[int] = None
         self._shutting_down: bool = False
+
+    def refresh_edit_tool_registry(self) -> dict[str, object]:
+        self._edit_tool_specs = discover_edit_tools(force=True)
+        self._sync_edit_tool_defs_for_kind(str(self._edit_focus_kind or "image"))
+        return dict(self._edit_tool_specs)
+
+    def available_edit_tools(self, media_kind: str) -> list[dict[str, object]]:
+        return [
+            {
+                "id": spec.id,
+                "label": spec.label,
+                "supports": tuple(spec.supports),
+                "tags": tuple(spec.tags),
+            }
+            for spec in available_tools_for_kind(media_kind)
+        ]
+
+    def default_edit_tool_state(self, tool_id: str) -> dict[str, object]:
+        spec = get_edit_tool(tool_id)
+        if spec is None:
+            return {}
+        return {
+            "id": spec.id,
+            "enabled": True,
+            "settings": dict(spec.default_state()),
+        }
+
+    def normalize_edit_tool_state(self, entry: object) -> dict[str, object]:
+        entries = normalize_tool_entries([entry])
+        return entries[0] if entries else {}
+
+    def _sync_edit_tool_defs_for_kind(self, media_kind: str) -> None:
+        tools = available_tools_for_kind(media_kind)
+        self._edit_tool_defs = [(spec.id, spec.label) for spec in tools]
+
+    def _reset_edit_session_for_kind(self, media_kind: str) -> None:
+        self.edit_session.focus_kind = str(media_kind or "").strip().lower() or None
+        self.edit_session.tool_stack = []
+        self.edit_session.selected_tool_index = -1
+        self.edit_session.reset_visual_adjustments()
 
     def _stop_qthread(self, thread: Optional[QtCore.QThread], timeout_ms: int = 1000) -> None:
         if thread is None:
@@ -1272,6 +1327,101 @@ class BoardController:
                 thread.wait(int(timeout_ms))
         except Exception:
             pass
+
+    @property
+    def edit_session(self) -> EditSessionState:
+        return self._edit_session
+
+    @property
+    def _edit_focus_kind(self) -> Optional[str]:
+        return self._edit_session.focus_kind
+
+    @_edit_focus_kind.setter
+    def _edit_focus_kind(self, value: Optional[str]) -> None:
+        self._edit_session.focus_kind = str(value) if value is not None else None
+
+    @property
+    def _edit_tool_stack(self) -> list[dict[str, object]]:
+        return self._edit_session.tool_stack
+
+    @_edit_tool_stack.setter
+    def _edit_tool_stack(self, value: list[dict[str, object]]) -> None:
+        self._edit_session.tool_stack = list(value) if isinstance(value, list) else []
+
+    @property
+    def _edit_selected_tool_index(self) -> int:
+        return int(self._edit_session.selected_tool_index)
+
+    @_edit_selected_tool_index.setter
+    def _edit_selected_tool_index(self, value: int) -> None:
+        try:
+            self._edit_session.selected_tool_index = int(value)
+        except Exception:
+            self._edit_session.selected_tool_index = -1
+
+    @property
+    def _edit_image_brightness(self) -> float:
+        return float(self._edit_session.image_brightness)
+
+    @_edit_image_brightness.setter
+    def _edit_image_brightness(self, value: float) -> None:
+        self._edit_session.image_brightness = float(value)
+
+    @property
+    def _edit_image_contrast(self) -> float:
+        return float(self._edit_session.image_contrast)
+
+    @_edit_image_contrast.setter
+    def _edit_image_contrast(self, value: float) -> None:
+        self._edit_session.image_contrast = float(value)
+
+    @property
+    def _edit_image_saturation(self) -> float:
+        return float(self._edit_session.image_saturation)
+
+    @_edit_image_saturation.setter
+    def _edit_image_saturation(self, value: float) -> None:
+        self._edit_session.image_saturation = float(value)
+
+    @property
+    def _edit_image_vibrance(self) -> float:
+        return float(self._edit_session.image_vibrance)
+
+    @_edit_image_vibrance.setter
+    def _edit_image_vibrance(self, value: float) -> None:
+        self._edit_session.image_vibrance = float(value)
+
+    @property
+    def _edit_crop_left(self) -> float:
+        return float(self._edit_session.crop_left)
+
+    @_edit_crop_left.setter
+    def _edit_crop_left(self, value: float) -> None:
+        self._edit_session.crop_left = float(value)
+
+    @property
+    def _edit_crop_top(self) -> float:
+        return float(self._edit_session.crop_top)
+
+    @_edit_crop_top.setter
+    def _edit_crop_top(self, value: float) -> None:
+        self._edit_session.crop_top = float(value)
+
+    @property
+    def _edit_crop_right(self) -> float:
+        return float(self._edit_session.crop_right)
+
+    @_edit_crop_right.setter
+    def _edit_crop_right(self, value: float) -> None:
+        self._edit_session.crop_right = float(value)
+
+    @property
+    def _edit_crop_bottom(self) -> float:
+        return float(self._edit_session.crop_bottom)
+
+    @_edit_crop_bottom.setter
+    def _edit_crop_bottom(self, value: float) -> None:
+        self._edit_session.crop_bottom = float(value)
 
     def _log_export_event(self, message: str) -> None:
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -2848,10 +2998,10 @@ class BoardController:
 
     def _show_edit_panel_for_video(self, path: Path) -> None:
         self._edit_image_path = None
-        self._edit_tool_defs = [("crop", "Crop")]
+        self._reset_edit_session_for_kind("video")
+        self._sync_edit_tool_defs_for_kind("video")
         self._edit_tool_stack = [self._tool_entry_from_id("crop")]
         self._edit_selected_tool_index = 0
-        self._edit_crop_left, self._edit_crop_top, self._edit_crop_right, self._edit_crop_bottom = self._default_crop_settings()
         if isinstance(self._focus_item, BoardVideoItem):
             filename = str(self._focus_item.data(1) or "").strip()
             override = self._image_exr_display_overrides.get(filename)
@@ -2859,13 +3009,8 @@ class BoardController:
         self.w.board_page.set_image_adjust_controls_visible(True)
         self._sync_tool_stack_ui()
         self._apply_crop_to_focus_item()
-        self.w.board_page.edit_timeline_play_btn.setText("Play")
-        if self._edit_video_timer is None:
-            self._edit_video_timer = QtCore.QTimer(self.w)
-            self._edit_video_timer.timeout.connect(self._advance_edit_video_frame)
-        else:
-            self._edit_video_timer.stop()
-        self._edit_video_playing = False
+        self.w.board_page.edit_timeline_play_btn.setText(play_button_label(False))
+        self._video_playback.stop()
         info = [
             f"Type: Video",
             f"Name: {path.name}",
@@ -2881,9 +3026,8 @@ class BoardController:
         if self._edit_video_controller is not None:
             self.w.board_page.show_edit_preview_video()
             self._edit_video_controller.preview_first_frame(path)
-            self._edit_video_controller.play_path(path)
-            self._edit_video_controller.toggle_play()
-            self.w.board_page.edit_timeline_play_btn.setText("Play")
+            self._edit_video_controller.load_path(path)
+        self.w.board_page.edit_timeline_play_btn.setText(play_button_label(False))
         self._focus_video_path = path
         self._ensure_focus_video_cap()
         self._init_edit_video_timeline(path)
@@ -2894,7 +3038,7 @@ class BoardController:
     def _show_edit_panel_for_sequence(self, dir_path: Path) -> None:
         self._edit_image_path = None
         self.w.board_page.set_image_adjust_controls_visible(False)
-        self.w.board_page.edit_timeline_play_btn.setText("Play")
+        self.w.board_page.edit_timeline_play_btn.setText(play_button_label(False))
         frames = self._sequence_frame_paths(dir_path)
         info = [
             "Type: Sequence",
@@ -2910,22 +3054,14 @@ class BoardController:
         )
         self._edit_seq_frames = frames
         self._edit_seq_dir = dir_path
-        if self._edit_seq_timer is None:
-            self._edit_seq_timer = QtCore.QTimer(self.w)
-            self._edit_seq_timer.timeout.connect(self._advance_edit_sequence_frame)
-        self._edit_seq_playing = False
-        self.w.board_page.edit_sequence_play_btn.setText("Play")
-        self.w.board_page.edit_timeline_play_btn.setText("Play")
+        self._sequence_playback.stop()
+        self._sequence_playback.set_fps(self._edit_seq_fps)
+        self.w.board_page.edit_timeline_play_btn.setText(play_button_label(False))
         self._edit_video_playhead = 0
         if frames:
-            self.w.board_page.edit_sequence_slider.blockSignals(True)
-            self.w.board_page.edit_sequence_slider.setRange(0, max(0, len(frames) - 1))
-            self.w.board_page.edit_sequence_slider.setValue(0)
-            self.w.board_page.edit_sequence_slider.blockSignals(False)
             self.w.board_page.edit_sequence_timeline.set_data(len(frames), [(0, len(frames) - 1)], 0)
             self.w.board_page.edit_sequence_frame_label.setText("Frame: 0")
         else:
-            self.w.board_page.edit_sequence_slider.setRange(0, 0)
             self.w.board_page.edit_sequence_timeline.set_data(0, [], 0)
             self.w.board_page.edit_sequence_frame_label.setText("Frame: 0")
         # Use the main timeline bar for sequences as well
@@ -2942,12 +3078,12 @@ class BoardController:
             f"{size.width()} x {size.height()}",
         ]
         self._edit_image_path = path
-        self._edit_tool_defs = [("bcs", "BCS"), ("vibrance", "Vibrance"), ("crop", "Crop")]
+        self._reset_edit_session_for_kind("image")
+        self._sync_edit_tool_defs_for_kind("image")
         self._edit_tool_stack = build_bcs_stack(*self._default_color_adjustments())
         self._edit_selected_tool_index = 0
         self._edit_image_brightness, self._edit_image_contrast, self._edit_image_saturation = self._default_color_adjustments()
         self._edit_image_vibrance = self._default_vibrance()
-        self._edit_crop_left, self._edit_crop_top, self._edit_crop_right, self._edit_crop_bottom = self._default_crop_settings()
         if isinstance(self._focus_item, BoardImageItem):
             filename = str(self._focus_item.data(1) or "").strip()
             override = self._image_exr_display_overrides.get(filename)
@@ -3030,10 +3166,7 @@ class BoardController:
         self._edit_video_controller = controller
         host_layout = self.w.board_page.edit_video_host_layout
         host_layout.addWidget(controller.widget)
-        controller.bind_controls(
-            self.w.board_page.edit_video_play_btn,
-            self.w.board_page.edit_video_slider,
-        )
+        controller.bind_controls(None, None)
 
     def _init_edit_video_timeline(self, path: Path) -> None:
         self._edit_video_path = path
@@ -3051,6 +3184,7 @@ class BoardController:
                 total = 0
                 fps = 24.0
         self._edit_video_fps = max(1.0, float(fps))
+        self._video_playback.set_fps(self._edit_video_fps)
         self._edit_video_total = max(0, total)
         if self._edit_video_total <= 0:
             self._edit_video_clips = []
@@ -3071,25 +3205,43 @@ class BoardController:
         self.w.board_page.edit_timeline_split_btn.setEnabled(True)
         self.w.board_page.edit_timeline_export_btn.setEnabled(True)
 
+    def _set_edit_timeline_frame_label(self, frame: int) -> None:
+        if hasattr(self.w.board_page, "edit_timeline_frame_label"):
+            self.w.board_page.edit_timeline_frame_label.setText(frame_label_text(frame))
+
+    def _apply_sequence_focus_frame(self, frame: int) -> None:
+        if not isinstance(self._focus_item, BoardSequenceItem):
+            return
+        if not self._edit_seq_frames:
+            return
+        idx = clamp_playhead(frame, len(self._edit_seq_frames))
+        frame_path = self._edit_seq_frames[idx]
+        pixmap = self._get_display_pixmap(frame_path, max_dim=self._max_display_dim)
+        self._focus_item.set_override_pixmap(pixmap)
+
+    def _apply_video_focus_frame(self, frame: int) -> None:
+        if not isinstance(self._focus_item, BoardVideoItem):
+            return
+        idx = clamp_playhead(frame, self._edit_video_total)
+        if self._video_playback.is_playing():
+            self._schedule_video_focus_preview(idx, immediate=True)
+        else:
+            delay = 140 if self._edit_timeline_scrubbing else 40
+            self._schedule_video_focus_preview(idx, delay_ms=delay)
+
     def _on_edit_timeline_playhead(self, frame: int) -> None:
         if self._edit_focus_kind == "sequence":
             self._on_edit_sequence_timeline_playhead(int(frame))
             return
-        self._edit_video_playhead = max(0, min(int(frame), max(0, self._edit_video_total - 1)))
+        self._edit_video_playhead = clamp_playhead(int(frame), self._edit_video_total)
         if (
             self._edit_video_controller is not None
             and not self._edit_timeline_scrubbing
-            and not self._edit_video_playing
+            and not self._video_playback.is_playing()
         ):
             self._edit_video_controller.seek_frame(self._edit_video_playhead)
-        if isinstance(self._focus_item, BoardVideoItem):
-            if self._edit_video_playing:
-                self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
-            else:
-                delay = 140 if self._edit_timeline_scrubbing else 40
-                self._schedule_video_focus_preview(self._edit_video_playhead, delay_ms=delay)
-        if hasattr(self.w.board_page, "edit_timeline_frame_label"):
-            self.w.board_page.edit_timeline_frame_label.setText(f"Frame: {self._edit_video_playhead}")
+        self._apply_video_focus_frame(self._edit_video_playhead)
+        self._set_edit_timeline_frame_label(self._edit_video_playhead)
 
     def _on_edit_timeline_scrub_state(self, active: bool) -> None:
         self._edit_timeline_scrubbing = bool(active)
@@ -3246,42 +3398,27 @@ class BoardController:
 
         QtCore.QTimer.singleShot(0, _start_export_thread)
 
-    def _on_edit_sequence_slider(self, value: int) -> None:
-        if not self._edit_seq_frames:
-            return
-        idx = max(0, min(value, len(self._edit_seq_frames) - 1))
-        self._edit_video_playhead = idx
-        self.w.board_page.edit_sequence_timeline.set_playhead(idx)
-        self._on_edit_sequence_timeline_playhead(idx)
-
     def _on_edit_sequence_timeline_playhead(self, frame: int) -> None:
         if not self._edit_seq_frames:
             return
-        idx = max(0, min(int(frame), len(self._edit_seq_frames) - 1))
+        idx = clamp_playhead(int(frame), len(self._edit_seq_frames))
         self._edit_video_playhead = idx
-        self.w.board_page.edit_sequence_slider.blockSignals(True)
-        self.w.board_page.edit_sequence_slider.setValue(idx)
-        self.w.board_page.edit_sequence_slider.blockSignals(False)
-        self.w.board_page.edit_timeline_frame_label.setText(f"Frame: {idx}")
-        if isinstance(self._focus_item, BoardSequenceItem):
-            frame_path = self._edit_seq_frames[idx]
-            pixmap = self._get_display_pixmap(frame_path, max_dim=self._max_display_dim)
-            self._focus_item.set_override_pixmap(pixmap)
+        self._set_edit_timeline_frame_label(idx)
+        self._apply_sequence_focus_frame(idx)
 
     def _toggle_edit_sequence_play(self) -> None:
-        if not self._edit_seq_frames or self._edit_seq_timer is None:
+        if not self._edit_seq_frames:
             return
-        if self._edit_seq_playing:
-            self._edit_seq_timer.stop()
-            self._edit_seq_playing = False
-            self.w.board_page.edit_sequence_play_btn.setText("Play")
-            self.w.board_page.edit_timeline_play_btn.setText("Play")
-        else:
-            interval = int(1000 / max(1, self._edit_seq_fps))
-            self._edit_seq_timer.start(max(1, interval))
-            self._edit_seq_playing = True
-            self.w.board_page.edit_sequence_play_btn.setText("Pause")
-            self.w.board_page.edit_timeline_play_btn.setText("Pause")
+        self._sequence_playback.set_fps(self._edit_seq_fps)
+        self._sequence_playback.toggle()
+
+    def _on_sequence_play_state_changed(self, playing: bool) -> None:
+        if self._edit_focus_kind == "sequence":
+            self.w.board_page.edit_timeline_play_btn.setText(play_button_label(playing))
+
+    def _on_video_play_state_changed(self, playing: bool) -> None:
+        if self._edit_focus_kind == "video":
+            self.w.board_page.edit_timeline_play_btn.setText(play_button_label(playing))
 
     def _toggle_edit_timeline_play(self) -> None:
         if self._edit_focus_kind == "sequence":
@@ -3290,34 +3427,22 @@ class BoardController:
         if self._edit_focus_kind == "video":
             if self._edit_video_total <= 0:
                 return
-            if self._edit_video_timer is None:
-                self._edit_video_timer = QtCore.QTimer(self.w)
-                self._edit_video_timer.timeout.connect(self._advance_edit_video_frame)
-            if self._edit_video_playing:
-                self._edit_video_timer.stop()
-                self._edit_video_playing = False
-                self.w.board_page.edit_timeline_play_btn.setText("Play")
-            else:
-                interval = int(1000 / max(1.0, self._edit_video_fps))
-                self._edit_video_timer.start(max(1, interval))
-                self._edit_video_playing = True
-                self.w.board_page.edit_timeline_play_btn.setText("Pause")
+            self._video_playback.set_fps(self._edit_video_fps)
+            self._video_playback.toggle()
 
     def _advance_edit_video_frame(self) -> None:
         if self._edit_video_total <= 0:
             return
-        nxt = self._edit_video_playhead + 1
-        if nxt >= self._edit_video_total:
-            nxt = 0
+        nxt = loop_next_playhead(self._edit_video_playhead, self._edit_video_total)
         self.w.board_page.edit_timeline.set_playhead(nxt)
         self._on_edit_timeline_playhead(nxt)
 
     def _advance_edit_sequence_frame(self) -> None:
         if not self._edit_seq_frames:
             return
-        current = self.w.board_page.edit_sequence_slider.value()
-        nxt = (current + 1) % len(self._edit_seq_frames)
-        self.w.board_page.edit_sequence_slider.setValue(nxt)
+        nxt = loop_next_playhead(self._edit_video_playhead, len(self._edit_seq_frames))
+        self.w.board_page.edit_timeline.set_playhead(nxt)
+        self._on_edit_sequence_timeline_playhead(nxt)
 
     def _load_exr_channels_into_panel(self, path: Path) -> None:
         worker = _ExrInfoWorker(path)
@@ -3394,13 +3519,15 @@ class BoardController:
         return 0.0, 0.0, 0.0, 0.0
 
     def _default_edit_tool_stack(self) -> list[dict[str, object]]:
+        self._sync_edit_tool_defs_for_kind(str(self._edit_focus_kind or "image"))
         if self._edit_focus_kind == "video":
             return [self._tool_entry_from_id("crop")]
         b, c, s = self._default_color_adjustments()
         return build_bcs_stack(b, c, s)
 
     def _ensure_edit_tool_stack(self) -> None:
-        tools = normalize_tool_stack(self._edit_tool_stack)
+        self._sync_edit_tool_defs_for_kind(str(self._edit_focus_kind or "image"))
+        tools = normalize_tool_entries(self._edit_tool_stack)
         if not tools:
             tools = self._default_edit_tool_stack()
         self._edit_tool_stack = [dict(t) for t in tools]
@@ -3412,28 +3539,15 @@ class BoardController:
         for tid, label in self._edit_tool_defs:
             if tid == key:
                 return label
+        spec = get_edit_tool(key)
+        if spec is not None:
+            return spec.label
         return key or "Tool"
 
     def _tool_entry_from_id(self, tool_id: str) -> dict[str, object]:
-        key = str(tool_id or "").strip().lower()
-        if key == "vibrance":
-            return {
-                "id": "vibrance",
-                "enabled": True,
-                "settings": {"amount": self._default_vibrance()},
-            }
-        if key == "crop":
-            left, top, right, bottom = self._default_crop_settings()
-            return {
-                "id": "crop",
-                "enabled": True,
-                "settings": {
-                    "left": left,
-                    "top": top,
-                    "right": right,
-                    "bottom": bottom,
-                },
-            }
+        entry = make_tool_entry(tool_id)
+        if entry:
+            return entry
         b, c, s = self._default_color_adjustments()
         return {
             "id": "bcs",
@@ -3504,6 +3618,7 @@ class BoardController:
         self.w.board_page.set_image_bcs_controls_visible(selected_id in ("", "bcs"))
         self.w.board_page.set_image_vibrance_visible(selected_id == "vibrance")
         self.w.board_page.set_image_crop_visible(selected_id == "crop")
+        self._refresh_focus_crop_handles()
 
     def _current_edit_tool_stack(self) -> list[dict[str, object]]:
         self._ensure_edit_tool_stack()
@@ -3588,6 +3703,9 @@ class BoardController:
         settings = entry.get("settings", {})
         if not isinstance(settings, dict):
             settings = {}
+        spec = get_edit_tool(tool_id)
+        if spec is not None:
+            return spec.is_effective(settings)
         if tool_id == "bcs":
             return not self._color_adjustments_are_default(
                 settings.get("brightness", 0.0),
@@ -3624,104 +3742,70 @@ class BoardController:
 
     def _set_bcs_in_tool_stack(self, brightness: float, contrast: float, saturation: float) -> None:
         self._ensure_edit_tool_stack()
-        for entry in self._edit_tool_stack:
-            if str(entry.get("id", "")).strip().lower() == "bcs":
-                settings = entry.get("settings", {})
-                if not isinstance(settings, dict):
-                    settings = {}
-                settings["brightness"] = float(brightness)
-                settings["contrast"] = float(contrast)
-                settings["saturation"] = float(saturation)
-                entry["settings"] = settings
-                return
-        self._edit_tool_stack.insert(
-            0,
+        entries, idx = upsert_tool_settings(
+            self._edit_tool_stack,
+            "bcs",
             {
-                "id": "bcs",
-                "enabled": True,
-                "settings": {
-                    "brightness": float(brightness),
-                    "contrast": float(contrast),
-                    "saturation": float(saturation),
-                },
+                "brightness": float(brightness),
+                "contrast": float(contrast),
+                "saturation": float(saturation),
             },
+            add_if_missing=True,
+            insert_at=0,
         )
-        self._edit_selected_tool_index = 0
+        self._edit_tool_stack = entries
+        if idx >= 0:
+            self._edit_selected_tool_index = idx
 
     def _set_vibrance_in_tool_stack(self, amount: float, add_if_missing: bool = True) -> None:
         self._ensure_edit_tool_stack()
-        for idx, entry in enumerate(self._edit_tool_stack):
-            if str(entry.get("id", "")).strip().lower() == "vibrance":
-                settings = entry.get("settings", {})
-                if not isinstance(settings, dict):
-                    settings = {}
-                settings["amount"] = float(amount)
-                entry["settings"] = settings
-                self._edit_selected_tool_index = idx
-                return
-        if not add_if_missing:
-            return
-        self._edit_tool_stack.append(
-            {
-                "id": "vibrance",
-                "enabled": True,
-                "settings": {"amount": float(amount)},
-            }
+        entries, idx = upsert_tool_settings(
+            self._edit_tool_stack,
+            "vibrance",
+            {"amount": float(amount)},
+            add_if_missing=add_if_missing,
         )
-        self._edit_selected_tool_index = len(self._edit_tool_stack) - 1
+        self._edit_tool_stack = entries
+        if idx >= 0:
+            self._edit_selected_tool_index = idx
 
     def _set_crop_in_tool_stack(self, left: float, top: float, right: float, bottom: float, add_if_missing: bool = True) -> None:
         self._ensure_edit_tool_stack()
         left, top, right, bottom = _sanitize_crop_settings(left, top, right, bottom)
-        for idx, entry in enumerate(self._edit_tool_stack):
-            if str(entry.get("id", "")).strip().lower() == "crop":
-                settings = entry.get("settings", {})
-                if not isinstance(settings, dict):
-                    settings = {}
-                settings["left"] = left
-                settings["top"] = top
-                settings["right"] = right
-                settings["bottom"] = bottom
-                entry["settings"] = settings
-                self._edit_selected_tool_index = idx
-                return
-        if not add_if_missing:
-            return
-        self._edit_tool_stack.append(
+        entries, idx = upsert_tool_settings(
+            self._edit_tool_stack,
+            "crop",
             {
-                "id": "crop",
-                "enabled": True,
-                "settings": {
-                    "left": left,
-                    "top": top,
-                    "right": right,
-                    "bottom": bottom,
-                },
-            }
+                "left": left,
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+            },
+            add_if_missing=add_if_missing,
         )
-        self._edit_selected_tool_index = len(self._edit_tool_stack) - 1
+        self._edit_tool_stack = entries
+        if idx >= 0:
+            self._edit_selected_tool_index = idx
 
     def _on_edit_tool_stack_selection_changed(self, row: int) -> None:
         self._edit_selected_tool_index = int(row)
         self._sync_tool_stack_ui()
 
-    def _on_edit_tool_stack_add_clicked(self) -> None:
+    def _on_edit_tool_stack_add_clicked(self, tool_id: object = None) -> None:
         if self._edit_image_path is None:
             return
-        tool_id = self.w.board_page.current_image_tool_add_id().strip().lower()
+        if tool_id is None:
+            tool_id = self.w.board_page.current_image_tool_add_id()
+        tool_id = str(tool_id or "").strip().lower()
         if not tool_id:
             return
         self._ensure_edit_tool_stack()
-        self._edit_tool_stack.append(self._tool_entry_from_id(tool_id))
-        self._edit_selected_tool_index = len(self._edit_tool_stack) - 1
+        entries, idx = append_tool(self._edit_tool_stack, tool_id)
+        self._edit_tool_stack = entries
+        if idx >= 0:
+            self._edit_selected_tool_index = idx
         self._sync_tool_stack_ui()
         self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
-
-    def _on_edit_tool_stack_remove_clicked(self) -> None:
-        if self._edit_image_path is None:
-            return
-        idx = self.w.board_page.current_image_tool_stack_index()
-        self._remove_edit_tool_stack_index(idx)
 
     def _on_edit_tool_stack_remove_index(self, idx: int) -> None:
         if self._edit_image_path is None:
@@ -3731,12 +3815,13 @@ class BoardController:
     def _remove_edit_tool_stack_index(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._edit_tool_stack):
             return
-        self._edit_tool_stack.pop(idx)
+        entries, next_idx = remove_tool_at(self._edit_tool_stack, idx)
+        self._edit_tool_stack = entries
         if not self._edit_tool_stack:
             self._edit_tool_stack = self._default_edit_tool_stack()
             self._edit_selected_tool_index = 0
         else:
-            self._edit_selected_tool_index = max(0, min(idx, len(self._edit_tool_stack) - 1))
+            self._edit_selected_tool_index = next_idx
         self._sync_tool_stack_ui()
         if isinstance(self._focus_item, BoardVideoItem):
             self._commit_current_focus_video_override()
@@ -3749,11 +3834,9 @@ class BoardController:
         idx = self.w.board_page.current_image_tool_stack_index()
         if idx <= 0 or idx >= len(self._edit_tool_stack):
             return
-        self._edit_tool_stack[idx - 1], self._edit_tool_stack[idx] = (
-            self._edit_tool_stack[idx],
-            self._edit_tool_stack[idx - 1],
-        )
-        self._edit_selected_tool_index = idx - 1
+        entries, next_idx = move_tool(self._edit_tool_stack, idx, -1)
+        self._edit_tool_stack = entries
+        self._edit_selected_tool_index = next_idx
         self._sync_tool_stack_ui()
         self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
 
@@ -3761,11 +3844,9 @@ class BoardController:
         idx = self.w.board_page.current_image_tool_stack_index()
         if idx < 0 or idx >= len(self._edit_tool_stack) - 1:
             return
-        self._edit_tool_stack[idx + 1], self._edit_tool_stack[idx] = (
-            self._edit_tool_stack[idx],
-            self._edit_tool_stack[idx + 1],
-        )
-        self._edit_selected_tool_index = idx + 1
+        entries, next_idx = move_tool(self._edit_tool_stack, idx, 1)
+        self._edit_tool_stack = entries
+        self._edit_selected_tool_index = next_idx
         self._sync_tool_stack_ui()
         self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
 
@@ -3821,9 +3902,130 @@ class BoardController:
             if group is not None:
                 group.update_bounds()
             self._refresh_scene_workspace()
+            self._refresh_focus_crop_handles()
 
-    def _on_edit_crop_changed(self, *_: object) -> None:
-        left, top, right, bottom = self.w.board_page.current_image_crop_settings()
+    def _focus_item_base_size(self) -> Optional[QtCore.QSizeF]:
+        item = self._focus_item
+        if item is None:
+            return None
+        base_size = getattr(item, "_base_size", None)
+        if isinstance(base_size, QtCore.QSizeF):
+            return QtCore.QSizeF(base_size)
+        rect = item.boundingRect()
+        if rect.isNull():
+            return None
+        return QtCore.QSizeF(rect.width(), rect.height())
+
+    def _clear_focus_crop_handles(self, *, reset_drag: bool = True) -> None:
+        if self._focus_handle_frame is not None and self._focus_handle_frame.scene() is not None:
+            self._scene.removeItem(self._focus_handle_frame)
+        self._focus_handle_frame = None
+        for item in list(self._focus_handle_items.values()):
+            if item.scene() is not None:
+                self._scene.removeItem(item)
+        self._focus_handle_items = {}
+        self._focus_crop_layout = None
+        if reset_drag:
+            self._focus_crop_drag = None
+
+    def _crop_handles_active(self) -> bool:
+        if not isinstance(self._focus_item, (BoardImageItem, BoardVideoItem)):
+            return False
+        selected = self._selected_tool_entry()
+        selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
+        return selected_id == "crop"
+
+    def _refresh_focus_crop_handles(self) -> None:
+        self._clear_focus_crop_handles(reset_drag=False)
+        if not self._crop_handles_active():
+            return
+        if self._focus_item is None:
+            return
+        layout = build_crop_handle_layout(self._focus_item.sceneBoundingRect(), handle_size=12.0)
+        self._focus_crop_layout = layout
+        frame = QtWidgets.QGraphicsRectItem(layout.frame_rect)
+        frame.setPen(QtGui.QPen(QtGui.QColor("#f2c14e"), 1.5, QtCore.Qt.PenStyle.DashLine))
+        frame.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        frame.setZValue(10_020)
+        self._scene.addItem(frame)
+        self._focus_handle_frame = frame
+        for role, rect in layout.handle_rects.items():
+            handle = QtWidgets.QGraphicsRectItem(rect)
+            handle.setPen(QtGui.QPen(QtGui.QColor("#f2c14e"), 1))
+            handle.setBrush(QtGui.QBrush(QtGui.QColor("#1d2128")))
+            handle.setZValue(10_021)
+            self._scene.addItem(handle)
+            self._focus_handle_items[role] = handle
+
+    def handle_view_mouse_press(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return False
+        if not self._crop_handles_active():
+            return False
+        layout = self._focus_crop_layout
+        if layout is None:
+            self._refresh_focus_crop_handles()
+            layout = self._focus_crop_layout
+        if layout is None:
+            return False
+        role = hit_test_crop_handle(layout, scene_pos)
+        if role is None:
+            return False
+        base_size = self._focus_item_base_size()
+        if base_size is None:
+            return False
+        self._focus_crop_drag = CropHandleDragState(
+            role=role,
+            start_scene_pos=QtCore.QPointF(scene_pos),
+            start_crop=(
+                self._edit_crop_left,
+                self._edit_crop_top,
+                self._edit_crop_right,
+                self._edit_crop_bottom,
+            ),
+            base_size=base_size,
+        )
+        return True
+
+    def handle_view_mouse_move(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+        if self._focus_crop_drag is None:
+            return False
+        delta = QtCore.QPointF(scene_pos.x() - self._focus_crop_drag.start_scene_pos.x(), scene_pos.y() - self._focus_crop_drag.start_scene_pos.y())
+        left, top, right, bottom = apply_crop_drag(
+            self._focus_crop_drag.role,
+            self._focus_crop_drag.start_crop,
+            delta,
+            self._focus_crop_drag.base_size,
+        )
+        self._set_current_crop(left, top, right, bottom, schedule_preview=False)
+        return True
+
+    def handle_view_mouse_release(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+        if self._focus_crop_drag is None:
+            return False
+        self._focus_crop_drag = None
+        self._refresh_focus_crop_handles()
+        if isinstance(self._focus_item, BoardVideoItem):
+            self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
+        elif isinstance(self._focus_item, BoardImageItem):
+            if self._edit_exr_path is not None:
+                channel = self.w.board_page.current_exr_channel_value()
+                if channel:
+                    self._edit_exr_channel = str(channel)
+                    self._schedule_edit_preview_update(channel=str(channel))
+            else:
+                self._schedule_edit_preview_update()
+        return True
+
+    def _set_current_crop(
+        self,
+        left: float,
+        top: float,
+        right: float,
+        bottom: float,
+        *,
+        schedule_preview: bool = True,
+    ) -> None:
         left, top, right, bottom = _sanitize_crop_settings(left, top, right, bottom)
         self._edit_crop_left = left
         self._edit_crop_top = top
@@ -3834,18 +4036,22 @@ class BoardController:
         self._apply_crop_to_focus_item()
         if isinstance(self._focus_item, BoardImageItem):
             self._commit_current_focus_image_override()
-            if self._edit_image_path is not None:
+            if schedule_preview:
                 if self._edit_exr_path is not None:
                     channel = self.w.board_page.current_exr_channel_value()
                     if channel:
                         self._edit_exr_channel = str(channel)
                         self._schedule_edit_preview_update(channel=str(channel))
-                else:
+                elif self._edit_image_path is not None:
                     self._schedule_edit_preview_update()
-            return
-        if isinstance(self._focus_item, BoardVideoItem):
+        elif isinstance(self._focus_item, BoardVideoItem):
             self._commit_current_focus_video_override()
-            self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
+            if schedule_preview:
+                self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
+
+    def _on_edit_crop_changed(self, *_: object) -> None:
+        left, top, right, bottom = self.w.board_page.current_image_crop_settings()
+        self._set_current_crop(left, top, right, bottom, schedule_preview=True)
 
     def _reset_edit_image_adjustments(self) -> None:
         b_def, c_def, s_def = self._default_color_adjustments()
@@ -4145,10 +4351,12 @@ class BoardController:
         item.setZValue(10_000)
         self.w.board_page.set_edit_panel_visible(True)
         self._edit_focus_kind = str(item.data(0) or "")
+        self._refresh_focus_crop_handles()
 
     def exit_focus_mode(self) -> None:
         if self._focus_item is None:
             return
+        self._clear_focus_crop_handles()
         # Restore item states
         for obj in self._scene.items():
             saved = self._focus_saved.pop(id(obj), None)
@@ -4177,12 +4385,11 @@ class BoardController:
                 self._focus_item.set_override_pixmap(None)
             self._focus_item.setZValue(0)
         self._focus_item = None
-        self._edit_focus_kind = None
+        self._reset_edit_session_for_kind("")
         self._edit_timeline_scrubbing = False
-        if self._edit_video_timer is not None and self._edit_video_timer.isActive():
-            self._edit_video_timer.stop()
-        self._edit_video_playing = False
-        self.w.board_page.edit_timeline_play_btn.setText("Play")
+        self._sequence_playback.stop()
+        self._video_playback.stop()
+        self.w.board_page.edit_timeline_play_btn.setText(play_button_label(False))
         if self._video_preview_timer is not None and self._video_preview_timer.isActive():
             self._video_preview_timer.stop()
         self._video_preview_pending = None
@@ -4712,11 +4919,11 @@ class BoardController:
         if not isinstance(self._focus_item, BoardVideoItem):
             return
         self._ensure_focus_video_cap()
-        max_dim = self._edit_video_playback_dim if self._edit_video_playing else self._max_display_dim
+        max_dim = self._edit_video_playback_dim if self._video_playback.is_playing() else self._max_display_dim
         pixmap = self._get_focus_video_frame_pixmap(
             idx,
             max_dim=max_dim,
-            prefer_fast=bool(self._edit_video_playing),
+            prefer_fast=self._video_playback.is_playing(),
         )
         if pixmap is not None:
             self._focus_item.set_override_pixmap(pixmap)
