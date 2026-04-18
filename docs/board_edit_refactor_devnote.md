@@ -1,26 +1,3 @@
-# Board / Edit Refactor Dev Note
-
-Date: 2026-04-18
-
-## Intent
-
-Cette note capture l'etat actuel du `Skyforge Launcher` avec un focus sur le board et son mode d'edition, pour clarifier:
-
-- ce qui est deja bien refactorise
-- ce qui reste encore trop couple a `BoardController`
-- la cible d'architecture vers laquelle on veut aller
-
-## Vue d'ensemble du repo
-
-La structure du projet est globalement saine et suit deja une separation utile:
-
-- `ui/`: widgets et pages Qt
-- `controllers/`: orchestration entre UI, scene, fichiers et services
-- `core/`: logique transversale et helpers applicatifs
-- `tools/`: systemes extensibles de tools/plugins
-- `video/`: lecture et widgets video
-
-En pratique, le board est encore le module le plus dense, parce qu'il concentre plusieurs responsabilites historiques.
 
 ## Ce que fait aujourd'hui le board
 
@@ -207,7 +184,6 @@ Premier pas deja pose:
 Ce qui reste volontairement a part:
 
 - l'interaction scene du crop (handles, drag dans la vue) reste un sujet d'interaction de scene, pas un simple panel de reglages
-- cette interaction de scene commence maintenant a vivre dans `core/board_edit/crop_scene.py`, pour que `BoardController` ne porte plus seul les regles de handles/drag crop
 
 ### Etape 3. Sortir les items de scene de `board_controller.py`
 
@@ -220,7 +196,7 @@ Travail:
 - deplacer `BoardImageItem`, `BoardVideoItem`, `BoardSequenceItem`, `BoardNoteItem`, `BoardGroupItem`
 - garder uniquement leur orchestration dans le controller
 
-Statut: termine le 2026-04-18
+Statut: en cours le 2026-04-18
 
 Premier pas deja pose:
 
@@ -275,15 +251,6 @@ Travail:
 
 - sortir les workers image/video/exr si possible vers un module dedie
 
-## Changement realise dans ce passage
-
-Ce passage de nettoyage pousse deja une partie de la logique de stack vers `core/board_edit/tool_stack.py`:
-
-- extraction BCS
-- extraction crop
-- evaluation "effective" d'une stack
-
-Et la sanitization du crop repose desormais sur une source commune dans `core/board_edit/handles.py`.
 
 ## Sous-chantier termine: board overrides
 
@@ -300,18 +267,6 @@ Ce qui est maintenant sorti:
 - l'ancien chemin `_apply_payload` reapplique lui aussi les overrides via les memes helpers dedies
 - le renommage de medias deplace maintenant les overrides image et video via un helper commun
 
-## Resume honnete
-
-Le refacto precedent n'etait pas "fini"; il a surtout installe la nouvelle fondation.
-La dette restante est reelle, mais elle est maintenant visible et structurable.
-
-Le board n'est pas en mauvais etat conceptuel.
-Il est surtout a mi-chemin entre:
-
-- un ancien controller monolithique
-- et une architecture plugin/edit/scene propre
-
-La bonne strategie maintenant n'est pas de tout re-ecrire, mais de continuer a deplacer les frontieres dans le bon ordre.
 
 ## Tests cibles ajoutes
 
@@ -323,7 +278,6 @@ Une premiere base de tests `unittest` existe maintenant dans `tests/` pour prote
 - `tests/test_board_state_payload.py`
 - `tests/test_board_state_overrides.py`
 - `tests/test_board_scene_groups.py`
-- `tests/test_board_crop_scene.py`
 
 Couverture visee dans cette premiere passe:
 
@@ -331,13 +285,7 @@ Couverture visee dans cette premiere passe:
 - parsing/synchronisation du `board_state`
 - merge/commit/rename d'overrides
 - logique groupes / `groups_tree` pure
-- interaction de scene du crop et calculs de drag associes
 
 Commande de verification actuelle:
 
 - `venv\Scripts\python.exe -m unittest discover -s tests -v`
-
-Etat actuel:
-
-- les fondations structurelles principales du board/edit sont maintenant posees et testees
-- les prochains travaux relevent surtout de l'evolution fonctionnelle et de finitions d'architecture, plus d'un gros chantier de desenchevetrement
