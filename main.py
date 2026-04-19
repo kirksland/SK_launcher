@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import html
 import os
+import sys
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -31,10 +34,237 @@ from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
 from controllers.board_controller import BoardController
 from ui.widgets.project_card import ProjectCard
-from ui.utils.styles import PALETTE, app_stylesheet, tool_button_dark_style
+from ui.utils.styles import PALETTE, app_stylesheet, combo_dark_style, tool_button_dark_style
 
 APP_TITLE = "Skyforge Launcher"
 TEST_PIPELINE_ROOT = Path(__file__).resolve().parent / "projects" / "test_pipeline"
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+APP_LOG_PATH = LOG_DIR / "launcher.log"
+
+
+class RuntimeLogBus(QtCore.QObject):
+    entry_added = QtCore.Signal(str, str, str)
+
+    def __init__(self, log_path: Path) -> None:
+        super().__init__()
+        self.log_path = log_path
+        self._entries: list[tuple[str, str, str]] = []
+        self._max_entries = 1500
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def entries(self) -> list[tuple[str, str, str]]:
+        return list(self._entries)
+
+    def append(self, level: str, message: str) -> None:
+        normalized = str(message).replace("\r\n", "\n").replace("\r", "\n")
+        for raw_line in normalized.split("\n"):
+            line = raw_line.rstrip()
+            if not line:
+                continue
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            upper_level = level.upper()
+            entry = (timestamp, upper_level, line)
+            self._entries.append(entry)
+            if len(self._entries) > self._max_entries:
+                self._entries = self._entries[-self._max_entries :]
+            try:
+                with self.log_path.open("a", encoding="utf-8") as handle:
+                    handle.write(f"{timestamp} [{upper_level}] {line}\n")
+            except Exception:
+                pass
+            self.entry_added.emit(timestamp, upper_level, line)
+
+
+class StreamRelay:
+    def __init__(self, bus: RuntimeLogBus, level: str, fallback: object) -> None:
+        self._bus = bus
+        self._level = level
+        self._fallback = fallback
+        self._buffer = ""
+        self.encoding = getattr(fallback, "encoding", "utf-8")
+
+    def write(self, text: str) -> int:
+        if not isinstance(text, str):
+            text = str(text)
+        try:
+            if self._fallback is not None:
+                self._fallback.write(text)
+        except Exception:
+            pass
+        self._buffer += text.replace("\r\n", "\n").replace("\r", "\n")
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.strip():
+                self._bus.append(self._level, line)
+        return len(text)
+
+    def flush(self) -> None:
+        try:
+            if self._fallback is not None:
+                self._fallback.flush()
+        except Exception:
+            pass
+        if self._buffer.strip():
+            self._bus.append(self._level, self._buffer.strip())
+        self._buffer = ""
+
+    def isatty(self) -> bool:
+        return False
+
+
+APP_LOG_BUS = RuntimeLogBus(APP_LOG_PATH)
+_RUNTIME_LOGGING_INSTALLED = False
+
+
+def _install_runtime_logging() -> None:
+    global _RUNTIME_LOGGING_INSTALLED
+    if _RUNTIME_LOGGING_INSTALLED:
+        return
+    _RUNTIME_LOGGING_INSTALLED = True
+
+    sys.stdout = StreamRelay(APP_LOG_BUS, "info", getattr(sys, "__stdout__", None))
+    sys.stderr = StreamRelay(APP_LOG_BUS, "error", getattr(sys, "__stderr__", None))
+
+    def _excepthook(exc_type: type[BaseException], value: BaseException, tb: object) -> None:
+        for line in traceback.format_exception(exc_type, value, tb):
+            APP_LOG_BUS.append("error", line)
+
+    def _qt_message_handler(mode: QtCore.QtMsgType, _context: object, message: str) -> None:
+        level_map = {
+            QtCore.QtMsgType.QtDebugMsg: "debug",
+            QtCore.QtMsgType.QtInfoMsg: "info",
+            QtCore.QtMsgType.QtWarningMsg: "warning",
+            QtCore.QtMsgType.QtCriticalMsg: "error",
+            QtCore.QtMsgType.QtFatalMsg: "error",
+        }
+        APP_LOG_BUS.append(level_map.get(mode, "info"), f"Qt: {message}")
+
+    sys.excepthook = _excepthook
+    QtCore.qInstallMessageHandler(_qt_message_handler)
+
+
+class LauncherLogPanel(QtWidgets.QFrame):
+    def __init__(self, log_path: Path, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._entries: list[tuple[str, str, str]] = []
+        self._log_path = log_path
+        self._expanded_height = 220
+        self.setStyleSheet(
+            "QFrame {"
+            "background: #171b21;"
+            "border-top: 1px solid #0f1216;"
+            "}"
+        )
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(0)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        header = QtWidgets.QHBoxLayout()
+        header.setSpacing(8)
+        title = QtWidgets.QLabel("Console")
+        title.setStyleSheet("font-weight: 600; color: #d8dde5;")
+        header.addWidget(title, 0)
+
+        self.log_filter = QtWidgets.QComboBox()
+        self.log_filter.addItems(["All", "Info", "Warning", "Error", "Debug"])
+        self.log_filter.setStyleSheet(combo_dark_style(padding="2px 8px"))
+        header.addWidget(self.log_filter, 0)
+
+        self.log_hint = QtWidgets.QLabel(str(log_path))
+        self.log_hint.setStyleSheet(f"color: {PALETTE['muted']};")
+        header.addWidget(self.log_hint, 1)
+
+        self.log_clear_btn = QtWidgets.QToolButton()
+        self.log_clear_btn.setText("Clear View")
+        self.log_clear_btn.setAutoRaise(True)
+        self.log_clear_btn.setStyleSheet(tool_button_dark_style(padding="2px 8px"))
+        header.addWidget(self.log_clear_btn, 0)
+
+        self.log_open_btn = QtWidgets.QToolButton()
+        self.log_open_btn.setText("Open Log")
+        self.log_open_btn.setAutoRaise(True)
+        self.log_open_btn.setStyleSheet(tool_button_dark_style(padding="2px 8px"))
+        header.addWidget(self.log_open_btn, 0)
+        layout.addLayout(header)
+
+        self.log_view = QtWidgets.QTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setAcceptRichText(True)
+        self.log_view.setStyleSheet(
+            "QTextEdit {"
+            "background: #11151a;"
+            "border: 1px solid #222832;"
+            "border-radius: 8px;"
+            "padding: 8px;"
+            "color: #d8dde5;"
+            "font-family: Consolas, 'Courier New', monospace;"
+            "font-size: 11px;"
+            "}"
+        )
+        layout.addWidget(self.log_view, 1)
+
+        self.log_filter.currentTextChanged.connect(self._rerender)
+        self.log_clear_btn.clicked.connect(self._clear_view)
+        self.log_open_btn.clicked.connect(self._open_log_file)
+
+    def load_entries(self, entries: list[tuple[str, str, str]]) -> None:
+        self._entries = list(entries)
+        self._rerender()
+
+    def append_entry(self, timestamp: str, level: str, message: str) -> None:
+        entry = (timestamp, level, message)
+        self._entries.append(entry)
+        if self._matches_filter(level):
+            self._append_html(entry)
+
+    def _clear_view(self) -> None:
+        self.log_view.clear()
+
+    def _open_log_file(self) -> None:
+        if self._log_path.exists():
+            os.startfile(str(self._log_path))  # type: ignore[attr-defined]
+
+    def _matches_filter(self, level: str) -> bool:
+        selected = self.log_filter.currentText().lower()
+        return selected == "all" or level.lower() == selected
+
+    def _append_html(self, entry: tuple[str, str, str]) -> None:
+        timestamp, level, message = entry
+        colors = {
+            "INFO": "#9fd3ff",
+            "WARNING": "#ffd166",
+            "ERROR": "#ff7b72",
+            "DEBUG": "#86d39e",
+        }
+        color = colors.get(level.upper(), "#d8dde5")
+        escaped = html.escape(message)
+        self.log_view.append(
+            f"<span style='color:#738091;'>[{timestamp}]</span> "
+            f"<span style='color:{color}; font-weight:600;'>[{html.escape(level)}]</span> "
+            f"<span style='color:#d8dde5;'>{escaped}</span>"
+        )
+
+    def _rerender(self) -> None:
+        self.log_view.clear()
+        for entry in self._entries:
+            if self._matches_filter(entry[1]):
+                self._append_html(entry)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self.setVisible(expanded)
+        self.setMaximumHeight(self._expanded_height if expanded else 0)
+        if expanded:
+            self.setMinimumHeight(140)
+        else:
+            self.setMinimumHeight(0)
 
 
 def _create_startup_splash() -> QtWidgets.QSplashScreen:
@@ -111,7 +341,13 @@ def _create_startup_splash() -> QtWidgets.QSplashScreen:
 class LauncherWindow(QtWidgets.QMainWindow):
     def __init__(self, startup_status: Optional[Callable[[str], None]] = None) -> None:
         super().__init__()
-        self._startup_status = startup_status or (lambda _message: None)
+        startup_callback = startup_status or (lambda _message: None)
+
+        def _status(message: str) -> None:
+            APP_LOG_BUS.append("info", message)
+            startup_callback(message)
+
+        self._startup_status = _status
         self._startup_status("Loading settings...")
         self.setWindowTitle(APP_TITLE)
         icon_dir = Path(__file__).resolve().parent / "config"
@@ -202,6 +438,12 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.pages.addWidget(self.dev_page)
         self._startup_status("Connecting controllers...")
 
+        self.log_panel = LauncherLogPanel(APP_LOG_PATH, parent=self)
+        self.log_panel.set_expanded(False)
+        self.log_panel.load_entries(APP_LOG_BUS.entries)
+        APP_LOG_BUS.entry_added.connect(self.log_panel.append_entry)
+        layout.addWidget(self.log_panel, 0)
+
         # Global media controls (bottom-right)
         self.media_group = QtWidgets.QFrame()
         self.media_group.setStyleSheet(
@@ -284,6 +526,12 @@ class LauncherWindow(QtWidgets.QMainWindow):
         bottom_layout.addStretch(1)
         bottom_layout.addWidget(nav_container, 0)
         bottom_layout.addStretch(1)
+        self.log_toggle_btn = QtWidgets.QToolButton()
+        self.log_toggle_btn.setText("Logs")
+        self.log_toggle_btn.setCheckable(True)
+        self.log_toggle_btn.setAutoRaise(True)
+        self.log_toggle_btn.setStyleSheet(tool_button_dark_style(padding="4px 10px"))
+        bottom_layout.addWidget(self.log_toggle_btn, 0)
         bottom_layout.addWidget(self.media_group, 0)
 
         # Wire nav
@@ -299,6 +547,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
             nav_buttons[4].clicked.connect(lambda: self.pages.setCurrentIndex(4))
         if len(nav_buttons) > 5:
             nav_buttons[5].clicked.connect(lambda: self.pages.setCurrentIndex(5))
+        self.log_toggle_btn.toggled.connect(self.log_panel.set_expanded)
 
         self._nav_clients_btn = nav_buttons[3] if len(nav_buttons) > 3 else None
         self._nav_clients_label = "Clients"
@@ -671,6 +920,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
             )
         self.settings_page.set_startup_context(True, message)
         self._refresh_settings_validation()
+        APP_LOG_BUS.append("warning", message)
         QtWidgets.QMessageBox.information(self, APP_TITLE, message)
 
     def _refresh_settings_validation(self) -> None:
@@ -774,6 +1024,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.status.setText("Removed from Asset Manager.")
 
     def _warn(self, message: str) -> None:
+        APP_LOG_BUS.append("warning", message)
         QtWidgets.QMessageBox.warning(self, APP_TITLE, message)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
@@ -921,6 +1172,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
 
 def main() -> None:
+    _install_runtime_logging()
+    APP_LOG_BUS.append("info", "Launching Skyforge...")
     try:
         try:
             # Ensure Windows uses the correct icon in titlebar/taskbar.
@@ -963,12 +1216,18 @@ def main() -> None:
             splash.finish(window)
         app.exec()
     except Exception:
-        log_path = Path(__file__).resolve().parent / "launcher_error.log"
+        details = traceback.format_exc()
+        APP_LOG_BUS.append("error", "Skyforge failed to start.")
+        APP_LOG_BUS.append("error", details)
         try:
-            log_path.write_text(traceback.format_exc(), encoding="utf-8")
+            QtWidgets.QMessageBox.critical(
+                None,
+                APP_TITLE,
+                f"Skyforge failed to start.\n\nSee log:\n{APP_LOG_PATH}",
+            )
         except Exception:
-            print(traceback.format_exc())
-        raise
+            pass
+        sys.exit(1)
 
 
 if __name__ == "__main__":
