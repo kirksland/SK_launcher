@@ -90,6 +90,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_search_input = QtWidgets.QLineEdit()
         self.asset_search_input.setPlaceholderText("Search projects in asset manager...")
         self.asset_search_input.setClearButtonEnabled(True)
+        self.asset_search_input.setVisible(False)
         top_controls.addWidget(self.asset_search_input, 1)
         self.asset_refresh_btn = QtWidgets.QPushButton("Refresh")
         top_controls.addWidget(self.asset_refresh_btn, 0)
@@ -111,6 +112,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_project_toggle_btn.setAutoRaise(True)
         self.asset_project_toggle_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
         self.asset_project_toggle_btn.setToolTip("Collapse or expand the project rail.")
+        self.asset_project_toggle_btn.setVisible(False)
         self.asset_layout_toolbar.addWidget(self.asset_project_toggle_btn, 0)
         self.asset_layout_hint = QtWidgets.QLabel("Projects stay available, but can collapse once a project is chosen.")
         self.asset_layout_hint.setStyleSheet(muted_text_style(size_px=11))
@@ -149,6 +151,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         )
         project_layout.addWidget(self.asset_grid, 1)
         self.asset_main_split.addWidget(self.asset_project_panel)
+        self.asset_project_panel.setVisible(False)
 
         entity_panel = self._make_panel("Library", "Filter the current project and drill down into shots or assets.")
         entity_layout = entity_panel.layout()  # type: ignore[assignment]
@@ -395,7 +398,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         history_panel.setVisible(False)
 
         self.asset_main_split.addWidget(inspector_panel)
-        self.asset_main_split.setSizes([280, 470, 470])
+        self.asset_main_split.setSizes([0, 560, 560])
         self.asset_main_split.setStretchFactor(0, 0)
         self.asset_main_split.setStretchFactor(1, 2)
         self.asset_main_split.setStretchFactor(2, 2)

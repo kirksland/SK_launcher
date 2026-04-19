@@ -234,16 +234,22 @@ class ProjectsController:
         _previous: Optional[QtWidgets.QListWidgetItem] = None,
     ) -> None:
         if current is None:
+            if hasattr(self.w, "asset_controller"):
+                self.w.asset_controller.set_project_context(None)
             if self._detail_pinned:
                 return
             return
         path_text = current.data(QtCore.Qt.ItemDataRole.UserRole)
         if not path_text:
+            if hasattr(self.w, "asset_controller"):
+                self.w.asset_controller.set_project_context(None)
             if self._detail_pinned:
                 return
             return
         project_path = Path(str(path_text))
         if not project_path.exists():
+            if hasattr(self.w, "asset_controller"):
+                self.w.asset_controller.set_project_context(None)
             if self._detail_pinned:
                 return
             return
@@ -251,6 +257,8 @@ class ProjectsController:
         self._detail_pinned = True
         self._detail_project_path = project_path
         self._show_project_detail(project_path)
+        if hasattr(self.w, "asset_controller"):
+            self.w.asset_controller.set_project_context(project_path)
 
     def open_selected_project_folder(self) -> None:
         item = self.w.project_grid.currentItem()
@@ -266,8 +274,13 @@ class ProjectsController:
 
     def close_project_detail_panel(self) -> None:
         self.w.project_detail_panel.setVisible(False)
-        self.w.project_grid.clearSelection()
         self._detail_pinned = False
+        current = self.w.project_grid.currentItem()
+        if current is not None:
+            path_text = current.data(QtCore.Qt.ItemDataRole.UserRole)
+            if path_text:
+                self._detail_project_path = Path(str(path_text))
+                return
         self._detail_project_path = None
         self.w.project_detail_tree.setRootIndex(QtCore.QModelIndex())
 

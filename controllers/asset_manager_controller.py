@@ -33,7 +33,6 @@ from core.settings import save_settings
 from core.watchers import update_watcher_paths
 from ui.utils.thumbnails import build_thumbnail_pixmap
 from ui.widgets.asset_version_row import AssetVersionRow
-from ui.widgets.project_card import ProjectCard
 from core.versions import group_asset_versions
 
 
@@ -44,35 +43,61 @@ class AssetManagerController:
 
     def refresh_asset_manager(self, *_: object) -> None:
         self.w.asset_grid.clear()
+        current_item = self.w.project_grid.currentItem()
+        project_path: Optional[Path] = None
+        if current_item is not None:
+            path_text = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if path_text:
+                project_path = Path(str(path_text))
+        self.set_project_context(project_path)
+        self._refresh_asset_watch_paths()
+
+    def _tracked_asset_projects(self) -> list[Path]:
         entries = filter_asset_entries(
             self.w._asset_manager_projects,
             self.w.asset_search_input.text(),
         )
-        projects = existing_project_paths(entries)
+        return existing_project_paths(entries)
 
-        self.w.project_controller.prune_cache(projects, self.w._asset_cache)
+    def _clear_asset_browser_state(self, message: str) -> None:
+        self._clear_asset_detail_lists(self.w)
+        self.w._asset_current_project_root = None
+        self.w._asset_current_entity = None
+        self.w.asset_details_title.setText("No project selected")
+        self.w.asset_path_label.setText(message)
+        self.w.asset_meta.setText(message)
+        self.w.asset_versions_list.clear()
+        self.w.asset_versions_list.addItem("No entity selected")
+        self.w.asset_history_list.clear()
+        self.w.asset_history_list.addItem("No entity selected")
+        if hasattr(self.w.asset_page, "asset_selection_summary"):
+            self.w.asset_page.asset_selection_summary.setText("No entity selected")
 
-        for project in projects:
-            entry = next((e for e in entries if Path(e.get("local_path", "")) == project), None)
-            show_cloud = bool(entry and entry.get("client_id"))
-            item = QtWidgets.QListWidgetItem()
-            item.setData(QtCore.Qt.ItemDataRole.UserRole, str(project))
-            item.setSizeHint(QtCore.QSize(230, 240))
-            self.w.asset_grid.addItem(item)
-            hips = self.w.project_controller.get_project_hips(project, self.w._asset_cache)
-            card = ProjectCard(project, self.w.asset_grid.iconSize(), hips, show_cloud_badge=show_cloud, parent=self.w.asset_grid)
-            self.w.asset_grid.setItemWidget(item, card)
-
-        self.w.asset_path_label.setText(
-            f"{self.w.asset_grid.count()} project(s) available in the asset manager."
-        )
-        if self.w.asset_grid.count() == 0:
-            self.w.asset_details_title.setText("No project selected")
-            self.w.asset_meta.setText("Add a synced project to the asset manager to start browsing shots and assets.")
-            if hasattr(self.w.asset_page, "asset_selection_summary"):
-                self.w.asset_page.asset_selection_summary.setText("No entity selected")
-        self.set_asset_status(f"{self.w.asset_grid.count()} project(s) found.")
-        self._refresh_asset_watch_paths()
+    def set_project_context(self, project_path: Optional[Path]) -> None:
+        tracked_projects = self._tracked_asset_projects()
+        self.w.project_controller.prune_cache(tracked_projects, self.w._asset_cache)
+        if project_path is None:
+            self._clear_asset_browser_state("Select a project in Projects to browse its assets.")
+            self.set_asset_status("No project selected.")
+            return
+        if project_path not in tracked_projects:
+            self._clear_asset_browser_state(
+                f"{project_path.name} is not in Asset Manager. Add it from the Projects page to browse its assets here."
+            )
+            self.set_asset_status("Selected project is outside the Asset Manager scope.")
+            return
+        self.w.asset_details_title.setText(project_path.name)
+        self.w.asset_path_label.setText(f"{project_path.name} / Select a shot or asset")
+        if hasattr(self.w.asset_page, "asset_selection_summary"):
+            self.w.asset_page.asset_selection_summary.setText(f"{project_path.name} / No entity selected")
+        self.w._asset_current_project_root = project_path
+        self._clear_asset_detail_lists(self.w)
+        self.w.asset_preview.clear()
+        self.w.asset_meta.setText("Select a shot or asset to view details.")
+        self.w.asset_versions_list.addItem("No entity selected")
+        self.w.asset_history_list.addItem("No entity selected")
+        self._refresh_asset_entity_lists(target="both")
+        self.set_asset_status(f"Asset Manager ready for {project_path.name}.")
 
     @staticmethod
     def _clear_asset_detail_lists(window: QtWidgets.QMainWindow) -> None:
@@ -83,27 +108,7 @@ class AssetManagerController:
 
     def open_asset_details(self, item: QtWidgets.QListWidgetItem) -> None:
         project_path = Path(str(item.data(QtCore.Qt.ItemDataRole.UserRole)))
-        self.w.asset_details_title.setText(project_path.name)
-        self.w.asset_path_label.setText(f"{project_path.name} / Select a shot or asset")
-        self._clear_asset_detail_lists(self.w)
-
-        # Clear detail fields until an entity is selected
-        self.w.asset_preview.clear()
-        self.w.asset_meta.setText("Select a shot or asset to view details.")
-        self.w.asset_versions_list.addItem("No entity selected")
-        self.w.asset_history_list.addItem("No entity selected")
-        if hasattr(self.w.asset_page, "asset_selection_summary"):
-            self.w.asset_page.asset_selection_summary.setText(f"{project_path.name} / No entity selected")
-
-        # Populate shots/assets from selected server project (fallback to test pipeline)
-        if project_path.exists():
-            self.w._asset_current_project_root = project_path
-        else:
-            self.w._asset_current_project_root = self.w.test_pipeline_root
-        self._refresh_asset_entity_lists(target="both")
-        self.w.asset_pages.setCurrentIndex(1)
-        if hasattr(self.w.asset_page, "set_project_panel_collapsed"):
-            self.w.asset_page.asset_project_toggle_btn.setChecked(True)
+        self.set_project_context(project_path)
 
     def set_asset_status(self, text: str) -> None:
         if not text:
@@ -615,13 +620,7 @@ class AssetManagerController:
     def open_asset_project_folder(self) -> None:
         project_root = getattr(self.w, "_asset_current_project_root", None)
         if project_root is None:
-            item = self.w.asset_grid.currentItem()
-            if item is None:
-                return
-            path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
-            if not path_text:
-                return
-            project_root = Path(str(path_text))
+            return
         if not Path(project_root).exists():
             return
         os.startfile(str(project_root))  # type: ignore[attr-defined]

@@ -8,6 +8,10 @@ from core.settings import discover_houdini_installations, normalize_houdini_exe
 from ui.utils.styles import PALETTE, title_style
 
 
+def _generic_user_path(*parts: str) -> str:
+    return str(Path(r"C:\Users\<username>").joinpath(*parts))
+
+
 class _SettingsNavButton(QtWidgets.QPushButton):
     def __init__(self, label: str, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(label, parent)
@@ -49,7 +53,7 @@ class SettingsPage(QtWidgets.QWidget):
         show_splash_screen: bool,
         houdini_exe: str,
         parent: QtWidgets.QWidget | None = None,
-    ) -> None:
+        ) -> None:
         super().__init__(parent)
 
         root = QtWidgets.QVBoxLayout(self)
@@ -284,10 +288,12 @@ class SettingsPage(QtWidgets.QWidget):
             "These folders define where local projects live and where the launcher looks for the shared server repository.",
         )
         self.settings_projects_dir = QtWidgets.QLineEdit(str(projects_dir))
+        self.settings_projects_dir.setPlaceholderText(_generic_user_path("Documents", "HoudiniProjects"))
         self.settings_projects_browse_btn = QtWidgets.QPushButton("Browse...")
         locations_form.addRow("Projects Folder", self._with_browse(self.settings_projects_dir, self.settings_projects_browse_btn))
 
         self.settings_server_dir = QtWidgets.QLineEdit(str(server_repo_dir))
+        self.settings_server_dir.setPlaceholderText(_generic_user_path("Documents", "StudioProject"))
         self.settings_server_browse_btn = QtWidgets.QPushButton("Browse...")
         locations_form.addRow("Server Repo Folder", self._with_browse(self.settings_server_dir, self.settings_server_browse_btn))
 
@@ -297,6 +303,7 @@ class SettingsPage(QtWidgets.QWidget):
             "Template and naming settings used when the launcher needs to create or initialize a fresh project scene.",
         )
         self.settings_template_hip = QtWidgets.QLineEdit(str(template_hip))
+        self.settings_template_hip.setPlaceholderText(r"<launcher>\untitled.hipnc")
         self.settings_template_browse_btn = QtWidgets.QPushButton("Browse...")
         template_form.addRow("Template Hip", self._with_browse(self.settings_template_hip, self.settings_template_browse_btn))
 
@@ -361,7 +368,9 @@ class SettingsPage(QtWidgets.QWidget):
         houdini_form.addRow("Houdini Version", self.settings_houdini_version)
 
         self.settings_houdini_exe = QtWidgets.QLineEdit(houdini_exe)
-        self.settings_houdini_exe.setPlaceholderText("Optional: path to houdini.exe")
+        self.settings_houdini_exe.setPlaceholderText(
+            r"C:\Program Files\Side Effects Software\Houdini <version>\bin\houdini.exe"
+        )
         self.settings_houdini_browse_btn = QtWidgets.QPushButton("Browse...")
         houdini_form.addRow("Houdini Executable", self._with_browse(self.settings_houdini_exe, self.settings_houdini_browse_btn))
 
