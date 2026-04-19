@@ -4,7 +4,10 @@ import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from core.dcc import detect_dcc_for_path, supported_scene_extensions
+
 HIP_EXTS = (".hip", ".hiplc", ".hipnc")
+SCENE_EXTS = supported_scene_extensions()
 
 
 def find_projects(projects_dir: Path) -> List[Path]:
@@ -13,8 +16,8 @@ def find_projects(projects_dir: Path) -> List[Path]:
     return sorted([p for p in projects_dir.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
 
 
-def list_hips_with_mtime(project_dir: Path) -> Tuple[List[Path], float]:
-    hips_with_mtime: List[Tuple[Path, float]] = []
+def list_scene_files_with_mtime(project_dir: Path) -> Tuple[List[Path], float]:
+    scene_files_with_mtime: List[Tuple[Path, float]] = []
     latest = 0.0
     try:
         entries = list(project_dir.iterdir())
@@ -23,27 +26,47 @@ def list_hips_with_mtime(project_dir: Path) -> Tuple[List[Path], float]:
     for path in entries:
         if not path.is_file():
             continue
-        if path.suffix.lower() not in HIP_EXTS:
+        if path.suffix.lower() not in SCENE_EXTS:
             continue
         try:
             mtime = path.stat().st_mtime
         except OSError:
             continue
-        hips_with_mtime.append((path, mtime))
+        scene_files_with_mtime.append((path, mtime))
         if mtime > latest:
             latest = mtime
-    hips_with_mtime.sort(key=lambda item: item[1], reverse=True)
-    return [p for p, _ in hips_with_mtime], latest
+    scene_files_with_mtime.sort(key=lambda item: item[1], reverse=True)
+    return [p for p, _ in scene_files_with_mtime], latest
+
+
+def find_scene_files(project_dir: Path) -> List[Path]:
+    scene_files, _latest = list_scene_files_with_mtime(project_dir)
+    return scene_files
+
+
+def list_hips_with_mtime(project_dir: Path) -> Tuple[List[Path], float]:
+    scene_files, latest = list_scene_files_with_mtime(project_dir)
+    hips = [path for path in scene_files if path.suffix.lower() in HIP_EXTS]
+    return hips, latest
 
 
 def find_hips(project_dir: Path) -> List[Path]:
-    hips, _latest = list_hips_with_mtime(project_dir)
-    return hips
+    return [path for path in find_scene_files(project_dir) if path.suffix.lower() in HIP_EXTS]
+
+
+def open_with_file_association(path: Path) -> None:
+    os.startfile(str(path))  # type: ignore[attr-defined]
 
 
 def open_hip(path: Path) -> None:
-    # Use default app associated with .hip on the system (usually Houdini).
-    os.startfile(str(path))  # type: ignore[attr-defined]
+    open_with_file_association(path)
+
+
+def scene_file_label(path: Path) -> str:
+    descriptor = detect_dcc_for_path(path)
+    if descriptor is None:
+        return path.suffix.lower().lstrip(".") or "file"
+    return descriptor.label
 
 
 USD_EXTS = (".usd", ".usda", ".usdc", ".usdnc")

@@ -8,13 +8,14 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.fs import find_projects, list_hips_with_mtime, open_hip
+from core.dcc import detect_dcc_for_path
+from core.fs import find_projects, open_hip, open_with_file_association
 from core.houdini_env import build_houdini_env
 from core.project_catalog import (
     filter_and_sort_projects,
     prune_project_cache,
     prune_project_selection,
-    scan_project_hips,
+    scan_project_scene_files,
 )
 from core.project_runtime import (
     JOB_INIT_MARKER,
@@ -82,25 +83,25 @@ class ProjectsController:
             item.setData(QtCore.Qt.ItemDataRole.UserRole, str(project))
             item.setSizeHint(QtCore.QSize(230, 240))
             self.w.project_grid.addItem(item)
-            hips = self._get_project_hips(project)
+            scene_files = self._get_project_scene_files(project)
             show_cloud = any(
                 e.get("local_path") == str(project) and e.get("client_id") for e in self.w._asset_manager_projects
             )
-            selected_hip = self.w._project_hip_selection.get(project)
+            selected_scene_file = self.w._project_scene_selection.get(project)
             card = ProjectCard(
                 project,
                 self.w.project_grid.iconSize(),
-                hips,
+                scene_files,
                 show_cloud_badge=show_cloud,
-                selected_hip=selected_hip,
+                selected_scene_file=selected_scene_file,
                 parent=self.w.project_grid,
             )
             card.selection_changed.connect(self.on_card_selection_changed)
             self.w._card_to_item[card] = item
             self.w.project_grid.setItemWidget(item, card)
-            current = card.selected_hip()
+            current = card.selected_scene_file()
             if current is not None:
-                self.w._project_hip_selection[project] = current
+                self.w._project_scene_selection[project] = current
 
         if current_path is not None:
             for row in range(self.w.project_grid.count()):
@@ -191,32 +192,41 @@ class ProjectsController:
         project_path = Path(item.data(QtCore.Qt.ItemDataRole.UserRole))
         card = self.w.project_grid.itemWidget(item)
         if isinstance(card, ProjectCard):
-            hip = card.selected_hip()
+            scene_file = card.selected_scene_file()
         else:
-            hip = None
-        if hip is None:
-            hip = self._ensure_template_hip(project_path)
-            if hip is None:
-                self.w._warn(f"No .hip found in {project_path.name}.")
-                return
+            scene_file = None
+        if scene_file is None and (project_path / JOB_INIT_MARKER).exists():
+            scene_file = self._ensure_template_hip(project_path)
+        if scene_file is None:
+            self.w._warn(f"No supported scene file found in {project_path.name}.")
+            return
         try:
-            if self.w._use_file_association or not self.w._houdini_exe:
-                open_hip(hip)
-            else:
-                self._ensure_job_scripts_if_needed(project_path)
-                self._launch_houdini(hip, project_path)
-            self.w.status.setText(f"Opened: {hip.name}")
+            self._open_scene_file(scene_file, project_path)
+            self.w.status.setText(f"Opened: {scene_file.name}")
         except Exception as exc:  # pragma: no cover - UI error path
-            self.w._warn(f"Failed to open: {hip}\n{exc}")
+            self.w._warn(f"Failed to open: {scene_file}\n{exc}")
+
+    def _open_scene_file(self, scene_file: Path, project_path: Path) -> None:
+        descriptor = detect_dcc_for_path(scene_file)
+        if descriptor is None:
+            raise RuntimeError(f"Unsupported scene file: {scene_file.name}")
+        if descriptor.id == "houdini":
+            if self.w._use_file_association or not self.w._houdini_exe:
+                open_with_file_association(scene_file)
+                return
+            self._ensure_job_scripts_if_needed(project_path)
+            self._launch_houdini(scene_file, project_path)
+            return
+        open_with_file_association(scene_file)
 
     def on_card_selection_changed(self, card: ProjectCard) -> None:
         item = self.w._card_to_item.get(card)
         if item is not None:
             self.w.project_grid.setCurrentItem(item)
-        hip = card.selected_hip()
-        if hip is not None:
-            self.w._project_hip_selection[card.project_path] = hip
-            self.w.status.setText(f"Selected: {hip.name}")
+        scene_file = card.selected_scene_file()
+        if scene_file is not None:
+            self.w._project_scene_selection[card.project_path] = scene_file
+            self.w.status.setText(f"Selected: {scene_file.name}")
 
     def on_project_selected(
         self,
@@ -375,30 +385,30 @@ class ProjectsController:
         prune_project_cache(projects, cache)
 
     def _prune_selection(self, projects: List[Path]) -> None:
-        prune_project_selection(projects, self.w._project_hip_selection)
+        prune_project_selection(projects, self.w._project_scene_selection)
 
-    def _scan_project_hips(
+    def _scan_project_scene_files(
         self,
         project_path: Path,
         cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None,
     ) -> Tuple[List[Path], float]:
         cache = cache or self.w._project_cache
-        return scan_project_hips(
+        return scan_project_scene_files(
             project_path,
             scan_token=self._scan_token,
             cache=cache,
         )
 
-    def _get_project_hips(
+    def _get_project_scene_files(
         self, project_path: Path, cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None
     ) -> List[Path]:
-        hips, _latest = self._scan_project_hips(project_path, cache)
-        return hips
+        scene_files, _latest = self._scan_project_scene_files(project_path, cache)
+        return scene_files
 
     def _get_project_latest_mtime(
         self, project_path: Path, cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None
     ) -> float:
-        _hips, latest = self._scan_project_hips(project_path, cache)
+        _scene_files, latest = self._scan_project_scene_files(project_path, cache)
         return latest
 
     def prune_cache(self, projects: List[Path], cache: Dict[Path, Tuple[float, List[Path], float]]) -> None:
@@ -407,7 +417,7 @@ class ProjectsController:
     def get_project_hips(
         self, project_path: Path, cache: Optional[Dict[Path, Tuple[float, List[Path], float]]] = None
     ) -> List[Path]:
-        return self._get_project_hips(project_path, cache)
+        return self._get_project_scene_files(project_path, cache)
 
 
 class _DirScanWorker(QtCore.QObject):

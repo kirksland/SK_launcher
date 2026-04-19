@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.fs import list_hips_with_mtime
+from core.fs import list_scene_files_with_mtime
 
-ProjectHipCache = dict[Path, tuple[float, list[Path], float]]
+ProjectSceneCache = dict[Path, tuple[float, list[Path], float]]
 
 
 def filter_and_sort_projects(
@@ -23,7 +23,7 @@ def filter_and_sort_projects(
     return sorted(projects, key=lambda project: project.name.lower())
 
 
-def prune_project_cache(projects: list[Path], cache: ProjectHipCache) -> None:
+def prune_project_cache(projects: list[Path], cache: ProjectSceneCache) -> None:
     keep = set(projects)
     for key in list(cache.keys()):
         if key not in keep:
@@ -37,18 +37,27 @@ def prune_project_selection(projects: list[Path], selection: dict[Path, Path]) -
             selection.pop(key, None)
 
 
-def scan_project_hips(
+def scan_project_scene_files(
     project_path: Path,
     *,
     scan_token: float,
-    cache: ProjectHipCache,
+    cache: ProjectSceneCache,
 ) -> tuple[list[Path], float]:
     cached = cache.get(project_path)
     if cached and cached[0] == scan_token:
         return cached[1], cached[2]
-    hips, latest = list_hips_with_mtime(project_path)
-    cache[project_path] = (scan_token, hips, latest)
-    return hips, latest
+    scene_files, latest = list_scene_files_with_mtime(project_path)
+    cache[project_path] = (scan_token, scene_files, latest)
+    return scene_files, latest
+
+
+def scan_project_hips(
+    project_path: Path,
+    *,
+    scan_token: float,
+    cache: ProjectSceneCache,
+) -> tuple[list[Path], float]:
+    return scan_project_scene_files(project_path, scan_token=scan_token, cache=cache)
 
 
 def selected_project_path(current_item: object) -> Optional[Path]:

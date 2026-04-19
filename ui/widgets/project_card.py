@@ -6,38 +6,38 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.fs import scene_file_label
 from ui.utils.thumbnails import add_cloud_badge, build_thumbnail_pixmap
 from ui.utils.styles import project_card_menu_style, project_card_title_style, project_card_version_combo_style
 
 
-def group_hip_variants(hips: List[Path]) -> Dict[str, List[Tuple[str, Path]]]:
+def group_scene_variants(scene_files: List[Path]) -> Dict[str, List[Tuple[str, Path]]]:
     pattern = re.compile(r"^(?P<base>.+)_(?P<ver>\d+)$")
     grouped: Dict[str, List[Tuple[str, Path]]] = {}
-    for hip in hips:
-        stem = hip.stem
+    for scene_file in scene_files:
+        stem = scene_file.stem
         match = pattern.match(stem)
         if match:
             base = match.group("base")
-            ver = match.group("ver")
-            label = ver
+            version_label = match.group("ver")
         else:
             base = stem
-            label = "current"
-        grouped.setdefault(base, []).append((label, hip))
+            version_label = "current"
+        group_label = f"{base} [{scene_file_label(scene_file)}]"
+        grouped.setdefault(group_label, []).append((version_label, scene_file))
 
-    # Sort versions numerically when possible, fallback to mtime
-    for base, entries in grouped.items():
+    for group_label, entries in grouped.items():
         def sort_key(item: Tuple[str, Path]) -> Tuple[int, float]:
-            label, path = item
-            if label.isdigit():
-                return (0, int(label))
+            version_label, path = item
+            if version_label.isdigit():
+                return (0, int(version_label))
             return (1, -path.stat().st_mtime)
 
         entries.sort(key=sort_key, reverse=True)
     return dict(sorted(grouped.items(), key=lambda kv: kv[0].lower()))
 
 
-class _HipVersionCombo(QtWidgets.QComboBox):
+class _SceneVersionCombo(QtWidgets.QComboBox):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._popup_padding = 15
@@ -53,7 +53,7 @@ class _HipVersionCombo(QtWidgets.QComboBox):
         view = self.view()
         fm = view.fontMetrics()
         max_text = max(fm.horizontalAdvance(label) for label in labels)
-        base_gutter = 26  # left padding + frame
+        base_gutter = 26
         popup_width = max(self.width(), max_text + base_gutter + self._popup_padding)
         QtCore.QTimer.singleShot(0, lambda w=popup_width: self._apply_popup_width(w))
 
@@ -71,17 +71,17 @@ class ProjectCard(QtWidgets.QWidget):
         self,
         project_path: Path,
         thumb_size: QtCore.QSize,
-        hips: List[Path],
+        scene_files: List[Path],
         show_cloud_badge: bool = False,
         show_alert_badge: bool = False,
-        selected_hip: Optional[Path] = None,
+        selected_scene_file: Optional[Path] = None,
         parent: Optional[QtWidgets.QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.project_path = project_path
-        self._hips = hips
-        self._variants = group_hip_variants(self._hips)
-        self._current_base: Optional[str] = None
+        self._scene_files = scene_files
+        self._variants = group_scene_variants(self._scene_files)
+        self._current_group: Optional[str] = None
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 2)
@@ -134,12 +134,12 @@ class ProjectCard(QtWidgets.QWidget):
 
         layout.addWidget(thumb_container, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
-        self.selected_hip_label = QtWidgets.QLabel("")
-        self.selected_hip_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
-        self.selected_hip_label.setStyleSheet("color: #c6ccd6; font-size: 11px;")
-        layout.addWidget(self.selected_hip_label, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.selected_scene_label = QtWidgets.QLabel("")
+        self.selected_scene_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.selected_scene_label.setStyleSheet("color: #c6ccd6; font-size: 11px;")
+        layout.addWidget(self.selected_scene_label, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
-        self.version_combo = _HipVersionCombo()
+        self.version_combo = _SceneVersionCombo()
         self.version_combo.setFixedWidth(86)
         self.version_combo.setStyleSheet(project_card_version_combo_style())
         self.version_combo.view().setMinimumWidth(86)
@@ -153,29 +153,29 @@ class ProjectCard(QtWidgets.QWidget):
 
         if not self._variants:
             self.version_combo.setVisible(False)
-            self._update_selected_hip_label()
+            self._update_selected_scene_label()
         else:
             self._build_variant_menu()
-            if not self._apply_selected_hip(selected_hip):
-                first_base = next(iter(self._variants.keys()))
-                self._set_current_base(first_base)
+            if not self._apply_selected_scene_file(selected_scene_file):
+                first_group = next(iter(self._variants.keys()))
+                self._set_current_group(first_group)
             self.version_combo.currentTextChanged.connect(self._emit_selection_changed)
 
     def set_alert_visible(self, visible: bool) -> None:
         self._alert_dot.setVisible(bool(visible))
 
     def _emit_selection_changed(self) -> None:
-        self._update_selected_hip_label()
-        hip = self.selected_hip()
-        if hip is not None:
+        self._update_selected_scene_label()
+        scene_file = self.selected_scene_file()
+        if scene_file is not None:
             self.selection_changed.emit(self)
 
     def _build_variant_menu(self) -> None:
         menu = QtWidgets.QMenu(self)
         menu.setStyleSheet(project_card_menu_style())
-        for base in self._variants.keys():
-            action = menu.addAction(base)
-            action.triggered.connect(lambda _checked=False, b=base: self._set_current_base(b))
+        for group_label in self._variants.keys():
+            action = menu.addAction(group_label)
+            action.triggered.connect(lambda _checked=False, g=group_label: self._set_current_group(g))
         self.title_button.setMenu(menu)
         self._variant_menu = menu
         menu.aboutToShow.connect(self._update_variant_menu_width)
@@ -189,54 +189,57 @@ class ProjectCard(QtWidgets.QWidget):
             return
         fm = menu.fontMetrics()
         max_text = max(fm.horizontalAdvance(label) for label in labels)
-        extra_padding = 30  # right breathing room after longest label
+        extra_padding = 30
         menu_width = max(self.title_button.width(), max_text + extra_padding)
         menu.setFixedWidth(menu_width)
 
-    def _set_current_base(self, base: str, emit: bool = True) -> None:
-        self._current_base = base
+    def _set_current_group(self, group_label: str, emit: bool = True) -> None:
+        self._current_group = group_label
         self.version_combo.clear()
-        entries = self._variants.get(base, [])
-        for label, _path in entries:
-            self.version_combo.addItem(label)
-        self._update_selected_hip_label()
+        entries = self._variants.get(group_label, [])
+        for version_label, _path in entries:
+            self.version_combo.addItem(version_label)
+        self._update_selected_scene_label()
         if emit:
             self._emit_selection_changed()
 
-    def _apply_selected_hip(self, selected_hip: Optional[Path]) -> bool:
-        if selected_hip is None:
+    def _apply_selected_scene_file(self, selected_scene_file: Optional[Path]) -> bool:
+        if selected_scene_file is None:
             return False
-        for base, entries in self._variants.items():
-            for label, path in entries:
-                if path == selected_hip:
-                    self._set_current_base(base, emit=False)
-                    idx = self.version_combo.findText(label)
+        for group_label, entries in self._variants.items():
+            for version_label, path in entries:
+                if path == selected_scene_file:
+                    self._set_current_group(group_label, emit=False)
+                    idx = self.version_combo.findText(version_label)
                     if idx >= 0:
                         self.version_combo.setCurrentIndex(idx)
                     self._emit_selection_changed()
                     return True
         return False
 
-    def selected_hip(self) -> Optional[Path]:
+    def selected_scene_file(self) -> Optional[Path]:
         if not self._variants:
             return None
-        base = self._current_base
-        if base is None:
+        group_label = self._current_group
+        if group_label is None:
             return None
-        entries = self._variants.get(base, [])
+        entries = self._variants.get(group_label, [])
         if not entries:
             return None
-        label = self.version_combo.currentText()
-        for entry_label, path in entries:
-            if entry_label == label:
+        version_label = self.version_combo.currentText()
+        for entry_version_label, path in entries:
+            if entry_version_label == version_label:
                 return path
         return entries[0][1]
 
-    def _update_selected_hip_label(self) -> None:
-        hip = self.selected_hip()
-        if hip is None:
-            label = ""
-        else:
-            label = hip.stem
-        if self.selected_hip_label.text() != label:
-            self.selected_hip_label.setText(label)
+    def selected_hip(self) -> Optional[Path]:
+        scene_file = self.selected_scene_file()
+        if scene_file is None or scene_file.suffix.lower() not in (".hip", ".hiplc", ".hipnc"):
+            return None
+        return scene_file
+
+    def _update_selected_scene_label(self) -> None:
+        scene_file = self.selected_scene_file()
+        label = scene_file.stem if scene_file is not None else ""
+        if self.selected_scene_label.text() != label:
+            self.selected_scene_label.setText(label)
