@@ -63,7 +63,15 @@ class AssetManagerController:
             card = ProjectCard(project, self.w.asset_grid.iconSize(), hips, show_cloud_badge=show_cloud, parent=self.w.asset_grid)
             self.w.asset_grid.setItemWidget(item, card)
 
-        self.w.asset_status.setText(f"{self.w.asset_grid.count()} project(s) found.")
+        self.w.asset_path_label.setText(
+            f"{self.w.asset_grid.count()} project(s) available in the asset manager."
+        )
+        if self.w.asset_grid.count() == 0:
+            self.w.asset_details_title.setText("No project selected")
+            self.w.asset_meta.setText("Add a synced project to the asset manager to start browsing shots and assets.")
+            if hasattr(self.w.asset_page, "asset_selection_summary"):
+                self.w.asset_page.asset_selection_summary.setText("No entity selected")
+        self.set_asset_status(f"{self.w.asset_grid.count()} project(s) found.")
         self._refresh_asset_watch_paths()
 
     @staticmethod
@@ -76,6 +84,7 @@ class AssetManagerController:
     def open_asset_details(self, item: QtWidgets.QListWidgetItem) -> None:
         project_path = Path(str(item.data(QtCore.Qt.ItemDataRole.UserRole)))
         self.w.asset_details_title.setText(project_path.name)
+        self.w.asset_path_label.setText(f"{project_path.name} / Select a shot or asset")
         self._clear_asset_detail_lists(self.w)
 
         # Clear detail fields until an entity is selected
@@ -83,6 +92,8 @@ class AssetManagerController:
         self.w.asset_meta.setText("Select a shot or asset to view details.")
         self.w.asset_versions_list.addItem("No entity selected")
         self.w.asset_history_list.addItem("No entity selected")
+        if hasattr(self.w.asset_page, "asset_selection_summary"):
+            self.w.asset_page.asset_selection_summary.setText(f"{project_path.name} / No entity selected")
 
         # Populate shots/assets from selected server project (fallback to test pipeline)
         if project_path.exists():
@@ -90,8 +101,9 @@ class AssetManagerController:
         else:
             self.w._asset_current_project_root = self.w.test_pipeline_root
         self._refresh_asset_entity_lists(target="both")
-
         self.w.asset_pages.setCurrentIndex(1)
+        if hasattr(self.w.asset_page, "set_project_panel_collapsed"):
+            self.w.asset_page.asset_project_toggle_btn.setChecked(True)
 
     def set_asset_status(self, text: str) -> None:
         if not text:
@@ -303,11 +315,22 @@ class AssetManagerController:
             self.w.asset_entity_search.setPlaceholderText("Search shots...")
         else:
             self.w.asset_entity_search.setPlaceholderText("Search assets...")
+        project_root = getattr(self.w, "_asset_current_project_root", None)
+        if project_root is not None:
+            tab_label = "Shots" if index == 0 else "Assets"
+            self.w.asset_path_label.setText(f"{Path(project_root).name} / {tab_label}")
         self.refresh_active_list()
 
     def _load_entity_details(self, entity_dir: Path) -> None:
         self.w._asset_current_entity = entity_dir
         self.w._asset_current_entity_type = entity_type_for_path(entity_dir)
+        project_root = getattr(self.w, "_asset_current_project_root", entity_dir.parent.parent)
+        tab_label = "Shots" if self.w._asset_current_entity_type == "shot" else "Assets"
+        self.w.asset_path_label.setText(f"{Path(project_root).name} / {tab_label} / {entity_dir.name}")
+        if hasattr(self.w.asset_page, "asset_selection_summary"):
+            self.w.asset_page.asset_selection_summary.setText(
+                f"{entity_dir.name} [{self.w._asset_current_entity_type.upper()}]"
+            )
         self.w._preview_images = list_preview_images(entity_dir)
         self.w._preview_index = 0
         if self.w._preview_images:
@@ -345,6 +368,10 @@ class AssetManagerController:
         video_versions = list_review_videos(entity_dir, context=list_context) if self.w._asset_current_entity_type == "shot" else []
         image_versions = list_preview_images(entity_dir)
         grouped = group_asset_versions(usd_versions, video_versions, image_versions)
+        if hasattr(self.w.asset_page, "asset_versions_hint"):
+            self.w.asset_page.asset_versions_hint.setText(
+                f"{len(grouped)} bundle(s) in {context}" if grouped else f"No bundles in {context}"
+            )
         if grouped:
             for base_name, entries in grouped.items():
                 row = AssetVersionRow(base_name, entries, parent=self.w.asset_versions_list)
@@ -514,7 +541,7 @@ class AssetManagerController:
                 self.w.asset_video_controller.show_image(pixmap)
 
     def asset_placeholder_action(self) -> None:
-        self.w.asset_status.setText("Git actions coming soon (commit/push/fetch).")
+        self.set_asset_status("Git actions are intentionally disabled for now. We should redesign this flow before wiring commit, push and fetch.")
 
     def setup_asset_auto_refresh(self) -> None:
         self._asset_refresh_timer = QtCore.QTimer(self.w)
