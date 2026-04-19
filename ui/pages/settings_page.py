@@ -17,6 +17,7 @@ class SettingsPage(QtWidgets.QWidget):
         new_hip_pattern: str,
         video_backend_pref: str,
         use_file_association: bool,
+        show_splash_screen: bool,
         houdini_exe: str,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
@@ -80,6 +81,13 @@ class SettingsPage(QtWidgets.QWidget):
             "When disabled, the selected Houdini executable is used."
         )
         form.addRow("", self.settings_use_assoc)
+
+        self.settings_show_splash = QtWidgets.QCheckBox("Show splash screen at startup")
+        self.settings_show_splash.setChecked(show_splash_screen)
+        self.settings_show_splash.setToolTip(
+            "Displays the startup splash screen while the launcher is loading."
+        )
+        form.addRow("", self.settings_show_splash)
 
         self.settings_houdini_version = QtWidgets.QComboBox()
         self.settings_houdini_version.addItem("Custom (use field below)", "")

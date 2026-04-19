@@ -29,6 +29,7 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "template_hip": str(DEFAULT_TEMPLATE_HIP),
     "new_hip_pattern": "{projectName}_001.hipnc",
     "use_file_association": True,
+    "show_splash_screen": True,
     "houdini_exe": "",
     "server_repo_dir": str(DEFAULT_SERVER_REPO_DIR),
     "video_backend": "auto",
@@ -102,6 +103,9 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
             merged["houdini_exe"] = installs[0]["path"]
             if "use_file_association" not in data:
                 merged["use_file_association"] = False
+    template_hip = str(merged.get("template_hip", "")).strip()
+    if (not template_hip or not Path(template_hip).exists()) and DEFAULT_TEMPLATE_HIP.exists():
+        merged["template_hip"] = str(DEFAULT_TEMPLATE_HIP)
     return merged
 
 

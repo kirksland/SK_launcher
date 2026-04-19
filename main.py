@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import traceback
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 import ctypes
@@ -36,9 +36,83 @@ from ui.utils.styles import PALETTE, app_stylesheet, tool_button_dark_style
 APP_TITLE = "Skyforge Launcher"
 TEST_PIPELINE_ROOT = Path(__file__).resolve().parent / "projects" / "test_pipeline"
 
+
+def _create_startup_splash() -> QtWidgets.QSplashScreen:
+    root = Path(__file__).resolve().parent
+    splash_image_path = root / "horizontalSF.png"
+    pixmap = QtGui.QPixmap(640, 360)
+    pixmap.fill(QtGui.QColor("#1b1f25"))
+
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    painter.fillRect(0, 0, pixmap.width(), pixmap.height(), QtGui.QColor("#1b1f25"))
+    frame_rect = QtCore.QRect(24, 24, pixmap.width() - 48, pixmap.height() - 48)
+    painter.fillRect(frame_rect, QtGui.QColor("#23272e"))
+    painter.setPen(QtGui.QPen(QtGui.QColor("#2f3640"), 1))
+    painter.drawRoundedRect(frame_rect, 16, 16)
+
+    splash_image = QtGui.QPixmap(str(splash_image_path))
+    image_rect = QtCore.QRect(frame_rect.left() + 22, frame_rect.top() + 20, frame_rect.width() - 44, 180)
+    if not splash_image.isNull():
+        scaled_image = splash_image.scaled(
+            image_rect.size(),
+            QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
+        source_x = max(0, (scaled_image.width() - image_rect.width()) // 2)
+        source_y = max(0, (scaled_image.height() - image_rect.height()) // 2)
+        painter.drawPixmap(
+            image_rect,
+            scaled_image,
+            QtCore.QRect(source_x, source_y, image_rect.width(), image_rect.height()),
+        )
+        painter.fillRect(image_rect, QtGui.QColor(8, 10, 14, 70))
+    else:
+        painter.fillRect(image_rect, QtGui.QColor("#1a1e24"))
+
+    painter.setPen(QtGui.QColor("#d8dde5"))
+    title_font = QtGui.QFont("Segoe UI", 20)
+    title_font.setBold(True)
+    painter.setFont(title_font)
+    painter.drawText(
+        QtCore.QRect(frame_rect.left() + 24, frame_rect.top() + 222, frame_rect.width() - 48, 34),
+        QtCore.Qt.AlignmentFlag.AlignLeft,
+        APP_TITLE,
+    )
+
+    subtitle_font = QtGui.QFont("Segoe UI", 10)
+    painter.setFont(subtitle_font)
+    painter.setPen(QtGui.QColor("#9aa3ad"))
+    painter.drawText(
+        QtCore.QRect(frame_rect.left() + 24, frame_rect.top() + 264, frame_rect.width() - 48, 24),
+        QtCore.Qt.AlignmentFlag.AlignLeft,
+        "Loading workspace, tools, and media modules...",
+    )
+
+    painter.fillRect(frame_rect.left() + 24, frame_rect.top() + 306, frame_rect.width() - 48, 6, QtGui.QColor("#14171c"))
+    painter.fillRect(
+        frame_rect.left() + 24,
+        frame_rect.top() + 306,
+        int((frame_rect.width() - 48) * 0.58),
+        6,
+        QtGui.QColor("#5aa9e6"),
+    )
+    painter.end()
+
+    splash = QtWidgets.QSplashScreen(pixmap)
+    splash.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
+    splash.showMessage(
+        "Starting...",
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignBottom,
+        QtGui.QColor("#cfd6df"),
+    )
+    return splash
+
 class LauncherWindow(QtWidgets.QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, startup_status: Optional[Callable[[str], None]] = None) -> None:
         super().__init__()
+        self._startup_status = startup_status or (lambda _message: None)
+        self._startup_status("Loading settings...")
         self.setWindowTitle(APP_TITLE)
         icon_dir = Path(__file__).resolve().parent / "config"
         icon_path = icon_dir / "newForge4_256.ico"
@@ -56,6 +130,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._template_hip = Path(self.settings["template_hip"])
         self._new_hip_pattern = self.settings["new_hip_pattern"]
         self._use_file_association = bool(self.settings["use_file_association"])
+        self._show_splash_screen = bool(self.settings.get("show_splash_screen", True))
         self._houdini_exe = self.settings["houdini_exe"]
         self._video_backend_pref = str(self.settings.get("video_backend", "auto")).strip().lower() or "auto"
         self._asset_manager_projects = normalize_asset_manager_projects(
@@ -71,6 +146,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._project_hip_selection: Dict[Path, Path] = {}
         self._project_watch_enabled = True
         self._asset_watch_enabled = True
+        self._startup_status("Building interface...")
 
         central = QtWidgets.QWidget()
         central.setStyleSheet(app_stylesheet())
@@ -95,12 +171,15 @@ class LauncherWindow(QtWidgets.QMainWindow):
         from ui.pages.board_page import BoardPage
         from ui.pages.dev_page import DevPage
 
+        self._startup_status("Loading project pages...")
         self.projects_page = ProjectsPage(self.projects_dir)
         self.pages.addWidget(self.projects_page)
 
+        self._startup_status("Loading asset manager...")
         self.asset_page = AssetManagerPage(self._video_backend_pref, parent=self)
         self.pages.addWidget(self.asset_page)
 
+        self._startup_status("Loading board tools...")
         self.board_page = BoardPage(parent=self)
         self.pages.addWidget(self.board_page)
 
@@ -114,12 +193,14 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self._new_hip_pattern,
             self._video_backend_pref,
             self._use_file_association,
+            self._show_splash_screen,
             self._houdini_exe,
         )
         self.pages.addWidget(self.settings_page)
 
         self.dev_page = DevPage(parent=self)
         self.pages.addWidget(self.dev_page)
+        self._startup_status("Connecting controllers...")
 
         # Global media controls (bottom-right)
         self.media_group = QtWidgets.QFrame()
@@ -331,6 +412,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings_pattern = self.settings_page.settings_pattern
         self.settings_video_backend = self.settings_page.settings_video_backend
         self.settings_use_assoc = self.settings_page.settings_use_assoc
+        self.settings_show_splash = self.settings_page.settings_show_splash
         self.settings_houdini_exe = self.settings_page.settings_houdini_exe
         self.settings_save_btn = self.settings_page.settings_save_btn
         self.settings_projects_browse_btn = self.settings_page.settings_projects_browse_btn
@@ -439,9 +521,12 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.asset_controller.apply_asset_shots_size(self.asset_shots_size.currentText(), refresh=False)
 
+        self._startup_status("Refreshing project data...")
         self.project_controller.refresh_projects()
         self.project_controller.refresh_project_watch_paths()
+        self._startup_status("Refreshing asset data...")
         self.asset_controller.refresh_asset_manager()
+        self._startup_status("Refreshing client data...")
         self.client_controller.refresh_client_catalog()
         self.asset_controller.setup_asset_auto_refresh()
         self._asset_watch_enabled = self.asset_auto_refresh.isChecked()
@@ -457,6 +542,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         status.setSizeGripEnabled(False)
         status.hide()
         self._refresh_settings_validation()
+        self._startup_status("Finishing startup...")
         QtCore.QTimer.singleShot(0, self._handle_startup_configuration)
 
 
@@ -521,6 +607,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         template_hip = self.settings_template_hip.text().strip()
         pattern = self.settings_pattern.text().strip()
         use_assoc = self.settings_use_assoc.isChecked()
+        show_splash_screen = self.settings_show_splash.isChecked()
         houdini_exe = normalize_houdini_exe(self.settings_houdini_exe.text())
         backend_label = self.settings_video_backend.currentText().strip().lower()
         if backend_label == "opencv":
@@ -539,6 +626,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 "template_hip": template_hip,
                 "new_hip_pattern": pattern,
                 "use_file_association": use_assoc,
+                "show_splash_screen": show_splash_screen,
                 "houdini_exe": houdini_exe,
                 "video_backend": video_backend,
                 "asset_manager_projects": list(self._asset_manager_projects),
@@ -551,6 +639,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._template_hip = Path(template_hip) if template_hip else DEFAULT_TEMPLATE_HIP
         self._new_hip_pattern = pattern or "{projectName}_001.hipnc"
         self._use_file_association = bool(use_assoc)
+        self._show_splash_screen = bool(show_splash_screen)
         self._houdini_exe = houdini_exe
         self._video_backend_pref = video_backend
 
@@ -849,8 +938,29 @@ def main() -> None:
         if app_font.pointSize() <= 0:
             app_font.setPointSize(10)
             app.setFont(app_font)
-        window = LauncherWindow()
+        startup_settings = load_settings()
+        show_splash_screen = bool(startup_settings.get("show_splash_screen", True))
+        splash: QtWidgets.QSplashScreen | None = None
+
+        def update_splash(message: str) -> None:
+            if splash is None:
+                return
+            splash.showMessage(
+                message,
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignBottom,
+                QtGui.QColor("#cfd6df"),
+            )
+            app.processEvents()
+
+        if show_splash_screen:
+            splash = _create_startup_splash()
+            splash.show()
+            app.processEvents()
+
+        window = LauncherWindow(startup_status=update_splash)
         window.show()
+        if splash is not None:
+            splash.finish(window)
         app.exec()
     except Exception:
         log_path = Path(__file__).resolve().parent / "launcher_error.log"
