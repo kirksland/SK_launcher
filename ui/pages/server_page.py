@@ -40,125 +40,175 @@ class _AssetVersionsList(QtWidgets.QListWidget):
 class AssetManagerPage(QtWidgets.QWidget):
     def __init__(self, video_backend_pref: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
-        layout = QtWidgets.QVBoxLayout(self)
 
-        # Asset Manager UI (thumbnail library -> details)
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
+
         self.asset_pages = QtWidgets.QStackedWidget()
-        layout.addWidget(self.asset_pages, 1)
+        self.asset_pages.setStyleSheet("QStackedWidget { background: transparent; }")
+        root.addWidget(self.asset_pages, 1)
 
-        server_overview = QtWidgets.QWidget()
-        overview_layout = QtWidgets.QVBoxLayout(server_overview)
-        self.asset_pages.addWidget(server_overview)
+        overview_page = QtWidgets.QWidget()
+        overview_layout = QtWidgets.QVBoxLayout(overview_page)
+        overview_layout.setContentsMargins(0, 0, 0, 0)
+        overview_layout.setSpacing(10)
+        intro_title = QtWidgets.QLabel("Asset Manager")
+        intro_title.setStyleSheet(title_style())
+        overview_layout.addWidget(intro_title)
+        intro_text = QtWidgets.QLabel(
+            "Select a project from the browser to inspect shots, assets, published versions and previews."
+        )
+        intro_text.setWordWrap(True)
+        intro_text.setStyleSheet(muted_text_style())
+        overview_layout.addWidget(intro_text)
+        overview_layout.addStretch(1)
+        self.asset_pages.addWidget(overview_page)
 
-        server_header = QtWidgets.QHBoxLayout()
-        overview_layout.addLayout(server_header)
+        browser_page = QtWidgets.QWidget()
+        browser_layout = QtWidgets.QVBoxLayout(browser_page)
+        browser_layout.setContentsMargins(0, 0, 0, 0)
+        browser_layout.setSpacing(12)
+        self.asset_pages.addWidget(browser_page)
 
+        topbar = QtWidgets.QHBoxLayout()
+        browser_layout.addLayout(topbar)
+
+        title_block = QtWidgets.QVBoxLayout()
+        title_block.setSpacing(2)
         server_title = QtWidgets.QLabel("Asset Manager")
         server_title.setStyleSheet(title_style())
-        server_header.addWidget(server_title, 0)
+        title_block.addWidget(server_title)
+        self.asset_path_label = QtWidgets.QLabel("Browse projects, then inspect shots or assets.")
+        self.asset_path_label.setStyleSheet(muted_text_style(size_px=11))
+        self.asset_path_label.setWordWrap(True)
+        title_block.addWidget(self.asset_path_label)
+        topbar.addLayout(title_block, 1)
 
-        server_header.addStretch(1)
-
+        top_controls = QtWidgets.QHBoxLayout()
+        top_controls.setSpacing(8)
         self.asset_search_input = QtWidgets.QLineEdit()
-        self.asset_search_input.setPlaceholderText("Search asset manager...")
+        self.asset_search_input.setPlaceholderText("Search projects in asset manager...")
         self.asset_search_input.setClearButtonEnabled(True)
-        server_header.addWidget(self.asset_search_input, 0)
-
+        self.asset_search_input.setVisible(False)
+        top_controls.addWidget(self.asset_search_input, 1)
         self.asset_refresh_btn = QtWidgets.QPushButton("Refresh")
-        server_header.addWidget(self.asset_refresh_btn, 0)
-
+        top_controls.addWidget(self.asset_refresh_btn, 0)
         self.asset_auto_refresh = QtWidgets.QCheckBox("Auto")
         self.asset_auto_refresh.setChecked(True)
-        server_header.addWidget(self.asset_auto_refresh, 0)
+        top_controls.addWidget(self.asset_auto_refresh, 0)
+        topbar.addLayout(top_controls, 1)
 
-        self.asset_path_label = QtWidgets.QLabel()
-        self.asset_path_label.setText("Asset Manager")
-        self.asset_path_label.setStyleSheet(muted_text_style(size_px=11))
-        overview_layout.addWidget(self.asset_path_label)
+        self.asset_back_btn = QtWidgets.QPushButton("Back")
+        self.asset_back_btn.setVisible(False)
+        browser_layout.addWidget(self.asset_back_btn, 0)
+
+        self.asset_layout_toolbar = QtWidgets.QHBoxLayout()
+        self.asset_layout_toolbar.setSpacing(8)
+        self.asset_project_toggle_btn = QtWidgets.QToolButton()
+        self.asset_project_toggle_btn.setText("Hide Projects")
+        self.asset_project_toggle_btn.setCheckable(True)
+        self.asset_project_toggle_btn.setChecked(False)
+        self.asset_project_toggle_btn.setAutoRaise(True)
+        self.asset_project_toggle_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
+        self.asset_project_toggle_btn.setToolTip("Collapse or expand the project rail.")
+        self.asset_project_toggle_btn.setVisible(False)
+        self.asset_layout_toolbar.addWidget(self.asset_project_toggle_btn, 0)
+        self.asset_layout_hint = QtWidgets.QLabel("Projects stay available, but can collapse once a project is chosen.")
+        self.asset_layout_hint.setStyleSheet(muted_text_style(size_px=11))
+        self.asset_layout_hint.setVisible(False)
+        self.asset_layout_toolbar.addWidget(self.asset_layout_hint, 0)
+        self.asset_layout_toolbar.addStretch(1)
+        browser_layout.addLayout(self.asset_layout_toolbar)
+
+        self.asset_main_split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self.asset_main_split.setChildrenCollapsible(False)
+        browser_layout.addWidget(self.asset_main_split, 1)
+
+        self.asset_project_panel = self._make_panel("Projects", "Choose the synced project you want to browse.")
+        project_layout = self.asset_project_panel.layout()  # type: ignore[assignment]
+        project_actions = QtWidgets.QHBoxLayout()
+        project_actions.setSpacing(8)
+        self.asset_details_title = QtWidgets.QLabel("No project selected")
+        self.asset_details_title.setStyleSheet("font-weight: 600; color: #d8dde5;")
+        project_actions.addWidget(self.asset_details_title, 1)
+        project_layout.addLayout(project_actions)
 
         self.asset_grid = QtWidgets.QListWidget()
         self.asset_grid.setViewMode(QtWidgets.QListView.ViewMode.IconMode)
         self.asset_grid.setResizeMode(QtWidgets.QListView.ResizeMode.Adjust)
         self.asset_grid.setMovement(QtWidgets.QListView.Movement.Static)
-        self.asset_grid.setSpacing(16)
-        self.asset_grid.setIconSize(QtCore.QSize(200, 130))
-        self.asset_grid.setGridSize(QtCore.QSize(230, 200))
+        self.asset_grid.setSpacing(14)
+        self.asset_grid.setIconSize(QtCore.QSize(190, 120))
+        self.asset_grid.setGridSize(QtCore.QSize(220, 188))
         self.asset_grid.setWordWrap(True)
+        self.asset_grid.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.asset_grid.setStyleSheet(
+            "QListWidget { background: transparent; border: none; }"
             "QListWidget::item { background: transparent; border: none; }"
             "QListWidget::item:selected { background: transparent; border: none; }"
             "QListWidget::item:hover { background: transparent; border: none; }"
         )
-        self.asset_grid.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
-        overview_layout.addWidget(self.asset_grid, 1)
+        project_layout.addWidget(self.asset_grid, 1)
+        self.asset_main_split.addWidget(self.asset_project_panel)
+        self.asset_project_panel.setVisible(False)
 
-        # Details page
-        server_details = QtWidgets.QWidget()
-        details_layout = QtWidgets.QVBoxLayout(server_details)
-        self.asset_pages.addWidget(server_details)
-
-        details_header = QtWidgets.QHBoxLayout()
-        details_layout.addLayout(details_header)
-
-        self.asset_back_btn = QtWidgets.QPushButton("Back")
-        self.asset_back_btn.clicked.connect(lambda: self.asset_pages.setCurrentIndex(0))
-        details_header.addWidget(self.asset_back_btn, 0)
-
-        self.asset_details_title = QtWidgets.QLabel("Project")
-        self.asset_details_title.setStyleSheet(title_style(size_px=16))
-        details_header.addWidget(self.asset_details_title, 0)
-
-        details_header.addStretch(1)
-
-        details_split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        details_layout.addWidget(details_split, 1)
-        details_split.setChildrenCollapsible(False)
-
-        work_panel = QtWidgets.QWidget()
-        work_panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Expanding,
-        )
-        work_panel.setStyleSheet(border_only_style())
-        col_work = QtWidgets.QVBoxLayout(work_panel)
-        details_split.addWidget(work_panel)
-
-        library_label = QtWidgets.QLabel("Library")
-        library_label.setStyleSheet("font-weight: bold;")
-        col_work.addWidget(library_label)
-
-        search_row = QtWidgets.QHBoxLayout()
-        col_work.addLayout(search_row)
+        entity_panel = self._make_panel("Library", "Filter the current project and drill down into shots or assets.")
+        entity_layout = entity_panel.layout()  # type: ignore[assignment]
+        entity_toolbar = QtWidgets.QHBoxLayout()
+        entity_toolbar.setSpacing(8)
         self.asset_entity_search = QtWidgets.QLineEdit()
         self.asset_entity_search.setPlaceholderText("Search shots...")
         self.asset_entity_search.setClearButtonEnabled(True)
-        search_row.addWidget(self.asset_entity_search, 1)
+        entity_toolbar.addWidget(self.asset_entity_search, 1)
         self.asset_open_folder_btn = QtWidgets.QToolButton()
         self.asset_open_folder_btn.setText("Open Folder")
         self.asset_open_folder_btn.setAutoRaise(True)
         self.asset_open_folder_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
-        search_row.addWidget(self.asset_open_folder_btn, 0)
+        entity_toolbar.addWidget(self.asset_open_folder_btn, 0)
+        entity_layout.addLayout(entity_toolbar)
 
         self.asset_work_tabs = QtWidgets.QTabWidget()
-        col_work.addWidget(self.asset_work_tabs, 1)
+        self.asset_work_tabs.setDocumentMode(True)
+        self.asset_work_tabs.setStyleSheet(
+            "QTabWidget::pane { border: none; }"
+            "QTabBar::tab {"
+            "background: rgba(255,255,255,0.04);"
+            "border: 1px solid rgba(255,255,255,0.08);"
+            "border-bottom: none;"
+            "padding: 8px 12px;"
+            "margin-right: 4px;"
+            "border-top-left-radius: 6px;"
+            "border-top-right-radius: 6px;"
+            "color: #9aa3ad;"
+            "}"
+            "QTabBar::tab:selected {"
+            "background: rgba(255,255,255,0.08);"
+            "color: #d8dde5;"
+            "}"
+        )
+        entity_layout.addWidget(self.asset_work_tabs, 1)
 
         shots_tab = QtWidgets.QWidget()
         shots_layout = QtWidgets.QVBoxLayout(shots_tab)
+        shots_layout.setContentsMargins(0, 10, 0, 0)
+        shots_layout.setSpacing(10)
         shots_filter_row = QtWidgets.QHBoxLayout()
-        shots_layout.addLayout(shots_filter_row)
-        shots_filter_label = QtWidgets.QLabel("Filter")
-        shots_filter_label.setStyleSheet("font-weight: bold;")
+        shots_filter_row.setSpacing(8)
+        shots_filter_label = QtWidgets.QLabel("Group")
+        shots_filter_label.setStyleSheet(muted_text_style())
         shots_filter_row.addWidget(shots_filter_label, 0)
         self.asset_shots_filter = QtWidgets.QComboBox()
         shots_filter_row.addWidget(self.asset_shots_filter, 0)
-        shots_size_label = QtWidgets.QLabel("Size")
-        shots_size_label.setStyleSheet("font-weight: bold;")
+        shots_size_label = QtWidgets.QLabel("Density")
+        shots_size_label.setStyleSheet(muted_text_style())
         shots_filter_row.addWidget(shots_size_label, 0)
         self.asset_shots_size = QtWidgets.QComboBox()
         self.asset_shots_size.addItems(["Small", "Medium", "Large"])
         self.asset_shots_size.setCurrentText("Medium")
         shots_filter_row.addWidget(self.asset_shots_size, 0)
         shots_filter_row.addStretch(1)
+        shots_layout.addLayout(shots_filter_row)
         self.asset_shots_list = QtWidgets.QListWidget()
         self.asset_shots_list.setViewMode(QtWidgets.QListView.ViewMode.IconMode)
         self.asset_shots_list.setResizeMode(QtWidgets.QListView.ResizeMode.Adjust)
@@ -172,14 +222,17 @@ class AssetManagerPage(QtWidgets.QWidget):
 
         assets_tab = QtWidgets.QWidget()
         assets_layout = QtWidgets.QVBoxLayout(assets_tab)
+        assets_layout.setContentsMargins(0, 10, 0, 0)
+        assets_layout.setSpacing(10)
         assets_filter_row = QtWidgets.QHBoxLayout()
-        assets_layout.addLayout(assets_filter_row)
-        assets_filter_label = QtWidgets.QLabel("Filter")
-        assets_filter_label.setStyleSheet("font-weight: bold;")
+        assets_filter_row.setSpacing(8)
+        assets_filter_label = QtWidgets.QLabel("Group")
+        assets_filter_label.setStyleSheet(muted_text_style())
         assets_filter_row.addWidget(assets_filter_label, 0)
         self.asset_assets_filter = QtWidgets.QComboBox()
         assets_filter_row.addWidget(self.asset_assets_filter, 0)
         assets_filter_row.addStretch(1)
+        assets_layout.addLayout(assets_filter_row)
         self.asset_assets_list = QtWidgets.QListWidget()
         self.asset_assets_list.setViewMode(QtWidgets.QListView.ViewMode.IconMode)
         self.asset_assets_list.setResizeMode(QtWidgets.QListView.ResizeMode.Adjust)
@@ -191,27 +244,42 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_assets_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         assets_layout.addWidget(self.asset_assets_list, 1)
         self.asset_work_tabs.addTab(assets_tab, "Assets")
+        self.asset_main_split.addWidget(entity_panel)
 
-        preview_panel = QtWidgets.QWidget()
-        preview_panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Expanding,
-        )
-        preview_panel.setStyleSheet(border_only_style())
-        col_preview = QtWidgets.QVBoxLayout(preview_panel)
-        details_split.addWidget(preview_panel)
+        inspector_panel = self._make_panel("Inspector", "")
+        inspector_layout = inspector_panel.layout()  # type: ignore[assignment]
 
-        details_label = QtWidgets.QLabel("Details")
-        details_label.setStyleSheet("font-weight: bold;")
-        col_preview.addWidget(details_label)
+        self.asset_selection_summary = QtWidgets.QLabel("No entity selected")
+        self.asset_selection_summary.setStyleSheet("color: #d8dde5; font-weight: 600;")
+        self.asset_selection_summary.setVisible(False)
 
-        preview_label = QtWidgets.QLabel("Preview")
-        preview_label.setStyleSheet("font-weight: bold;")
-        col_preview.addWidget(preview_label)
+        meta_frame = QtWidgets.QFrame()
+        meta_frame.setStyleSheet(panel_style())
+        meta_layout = QtWidgets.QVBoxLayout(meta_frame)
+        meta_layout.setContentsMargins(10, 10, 10, 10)
+        meta_layout.setSpacing(8)
+        self.asset_meta = QtWidgets.QLabel("Select a shot or asset to view details.")
+        self.asset_meta.setStyleSheet("color: #c6ccd6;")
+        self.asset_meta.setWordWrap(True)
+        meta_layout.addWidget(self.asset_meta, 0)
+        inspector_layout.addWidget(meta_frame, 0)
+        meta_frame.setVisible(False)
+
+        preview_header = QtWidgets.QHBoxLayout()
+        preview_title = QtWidgets.QLabel("Preview")
+        preview_title.setStyleSheet("font-weight: 600;")
+        preview_header.addWidget(preview_title, 0)
+        preview_header.addStretch(1)
+        self.asset_preview_label = QtWidgets.QLabel("0/0")
+        self.asset_preview_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.asset_preview_label.setStyleSheet("color: #c6ccd6; padding: 2px 6px;")
+        preview_header.addWidget(self.asset_preview_label, 0)
+        inspector_layout.addLayout(preview_header)
+        preview_title.setVisible(False)
 
         preview_container = QtWidgets.QFrame()
         preview_container.setStyleSheet(panel_style())
-        preview_container.setFixedHeight(200)
+        preview_container.setFixedHeight(220)
         preview_container.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
@@ -221,39 +289,15 @@ class AssetManagerPage(QtWidgets.QWidget):
         preview_layout.setSpacing(0)
 
         self.asset_preview = QtWidgets.QLabel()
-        self.asset_preview.setFixedHeight(200)
-        self.asset_preview.setFixedWidth(420)
+        self.asset_preview.setFixedHeight(220)
         self.asset_preview.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.asset_preview.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Fixed,
-            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
         )
         preview_layout.addWidget(self.asset_preview, 0, 0)
-
-        self.asset_prev_btn = QtWidgets.QToolButton()
-        self.asset_prev_btn.setText("<")
-        self.asset_prev_btn.setAutoRaise(True)
-        self.asset_prev_btn.setStyleSheet(tool_button_dark_style(padding="2px 8px"))
-
-        self.asset_next_btn = QtWidgets.QToolButton()
-        self.asset_next_btn.setText(">")
-        self.asset_next_btn.setAutoRaise(True)
-        self.asset_next_btn.setStyleSheet(tool_button_dark_style(padding="2px 8px"))
-
-        self.asset_preview_label = QtWidgets.QLabel("0/0")
-        self.asset_preview_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.asset_preview_label.setStyleSheet("color: #c6ccd6; padding: 2px 6px;")
-
-        col_preview.addWidget(preview_container, 0)
-
-        # Hide the static image preview block (keep widgets for controller wiring)
-        preview_label.setVisible(False)
+        inspector_layout.addWidget(preview_container, 0)
         preview_container.setVisible(False)
-
-        self.asset_meta = QtWidgets.QLabel()
-        self.asset_meta.setStyleSheet("color: #c6ccd6;")
-        self.asset_meta.setWordWrap(True)
-        col_preview.addWidget(self.asset_meta, 0)
 
         self.asset_status = QtWidgets.QLabel("")
         self.asset_status.setWordWrap(True)
@@ -261,17 +305,15 @@ class AssetManagerPage(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        self.asset_status.setMaximumHeight(40)
-
-        video_label = QtWidgets.QLabel("Video Preview")
-        video_label.setStyleSheet("font-weight: bold;")
-        col_preview.addWidget(video_label)
+        self.asset_status.setMaximumHeight(42)
 
         self.asset_video_box = QtWidgets.QFrame()
         self.asset_video_box.setStyleSheet(
-            f"background: #1b1f26; border: 1px solid {PALETTE['border']};"
+            f"background: #1b1f26; border: 1px solid {PALETTE['border']}; border-radius: 8px;"
         )
         self.asset_video_layout = QtWidgets.QVBoxLayout(self.asset_video_box)
+        self.asset_video_layout.setContentsMargins(8, 8, 8, 8)
+        self.asset_video_layout.setSpacing(8)
         self.asset_video_box.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -285,15 +327,22 @@ class AssetManagerPage(QtWidgets.QWidget):
             parent=self,
         )
         self.asset_video = self.asset_video_controller.widget
-
         self.asset_video_layout.addWidget(self.asset_video, 1)
 
         controls = QtWidgets.QHBoxLayout()
+        controls.setSpacing(8)
+        self.asset_prev_btn = QtWidgets.QToolButton()
+        self.asset_prev_btn.setText("<")
+        self.asset_prev_btn.setAutoRaise(True)
+        self.asset_prev_btn.setStyleSheet(tool_button_dark_style(padding="2px 8px"))
         controls.addWidget(self.asset_prev_btn, 0)
-        controls.addWidget(self.asset_preview_label, 0)
+        self.asset_next_btn = QtWidgets.QToolButton()
+        self.asset_next_btn.setText(">")
+        self.asset_next_btn.setAutoRaise(True)
+        self.asset_next_btn.setStyleSheet(tool_button_dark_style(padding="2px 8px"))
         controls.addWidget(self.asset_next_btn, 0)
         self.asset_play_btn = QtWidgets.QPushButton("Play")
-        controls.addWidget(self.asset_play_btn)
+        controls.addWidget(self.asset_play_btn, 0)
         self.asset_fullscreen_btn = QtWidgets.QToolButton()
         self.asset_fullscreen_btn.setText("Full")
         self.asset_fullscreen_btn.setAutoRaise(True)
@@ -304,59 +353,94 @@ class AssetManagerPage(QtWidgets.QWidget):
         controls.addWidget(self.asset_video_slider, 1)
         self.asset_video_controller.bind_controls(self.asset_play_btn, self.asset_video_slider)
         self.asset_video_layout.addLayout(controls)
-        col_preview.addWidget(self.asset_video_box, 1)
+        inspector_layout.addWidget(self.asset_video_box, 1)
 
-        details_panel = QtWidgets.QWidget()
-        details_panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Expanding,
-        )
-        details_panel.setStyleSheet(border_only_style())
-        col_details = QtWidgets.QVBoxLayout(details_panel)
-        details_split.addWidget(details_panel)
-
-        details_split.setSizes([320, 360, 260])
-        details_split.setStretchFactor(0, 2)
-        details_split.setStretchFactor(1, 2)
-        details_split.setStretchFactor(2, 1)
-
-        versions_label = QtWidgets.QLabel("Versions")
-        versions_label.setStyleSheet("font-weight: bold;")
-        versions_row = QtWidgets.QHBoxLayout()
-        versions_row.addWidget(versions_label, 0)
-        versions_row.addStretch(1)
+        versions_panel = self._make_panel("Versions", "")
+        versions_layout = versions_panel.layout()  # type: ignore[assignment]
+        versions_header = QtWidgets.QHBoxLayout()
         self.asset_context_combo = QtWidgets.QComboBox()
         self.asset_context_combo.addItems(
             ["All", "modeling", "lookdev", "layout", "animation", "vfx", "lighting"]
         )
         self.asset_context_combo.setCurrentText("All")
-        versions_row.addWidget(self.asset_context_combo, 0)
-        col_details.addLayout(versions_row)
+        versions_header.addWidget(self.asset_context_combo, 0)
+        versions_header.addStretch(1)
+        self.asset_versions_hint = QtWidgets.QLabel("Published bundles")
+        self.asset_versions_hint.setStyleSheet(muted_text_style(size_px=11))
+        self.asset_versions_hint.setVisible(False)
+        versions_header.addWidget(self.asset_versions_hint, 0)
+        versions_layout.addLayout(versions_header)
         self.asset_versions_list = _AssetVersionsList()
-        col_details.addWidget(self.asset_versions_list, 1)
+        versions_layout.addWidget(self.asset_versions_list, 1)
+        inspector_layout.addWidget(versions_panel, 1)
 
-        history_label = QtWidgets.QLabel("History")
-        history_label.setStyleSheet("font-weight: bold;")
-        col_details.addWidget(history_label)
+        history_panel = self._make_panel("Notes", "Quick notes and git actions for the current entity are grouped here for now.")
+        history_layout = history_panel.layout()  # type: ignore[assignment]
         self.asset_history_list = QtWidgets.QListWidget()
-        col_details.addWidget(self.asset_history_list, 1)
-
-        commit_label = QtWidgets.QLabel("Commit")
-        commit_label.setStyleSheet("font-weight: bold;")
-        col_details.addWidget(commit_label)
+        history_layout.addWidget(self.asset_history_list, 1)
         self.asset_commit_box = QtWidgets.QTextEdit()
-        self.asset_commit_box.setPlaceholderText("Commit message...")
-        self.asset_commit_box.setFixedHeight(80)
-        col_details.addWidget(self.asset_commit_box, 0)
-
+        self.asset_commit_box.setPlaceholderText("Git actions are not wired yet. Use this space for a future commit note.")
+        self.asset_commit_box.setFixedHeight(72)
+        history_layout.addWidget(self.asset_commit_box, 0)
         commit_actions = QtWidgets.QHBoxLayout()
-        col_details.addLayout(commit_actions)
         self.asset_commit_btn = QtWidgets.QPushButton("Commit")
+        self.asset_commit_btn.setEnabled(False)
         commit_actions.addWidget(self.asset_commit_btn)
         self.asset_push_btn = QtWidgets.QPushButton("Push")
+        self.asset_push_btn.setEnabled(False)
         commit_actions.addWidget(self.asset_push_btn)
         self.asset_fetch_btn = QtWidgets.QPushButton("Fetch")
+        self.asset_fetch_btn.setEnabled(False)
         commit_actions.addWidget(self.asset_fetch_btn)
+        history_layout.addLayout(commit_actions)
+        history_layout.addWidget(self.asset_status, 0)
+        inspector_layout.addWidget(history_panel, 1)
+        history_panel.setVisible(False)
 
-        col_details.addWidget(self.asset_status)
+        self.asset_main_split.addWidget(inspector_panel)
+        self.asset_main_split.setSizes([0, 560, 560])
+        self.asset_main_split.setStretchFactor(0, 0)
+        self.asset_main_split.setStretchFactor(1, 2)
+        self.asset_main_split.setStretchFactor(2, 2)
 
+        self.asset_pages.setCurrentIndex(1)
+        self.asset_project_toggle_btn.toggled.connect(self.set_project_panel_collapsed)
+
+    def _make_panel(self, title: str, description: str) -> QtWidgets.QFrame:
+        panel = QtWidgets.QFrame()
+        panel.setStyleSheet(
+            "QFrame {"
+            "background: rgba(255,255,255,0.03);"
+            "border: 1px solid rgba(255,255,255,0.07);"
+            "border-radius: 10px;"
+            "}"
+        )
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        title_label = QtWidgets.QLabel(title)
+        title_label.setStyleSheet("font-weight: 600; color: #d8dde5;")
+        if description:
+            panel.setToolTip(description)
+            title_label.setToolTip(description)
+        layout.addWidget(title_label)
+        desc_label = QtWidgets.QLabel(description)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet(muted_text_style(size_px=11))
+        desc_label.setVisible(False)
+        layout.addWidget(desc_label)
+        return panel
+
+    def set_project_panel_collapsed(self, collapsed: bool) -> None:
+        if not hasattr(self, "asset_main_split"):
+            return
+        is_collapsed = bool(collapsed)
+        self.asset_project_panel.setMaximumWidth(56 if is_collapsed else 16777215)
+        self.asset_project_panel.setMinimumWidth(56 if is_collapsed else 220)
+        self.asset_grid.setVisible(not is_collapsed)
+        self.asset_details_title.setVisible(not is_collapsed)
+        self.asset_project_toggle_btn.setText("Show Projects" if is_collapsed else "Hide Projects")
+        if is_collapsed:
+            self.asset_main_split.setSizes([56, 560, 560])
+        else:
+            self.asset_main_split.setSizes([280, 470, 470])

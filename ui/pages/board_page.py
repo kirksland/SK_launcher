@@ -62,30 +62,30 @@ class _ToolStackRow(QtWidgets.QWidget):
     def _apply_style(self) -> None:
         tone = "#87919d" if self._muted else "#d8dde5"
         if self._selected:
-            bg = "rgba(242,193,78,34)"
-            border = "rgba(242,193,78,110)"
+            bg = "rgba(255,255,255,10)"
+            border = "rgba(242,193,78,72)"
         else:
-            bg = "rgba(255,255,255,7)"
-            border = "rgba(255,255,255,14)"
+            bg = "rgba(255,255,255,4)"
+            border = "rgba(255,255,255,10)"
         self.setStyleSheet(
             "background: %s;"
             "border: 1px solid %s;"
-            "border-radius: 11px;"
+            "border-radius: 7px;"
             % (bg, border)
         )
         self.label.setStyleSheet(f"color: {tone}; background: transparent; border: 0;")
         self.remove_btn.setStyleSheet(
             "QToolButton {"
-            "background: rgba(255,255,255,8);"
-            "border: 1px solid rgba(255,255,255,14);"
-            "border-radius: 8px;"
+            "background: transparent;"
+            "border: 1px solid rgba(255,255,255,10);"
+            "border-radius: 5px;"
             "padding: 0px;"
-            "color: #cfd6df;"
+            "color: #8f99a4;"
             "}"
             "QToolButton:hover {"
-            "background: rgba(255,120,120,28);"
-            "border: 1px solid rgba(255,120,120,76);"
-            "color: #ffb7b7;"
+            "background: rgba(255,255,255,6);"
+            "border: 1px solid rgba(255,120,120,52);"
+            "color: #d8dde5;"
             "}"
         )
 
@@ -96,7 +96,6 @@ from ui.utils.styles import (
     subtle_panel_frame_style,
     title_style,
     tree_panel_style,
-    tool_button_style,
 )
 
 
@@ -956,48 +955,56 @@ class BoardPage(QtWidgets.QWidget):
         )
         self.edit_panel.setStyleSheet(
             "QFrame {"
-            "background: rgba(24, 28, 34, 232);"
-            "border: 1px solid rgba(255,255,255,32);"
-            "border-radius: 18px;"
+            "background: rgba(23, 26, 31, 238);"
+            "border: 1px solid rgba(255,255,255,20);"
+            "border-radius: 12px;"
             "}"
             "QLabel { background: transparent; }"
             "QPushButton, QToolButton, QComboBox {"
-            "background: rgba(255,255,255,8);"
-            "border: 1px solid rgba(255,255,255,18);"
-            "border-radius: 10px;"
-            "padding: 6px 10px;"
+            "background: rgba(255,255,255,5);"
+            "border: 1px solid rgba(255,255,255,12);"
+            "border-radius: 6px;"
+            "padding: 5px 9px;"
             "}"
             "QPushButton:hover, QToolButton:hover, QComboBox:hover {"
-            "background: rgba(255,255,255,14);"
+            "background: rgba(255,255,255,9);"
+            "}"
+            "QAbstractSpinBox {"
+            "background: rgba(16, 19, 24, 220);"
+            "border: 1px solid rgba(255,255,255,12);"
+            "border-radius: 6px;"
+            "padding: 4px 8px;"
+            "selection-background-color: rgba(242,193,78,36);"
             "}"
             "QListWidget {"
-            "background: rgba(255,255,255,8);"
-            "border: 1px solid rgba(255,255,255,18);"
-            "border-radius: 14px;"
-            "padding: 8px;"
+            "background: rgba(255,255,255,3);"
+            "border: 1px solid rgba(255,255,255,10);"
+            "border-radius: 8px;"
+            "padding: 6px;"
             "outline: none;"
             "}"
             "QListWidget::item {"
-            "background: rgba(255,255,255,6);"
-            "border: 1px solid rgba(255,255,255,14);"
-            "border-radius: 12px;"
-            "padding: 10px 12px;"
-            "margin: 4px 0;"
+            "background: rgba(255,255,255,4);"
+            "border: 1px solid rgba(255,255,255,10);"
+            "border-radius: 7px;"
+            "padding: 8px 10px;"
+            "margin: 2px 0;"
             "}"
             "QListWidget::item:selected {"
-            "background: rgba(242,193,78,38);"
-            "border: 1px solid rgba(242,193,78,110);"
+            "background: rgba(255,255,255,8);"
+            "border: 1px solid rgba(242,193,78,70);"
             "}"
             "QSlider::groove:horizontal {"
-            "height: 6px;"
-            "background: rgba(255,255,255,18);"
-            "border-radius: 3px;"
+            "height: 4px;"
+            "background: rgba(255,255,255,12);"
+            "border-radius: 2px;"
             "}"
             "QSlider::handle:horizontal {"
-            "background: #f2c14e;"
-            "width: 14px;"
+            "background: #c7ccd3;"
+            "border: 1px solid rgba(12,15,20,110);"
+            "width: 12px;"
             "margin: -5px 0;"
-            "border-radius: 7px;"
+            "border-radius: 6px;"
             "}"
         )
         shadow = QtWidgets.QGraphicsDropShadowEffect(self.edit_panel)
@@ -1007,17 +1014,29 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_panel.setGraphicsEffect(shadow)
         edit_layout = QtWidgets.QVBoxLayout(self.edit_panel)
         edit_layout.setContentsMargins(16, 16, 16, 16)
-        edit_layout.setSpacing(10)
+        edit_layout.setSpacing(8)
 
         edit_header = QtWidgets.QHBoxLayout()
         edit_layout.addLayout(edit_header)
         self.edit_title = QtWidgets.QLabel("Edit Mode")
-        self.edit_title.setStyleSheet(f"color: {PALETTE['light_text']}; font-weight: bold; font-size: 16px;")
+        self.edit_title.setStyleSheet(f"color: {PALETTE['light_text']}; font-weight: 600; font-size: 15px;")
         edit_header.addWidget(self.edit_title, 1)
         self.edit_close_btn = QtWidgets.QToolButton()
         self.edit_close_btn.setText("×")
         self.edit_close_btn.setAutoRaise(True)
-        self.edit_close_btn.setStyleSheet(tool_button_style(padding="4px 8px", radius=8))
+        self.edit_close_btn.setStyleSheet(
+            "QToolButton {"
+            "padding: 2px 8px;"
+            "border-radius: 6px;"
+            "background: rgba(255,255,255,4);"
+            "border: 1px solid rgba(255,255,255,10);"
+            "color: #aeb6bf;"
+            "}"
+            "QToolButton:hover {"
+            "background: rgba(255,255,255,8);"
+            "color: #d8dde5;"
+            "}"
+        )
         edit_header.addWidget(self.edit_close_btn, 0)
 
         self.edit_info = QtWidgets.QLabel("")
@@ -1026,7 +1045,7 @@ class BoardPage(QtWidgets.QWidget):
         edit_layout.addWidget(self.edit_info, 0)
 
         self.edit_tool_hint = QtWidgets.QLabel("")
-        self.edit_tool_hint.setStyleSheet("color: #f2c14e; font-size: 11px;")
+        self.edit_tool_hint.setStyleSheet("color: #c2a25a; font-size: 11px;")
         self.edit_tool_hint.setVisible(False)
         edit_layout.addWidget(self.edit_tool_hint, 0)
 
@@ -1050,27 +1069,70 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_exr_gamma_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_exr_gamma_slider.setRange(10, 30)  # 1.0 - 3.0
         self.edit_exr_gamma_slider.setValue(22)
+        self.edit_exr_gamma_input = QtWidgets.QDoubleSpinBox()
+        self.edit_exr_gamma_input.setRange(1.0, 3.0)
+        self.edit_exr_gamma_input.setDecimals(1)
+        self.edit_exr_gamma_input.setSingleStep(0.1)
+        self.edit_exr_gamma_input.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_exr_gamma_input.setKeyboardTracking(False)
+        self.edit_exr_gamma_input.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_exr_gamma_input.setFixedWidth(62)
+        self.edit_exr_gamma_input.setValue(2.2)
         self.edit_exr_gamma_row.addWidget(self.edit_exr_srgb_check, 0)
         self.edit_exr_gamma_row.addWidget(self.edit_exr_gamma_label, 0)
         self.edit_exr_gamma_row.addWidget(self.edit_exr_gamma_slider, 1)
+        self.edit_exr_gamma_row.addWidget(self.edit_exr_gamma_input, 0)
         self.edit_exr_srgb_check.setVisible(False)
         self.edit_exr_gamma_label.setVisible(False)
         self.edit_exr_gamma_slider.setVisible(False)
+        self.edit_exr_gamma_input.setVisible(False)
         edit_layout.addLayout(self.edit_exr_gamma_row)
 
-        self.edit_image_tools_label = QtWidgets.QLabel("Tool Stack")
-        self.edit_image_tools_label.setStyleSheet("color: #98a2ad; font-size: 11px; letter-spacing: 0.08em;")
-        self.edit_image_tools_label.setVisible(False)
-        edit_layout.addWidget(self.edit_image_tools_label, 0)
+        self.edit_tool_stack_section = QtWidgets.QFrame()
+        self.edit_tool_stack_section.setStyleSheet(
+            "QFrame {"
+            "background: rgba(255,255,255,2);"
+            "border: 1px solid rgba(255,255,255,8);"
+            "border-radius: 8px;"
+            "}"
+        )
+        self.edit_tool_stack_layout = QtWidgets.QVBoxLayout(self.edit_tool_stack_section)
+        self.edit_tool_stack_layout.setContentsMargins(10, 10, 10, 10)
+        self.edit_tool_stack_layout.setSpacing(8)
+        edit_layout.addWidget(self.edit_tool_stack_section, 0)
 
-        self.edit_image_tool_empty = QtWidgets.QLabel("No active tools")
+        self.edit_image_tools_header = QtWidgets.QHBoxLayout()
+        self.edit_tool_stack_layout.addLayout(self.edit_image_tools_header)
+        self.edit_image_tools_label = QtWidgets.QLabel("Tool Stack")
+        self.edit_image_tools_label.setStyleSheet("color: #8d97a2; font-size: 11px; font-weight: 600;")
+        self.edit_image_tools_header.addWidget(self.edit_image_tools_label, 0)
+        self.edit_image_tools_header.addStretch(1)
+
+        self.edit_image_tool_add_btn = QtWidgets.QToolButton()
+        self.edit_image_tool_add_btn.setText("Add")
+        self.edit_image_tool_add_btn.setAutoRaise(True)
+        self.edit_image_tool_add_btn.setStyleSheet(
+            "QToolButton {"
+            "background: rgba(255,255,255,4);"
+            "border: 1px solid rgba(255,255,255,10);"
+            "border-radius: 6px;"
+            "padding: 4px 8px;"
+            "color: #c8ced6;"
+            "}"
+            "QToolButton:hover {"
+            "background: rgba(255,255,255,8);"
+            "}"
+        )
+        self.edit_image_tools_header.addWidget(self.edit_image_tool_add_btn, 0)
+
+        self.edit_image_tool_empty = QtWidgets.QLabel("No tools in the stack yet.")
         self.edit_image_tool_empty.setStyleSheet("color: #6f7a86; font-size: 12px; padding: 2px 2px 6px 2px;")
         self.edit_image_tool_empty.setVisible(False)
-        edit_layout.addWidget(self.edit_image_tool_empty, 0)
+        self.edit_tool_stack_layout.addWidget(self.edit_image_tool_empty, 0)
 
         self.edit_image_tool_list = QtWidgets.QListWidget()
         self.edit_image_tool_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.edit_image_tool_list.setMaximumHeight(116)
+        self.edit_image_tool_list.setMaximumHeight(152)
         self.edit_image_tool_list.setUniformItemSizes(True)
         self.edit_image_tool_list.setSpacing(6)
         self.edit_image_tool_list.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
@@ -1090,145 +1152,206 @@ class BoardPage(QtWidgets.QWidget):
             "}"
         )
         self.edit_image_tool_list.setVisible(False)
-        edit_layout.addWidget(self.edit_image_tool_list, 0)
+        self.edit_tool_stack_layout.addWidget(self.edit_image_tool_list, 0)
 
         self.edit_image_tool_add_row = QtWidgets.QHBoxLayout()
         self.edit_image_tool_add_combo = QtWidgets.QComboBox()
         self.edit_image_tool_add_combo.setMinimumWidth(120)
         self.edit_image_tool_add_row.addWidget(self.edit_image_tool_add_combo, 1)
-        edit_layout.addLayout(self.edit_image_tool_add_row)
         self.edit_image_tool_add_combo.setVisible(False)
 
         self.edit_image_tool_order_row = QtWidgets.QHBoxLayout()
-        self.edit_image_tool_up_btn = QtWidgets.QPushButton("↑")
-        self.edit_image_tool_down_btn = QtWidgets.QPushButton("↓")
-        self.edit_image_tool_up_btn.setFixedWidth(32)
-        self.edit_image_tool_down_btn.setFixedWidth(32)
+        self.edit_image_tool_up_btn = QtWidgets.QPushButton("Up")
+        self.edit_image_tool_down_btn = QtWidgets.QPushButton("Down")
+        self.edit_image_tool_up_btn.setFixedWidth(46)
+        self.edit_image_tool_down_btn.setFixedWidth(56)
+        self.edit_image_tool_up_btn.setStyleSheet(
+            "QPushButton { color: #aeb6bf; font-size: 11px; }"
+        )
+        self.edit_image_tool_down_btn.setStyleSheet(
+            "QPushButton { color: #aeb6bf; font-size: 11px; }"
+        )
         self.edit_image_tool_order_row.addWidget(self.edit_image_tool_up_btn, 0)
         self.edit_image_tool_order_row.addWidget(self.edit_image_tool_down_btn, 0)
         self.edit_image_tool_order_row.addStretch(1)
-        edit_layout.addLayout(self.edit_image_tool_order_row)
+        self.edit_image_tools_header.addWidget(self.edit_image_tool_up_btn, 0)
+        self.edit_image_tools_header.addWidget(self.edit_image_tool_down_btn, 0)
         self.edit_image_tool_up_btn.setVisible(False)
         self.edit_image_tool_down_btn.setVisible(False)
+        self.edit_image_tool_add_btn.setVisible(False)
         self.edit_image_tool_list.currentRowChanged.connect(self._refresh_tool_stack_row_selection)
 
         self.edit_image_adjust_label = QtWidgets.QLabel("Image Adjustments")
         self.edit_image_adjust_label.setStyleSheet(muted_text_style())
         self.edit_image_adjust_label.setVisible(False)
-        edit_layout.addWidget(self.edit_image_adjust_label, 0)
+        self.edit_tool_stack_layout.addWidget(self.edit_image_adjust_label, 0)
 
         self.edit_image_adjust_brightness_row = QtWidgets.QHBoxLayout()
         self.edit_image_adjust_brightness_title = QtWidgets.QLabel("Brightness")
         self.edit_image_adjust_brightness_title.setStyleSheet(muted_text_style())
-        self.edit_image_adjust_brightness_value = QtWidgets.QLabel("0.00")
-        self.edit_image_adjust_brightness_value.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_brightness_value = QtWidgets.QDoubleSpinBox()
+        self.edit_image_adjust_brightness_value.setRange(-1.0, 1.0)
+        self.edit_image_adjust_brightness_value.setDecimals(2)
+        self.edit_image_adjust_brightness_value.setSingleStep(0.05)
+        self.edit_image_adjust_brightness_value.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_image_adjust_brightness_value.setKeyboardTracking(False)
+        self.edit_image_adjust_brightness_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_image_adjust_brightness_value.setFixedWidth(70)
         self.edit_image_adjust_brightness_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_image_adjust_brightness_slider.setRange(-100, 100)
         self.edit_image_adjust_brightness_slider.setValue(0)
         self.edit_image_adjust_brightness_row.addWidget(self.edit_image_adjust_brightness_title, 0)
         self.edit_image_adjust_brightness_row.addWidget(self.edit_image_adjust_brightness_slider, 1)
         self.edit_image_adjust_brightness_row.addWidget(self.edit_image_adjust_brightness_value, 0)
-        edit_layout.addLayout(self.edit_image_adjust_brightness_row)
+        self.edit_tool_stack_layout.addLayout(self.edit_image_adjust_brightness_row)
 
         self.edit_image_adjust_contrast_row = QtWidgets.QHBoxLayout()
         self.edit_image_adjust_contrast_title = QtWidgets.QLabel("Contrast")
         self.edit_image_adjust_contrast_title.setStyleSheet(muted_text_style())
-        self.edit_image_adjust_contrast_value = QtWidgets.QLabel("1.00")
-        self.edit_image_adjust_contrast_value.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_contrast_value = QtWidgets.QDoubleSpinBox()
+        self.edit_image_adjust_contrast_value.setRange(0.0, 2.0)
+        self.edit_image_adjust_contrast_value.setDecimals(2)
+        self.edit_image_adjust_contrast_value.setSingleStep(0.05)
+        self.edit_image_adjust_contrast_value.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_image_adjust_contrast_value.setKeyboardTracking(False)
+        self.edit_image_adjust_contrast_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_image_adjust_contrast_value.setFixedWidth(70)
         self.edit_image_adjust_contrast_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_image_adjust_contrast_slider.setRange(0, 200)
         self.edit_image_adjust_contrast_slider.setValue(100)
         self.edit_image_adjust_contrast_row.addWidget(self.edit_image_adjust_contrast_title, 0)
         self.edit_image_adjust_contrast_row.addWidget(self.edit_image_adjust_contrast_slider, 1)
         self.edit_image_adjust_contrast_row.addWidget(self.edit_image_adjust_contrast_value, 0)
-        edit_layout.addLayout(self.edit_image_adjust_contrast_row)
+        self.edit_tool_stack_layout.addLayout(self.edit_image_adjust_contrast_row)
 
         self.edit_image_adjust_saturation_row = QtWidgets.QHBoxLayout()
         self.edit_image_adjust_saturation_title = QtWidgets.QLabel("Saturation")
         self.edit_image_adjust_saturation_title.setStyleSheet(muted_text_style())
-        self.edit_image_adjust_saturation_value = QtWidgets.QLabel("1.00")
-        self.edit_image_adjust_saturation_value.setStyleSheet(muted_text_style())
+        self.edit_image_adjust_saturation_value = QtWidgets.QDoubleSpinBox()
+        self.edit_image_adjust_saturation_value.setRange(0.0, 2.0)
+        self.edit_image_adjust_saturation_value.setDecimals(2)
+        self.edit_image_adjust_saturation_value.setSingleStep(0.05)
+        self.edit_image_adjust_saturation_value.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_image_adjust_saturation_value.setKeyboardTracking(False)
+        self.edit_image_adjust_saturation_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_image_adjust_saturation_value.setFixedWidth(70)
         self.edit_image_adjust_saturation_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_image_adjust_saturation_slider.setRange(0, 200)
         self.edit_image_adjust_saturation_slider.setValue(100)
         self.edit_image_adjust_saturation_row.addWidget(self.edit_image_adjust_saturation_title, 0)
         self.edit_image_adjust_saturation_row.addWidget(self.edit_image_adjust_saturation_slider, 1)
         self.edit_image_adjust_saturation_row.addWidget(self.edit_image_adjust_saturation_value, 0)
-        edit_layout.addLayout(self.edit_image_adjust_saturation_row)
+        self.edit_tool_stack_layout.addLayout(self.edit_image_adjust_saturation_row)
 
         self.edit_image_vibrance_row = QtWidgets.QHBoxLayout()
         self.edit_image_vibrance_title = QtWidgets.QLabel("Vibrance")
         self.edit_image_vibrance_title.setStyleSheet(muted_text_style())
-        self.edit_image_vibrance_value = QtWidgets.QLabel("0.00")
-        self.edit_image_vibrance_value.setStyleSheet(muted_text_style())
+        self.edit_image_vibrance_value = QtWidgets.QDoubleSpinBox()
+        self.edit_image_vibrance_value.setRange(-1.0, 1.0)
+        self.edit_image_vibrance_value.setDecimals(2)
+        self.edit_image_vibrance_value.setSingleStep(0.05)
+        self.edit_image_vibrance_value.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_image_vibrance_value.setKeyboardTracking(False)
+        self.edit_image_vibrance_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_image_vibrance_value.setFixedWidth(70)
         self.edit_image_vibrance_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_image_vibrance_slider.setRange(-100, 100)
         self.edit_image_vibrance_slider.setValue(0)
         self.edit_image_vibrance_row.addWidget(self.edit_image_vibrance_title, 0)
         self.edit_image_vibrance_row.addWidget(self.edit_image_vibrance_slider, 1)
         self.edit_image_vibrance_row.addWidget(self.edit_image_vibrance_value, 0)
-        edit_layout.addLayout(self.edit_image_vibrance_row)
+        self.edit_tool_stack_layout.addLayout(self.edit_image_vibrance_row)
 
         self.edit_crop_label = QtWidgets.QLabel("Crop")
         self.edit_crop_label.setStyleSheet(muted_text_style())
         self.edit_crop_label.setVisible(False)
-        edit_layout.addWidget(self.edit_crop_label, 0)
+        self.edit_tool_stack_layout.addWidget(self.edit_crop_label, 0)
 
         self.edit_crop_left_row = QtWidgets.QHBoxLayout()
         self.edit_crop_left_title = QtWidgets.QLabel("Left")
         self.edit_crop_left_title.setStyleSheet(muted_text_style())
-        self.edit_crop_left_value = QtWidgets.QLabel("0%")
-        self.edit_crop_left_value.setStyleSheet(muted_text_style())
+        self.edit_crop_left_value = QtWidgets.QDoubleSpinBox()
+        self.edit_crop_left_value.setRange(0.0, 90.0)
+        self.edit_crop_left_value.setDecimals(0)
+        self.edit_crop_left_value.setSingleStep(1.0)
+        self.edit_crop_left_value.setSuffix("%")
+        self.edit_crop_left_value.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_crop_left_value.setKeyboardTracking(False)
+        self.edit_crop_left_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_crop_left_value.setFixedWidth(74)
         self.edit_crop_left_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_crop_left_slider.setRange(0, 90)
         self.edit_crop_left_slider.setValue(0)
         self.edit_crop_left_row.addWidget(self.edit_crop_left_title, 0)
         self.edit_crop_left_row.addWidget(self.edit_crop_left_slider, 1)
         self.edit_crop_left_row.addWidget(self.edit_crop_left_value, 0)
-        edit_layout.addLayout(self.edit_crop_left_row)
+        self.edit_tool_stack_layout.addLayout(self.edit_crop_left_row)
 
         self.edit_crop_right_row = QtWidgets.QHBoxLayout()
         self.edit_crop_right_title = QtWidgets.QLabel("Right")
         self.edit_crop_right_title.setStyleSheet(muted_text_style())
-        self.edit_crop_right_value = QtWidgets.QLabel("0%")
-        self.edit_crop_right_value.setStyleSheet(muted_text_style())
+        self.edit_crop_right_value = QtWidgets.QDoubleSpinBox()
+        self.edit_crop_right_value.setRange(0.0, 90.0)
+        self.edit_crop_right_value.setDecimals(0)
+        self.edit_crop_right_value.setSingleStep(1.0)
+        self.edit_crop_right_value.setSuffix("%")
+        self.edit_crop_right_value.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_crop_right_value.setKeyboardTracking(False)
+        self.edit_crop_right_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_crop_right_value.setFixedWidth(74)
         self.edit_crop_right_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_crop_right_slider.setRange(0, 90)
         self.edit_crop_right_slider.setValue(0)
         self.edit_crop_right_row.addWidget(self.edit_crop_right_title, 0)
         self.edit_crop_right_row.addWidget(self.edit_crop_right_slider, 1)
         self.edit_crop_right_row.addWidget(self.edit_crop_right_value, 0)
-        edit_layout.addLayout(self.edit_crop_right_row)
+        self.edit_tool_stack_layout.addLayout(self.edit_crop_right_row)
 
         self.edit_crop_top_row = QtWidgets.QHBoxLayout()
         self.edit_crop_top_title = QtWidgets.QLabel("Top")
         self.edit_crop_top_title.setStyleSheet(muted_text_style())
-        self.edit_crop_top_value = QtWidgets.QLabel("0%")
-        self.edit_crop_top_value.setStyleSheet(muted_text_style())
+        self.edit_crop_top_value = QtWidgets.QDoubleSpinBox()
+        self.edit_crop_top_value.setRange(0.0, 90.0)
+        self.edit_crop_top_value.setDecimals(0)
+        self.edit_crop_top_value.setSingleStep(1.0)
+        self.edit_crop_top_value.setSuffix("%")
+        self.edit_crop_top_value.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_crop_top_value.setKeyboardTracking(False)
+        self.edit_crop_top_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_crop_top_value.setFixedWidth(74)
         self.edit_crop_top_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_crop_top_slider.setRange(0, 90)
         self.edit_crop_top_slider.setValue(0)
         self.edit_crop_top_row.addWidget(self.edit_crop_top_title, 0)
         self.edit_crop_top_row.addWidget(self.edit_crop_top_slider, 1)
         self.edit_crop_top_row.addWidget(self.edit_crop_top_value, 0)
-        edit_layout.addLayout(self.edit_crop_top_row)
+        self.edit_tool_stack_layout.addLayout(self.edit_crop_top_row)
 
         self.edit_crop_bottom_row = QtWidgets.QHBoxLayout()
         self.edit_crop_bottom_title = QtWidgets.QLabel("Bottom")
         self.edit_crop_bottom_title.setStyleSheet(muted_text_style())
-        self.edit_crop_bottom_value = QtWidgets.QLabel("0%")
-        self.edit_crop_bottom_value.setStyleSheet(muted_text_style())
+        self.edit_crop_bottom_value = QtWidgets.QDoubleSpinBox()
+        self.edit_crop_bottom_value.setRange(0.0, 90.0)
+        self.edit_crop_bottom_value.setDecimals(0)
+        self.edit_crop_bottom_value.setSingleStep(1.0)
+        self.edit_crop_bottom_value.setSuffix("%")
+        self.edit_crop_bottom_value.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edit_crop_bottom_value.setKeyboardTracking(False)
+        self.edit_crop_bottom_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.edit_crop_bottom_value.setFixedWidth(74)
         self.edit_crop_bottom_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.edit_crop_bottom_slider.setRange(0, 90)
         self.edit_crop_bottom_slider.setValue(0)
         self.edit_crop_bottom_row.addWidget(self.edit_crop_bottom_title, 0)
         self.edit_crop_bottom_row.addWidget(self.edit_crop_bottom_slider, 1)
         self.edit_crop_bottom_row.addWidget(self.edit_crop_bottom_value, 0)
-        edit_layout.addLayout(self.edit_crop_bottom_row)
+        self.edit_tool_stack_layout.addLayout(self.edit_crop_bottom_row)
 
         self.edit_image_adjust_reset_btn = QtWidgets.QPushButton("Reset Adjustments")
         self.edit_image_adjust_reset_btn.setVisible(False)
-        edit_layout.addWidget(self.edit_image_adjust_reset_btn, 0)
+        self.edit_tool_stack_layout.addWidget(self.edit_image_adjust_reset_btn, 0)
+
+        self.edit_tool_stack_section.setVisible(False)
 
         self.set_image_adjust_controls_visible(False)
 
@@ -1315,6 +1438,23 @@ class BoardPage(QtWidgets.QWidget):
         self.grid_toggle.toggled.connect(self.view.set_show_grid)
         self.groups_toggle.toggled.connect(self.groups_panel.setVisible)
         self.edit_close_btn.clicked.connect(lambda: self.set_edit_panel_visible(False))
+        self.edit_image_tool_add_btn.clicked.connect(
+            lambda: self.show_tool_add_menu(
+                self.edit_image_tool_add_btn.mapToGlobal(
+                    QtCore.QPoint(0, self.edit_image_tool_add_btn.height())
+                )
+            )
+        )
+
+        self._bind_slider_to_input(self.edit_exr_gamma_slider, self.edit_exr_gamma_input, 10.0)
+        self._bind_slider_to_input(self.edit_image_adjust_brightness_slider, self.edit_image_adjust_brightness_value, 100.0)
+        self._bind_slider_to_input(self.edit_image_adjust_contrast_slider, self.edit_image_adjust_contrast_value, 100.0)
+        self._bind_slider_to_input(self.edit_image_adjust_saturation_slider, self.edit_image_adjust_saturation_value, 100.0)
+        self._bind_slider_to_input(self.edit_image_vibrance_slider, self.edit_image_vibrance_value, 100.0)
+        self._bind_slider_to_input(self.edit_crop_left_slider, self.edit_crop_left_value, 1.0)
+        self._bind_slider_to_input(self.edit_crop_right_slider, self.edit_crop_right_value, 1.0)
+        self._bind_slider_to_input(self.edit_crop_top_slider, self.edit_crop_top_value, 1.0)
+        self._bind_slider_to_input(self.edit_crop_bottom_slider, self.edit_crop_bottom_value, 1.0)
 
         self._undo_shortcut = QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Undo, self)
         self._undo_shortcut.activated.connect(self._on_undo)
@@ -1396,7 +1536,7 @@ class BoardPage(QtWidgets.QWidget):
     def show_tool_add_menu(self, global_pos: QtCore.QPoint) -> bool:
         if not self.edit_panel.isVisible():
             return False
-        if not self.edit_image_tool_list.isVisible():
+        if not self.edit_tool_stack_section.isVisible():
             return False
         if self.edit_image_tool_add_combo.count() <= 0:
             return False
@@ -1486,6 +1626,7 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_exr_srgb_check.setVisible(bool(visible))
         self.edit_exr_gamma_label.setVisible(bool(visible))
         self.edit_exr_gamma_slider.setVisible(bool(visible))
+        self.edit_exr_gamma_input.setVisible(bool(visible))
 
     def current_exr_gamma(self) -> float:
         return float(self.edit_exr_gamma_slider.value()) / 10.0
@@ -1495,12 +1636,45 @@ class BoardPage(QtWidgets.QWidget):
 
     def set_exr_gamma_label(self, gamma: float) -> None:
         self.edit_exr_gamma_label.setText(f"Gamma: {gamma:.1f}")
+        self._set_spinbox_value(self.edit_exr_gamma_input, gamma)
+
+    def _set_spinbox_value(self, spinbox: QtWidgets.QDoubleSpinBox, value: float) -> None:
+        spinbox.blockSignals(True)
+        spinbox.setValue(float(value))
+        spinbox.blockSignals(False)
+
+    def _set_slider_value(self, slider: QtWidgets.QSlider, value: float) -> None:
+        target = int(round(float(value)))
+        if slider.value() != target:
+            slider.setValue(target)
+
+    def _bind_slider_to_input(
+        self,
+        slider: QtWidgets.QSlider,
+        spinbox: QtWidgets.QDoubleSpinBox,
+        scale: float,
+    ) -> None:
+        factor = float(scale) if abs(float(scale)) > 1e-9 else 1.0
+        slider.valueChanged.connect(
+            lambda raw_value, current_spinbox=spinbox, current_factor=factor: self._set_spinbox_value(
+                current_spinbox,
+                float(raw_value) / current_factor,
+            )
+        )
+        spinbox.valueChanged.connect(
+            lambda raw_value, current_slider=slider, current_factor=factor: self._set_slider_value(
+                current_slider,
+                float(raw_value) * current_factor,
+            )
+        )
 
     def set_image_adjust_controls_visible(self, visible: bool) -> None:
         controls = [
+            self.edit_tool_stack_section,
             self.edit_image_tools_label,
             self.edit_image_tool_empty,
             self.edit_image_tool_list,
+            self.edit_image_tool_add_btn,
             self.edit_image_tool_up_btn,
             self.edit_image_tool_down_btn,
             self.edit_image_adjust_label,
@@ -1534,8 +1708,6 @@ class BoardPage(QtWidgets.QWidget):
         for widget in controls:
             widget.setVisible(bool(visible))
         self.edit_image_tool_add_combo.setVisible(False)
-        self.edit_image_tool_add_row.setEnabled(bool(visible))
-        self.edit_image_tool_order_row.setEnabled(bool(visible))
         if visible:
             self.set_active_image_tool_panel("")
 
@@ -1594,15 +1766,15 @@ class BoardPage(QtWidgets.QWidget):
         return float(self.edit_image_adjust_saturation_slider.value()) / 100.0
 
     def set_image_adjust_labels(self, brightness: float, contrast: float, saturation: float) -> None:
-        self.edit_image_adjust_brightness_value.setText(f"{brightness:+.2f}")
-        self.edit_image_adjust_contrast_value.setText(f"{contrast:.2f}")
-        self.edit_image_adjust_saturation_value.setText(f"{saturation:.2f}")
+        self._set_spinbox_value(self.edit_image_adjust_brightness_value, brightness)
+        self._set_spinbox_value(self.edit_image_adjust_contrast_value, contrast)
+        self._set_spinbox_value(self.edit_image_adjust_saturation_value, saturation)
 
     def set_image_vibrance_value(self, amount: float) -> None:
         self.edit_image_vibrance_slider.blockSignals(True)
         self.edit_image_vibrance_slider.setValue(int(round(float(amount) * 100.0)))
         self.edit_image_vibrance_slider.blockSignals(False)
-        self.edit_image_vibrance_value.setText(f"{float(amount):+.2f}")
+        self._set_spinbox_value(self.edit_image_vibrance_value, float(amount))
 
     def current_image_vibrance(self) -> float:
         return float(self.edit_image_vibrance_slider.value()) / 100.0
@@ -1626,10 +1798,10 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_crop_top_slider.blockSignals(False)
         self.edit_crop_right_slider.blockSignals(False)
         self.edit_crop_bottom_slider.blockSignals(False)
-        self.edit_crop_left_value.setText(f"{int(round(float(left) * 100.0))}%")
-        self.edit_crop_top_value.setText(f"{int(round(float(top) * 100.0))}%")
-        self.edit_crop_right_value.setText(f"{int(round(float(right) * 100.0))}%")
-        self.edit_crop_bottom_value.setText(f"{int(round(float(bottom) * 100.0))}%")
+        self._set_spinbox_value(self.edit_crop_left_value, int(round(float(left) * 100.0)))
+        self._set_spinbox_value(self.edit_crop_top_value, int(round(float(top) * 100.0)))
+        self._set_spinbox_value(self.edit_crop_right_value, int(round(float(right) * 100.0)))
+        self._set_spinbox_value(self.edit_crop_bottom_value, int(round(float(bottom) * 100.0)))
 
     def current_image_crop_settings(self) -> tuple[float, float, float, float]:
         return (
@@ -1773,19 +1945,19 @@ class BoardPage(QtWidgets.QWidget):
             self.edit_image_adjust_brightness_slider.blockSignals(True)
             self.edit_image_adjust_brightness_slider.setValue(int(round(numeric * 100.0)))
             self.edit_image_adjust_brightness_slider.blockSignals(False)
-            self.edit_image_adjust_brightness_value.setText(f"{numeric:+.2f}")
+            self._set_spinbox_value(self.edit_image_adjust_brightness_value, numeric)
             return
         if key == "contrast":
             self.edit_image_adjust_contrast_slider.blockSignals(True)
             self.edit_image_adjust_contrast_slider.setValue(int(round(numeric * 100.0)))
             self.edit_image_adjust_contrast_slider.blockSignals(False)
-            self.edit_image_adjust_contrast_value.setText(f"{numeric:.2f}")
+            self._set_spinbox_value(self.edit_image_adjust_contrast_value, numeric)
             return
         if key == "saturation":
             self.edit_image_adjust_saturation_slider.blockSignals(True)
             self.edit_image_adjust_saturation_slider.setValue(int(round(numeric * 100.0)))
             self.edit_image_adjust_saturation_slider.blockSignals(False)
-            self.edit_image_adjust_saturation_value.setText(f"{numeric:.2f}")
+            self._set_spinbox_value(self.edit_image_adjust_saturation_value, numeric)
             return
         if key == "amount":
             self.set_image_vibrance_value(numeric)
@@ -1803,7 +1975,7 @@ class BoardPage(QtWidgets.QWidget):
         slider.blockSignals(True)
         slider.setValue(int(round(numeric * 100.0)))
         slider.blockSignals(False)
-        label.setText(f"{int(round(numeric * 100.0))}%")
+        self._set_spinbox_value(label, int(round(numeric * 100.0)))
 
     def show_edit_preview_image(self, pixmap: QtGui.QPixmap, label: str = "") -> None:
         self.edit_preview_stack.setCurrentWidget(self.edit_image_preview)
