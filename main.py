@@ -593,6 +593,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_onboarding_details = self.asset_page.asset_onboarding_details
         self.asset_onboarding_detect_btn = self.asset_page.asset_onboarding_detect_btn
         self.asset_onboarding_default_btn = self.asset_page.asset_onboarding_default_btn
+        self.asset_onboarding_merge_library_btn = self.asset_page.asset_onboarding_merge_library_btn
+        self.asset_onboarding_manual_btn = self.asset_page.asset_onboarding_manual_btn
         self.asset_onboarding_rescan_btn = self.asset_page.asset_onboarding_rescan_btn
         self.asset_path_label = self.asset_page.asset_path_label
         self.asset_grid = self.asset_page.asset_grid
@@ -746,6 +748,10 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_fetch_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_onboarding_detect_btn.clicked.connect(self.asset_controller.accept_detected_layout)
         self.asset_onboarding_default_btn.clicked.connect(self.asset_controller.accept_default_layout)
+        self.asset_onboarding_merge_library_btn.clicked.connect(
+            self.asset_controller.accept_detected_layout_with_library_merged
+        )
+        self.asset_onboarding_manual_btn.clicked.connect(self.asset_controller.open_manual_layout_mapper)
         self.asset_onboarding_rescan_btn.clicked.connect(self.asset_controller.redetect_layout)
 
         self.client_refresh_btn.clicked.connect(self.client_controller.refresh_client_catalog)

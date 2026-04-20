@@ -1,5 +1,5 @@
 {
-  "projects_dir": "C:\\Users\\justi\\Documents\\HoudiniProjects",
+  "projects_dir": "C:\\Users\\justi\\Desktop\\SK_launcher\\asset_layout_sandbox",
   "template_hip": "C:\\Users\\justi\\Desktop\\SK_launcher\\untitled.hipnc",
   "new_hip_pattern": "{projectName}_001.hipnc",
   "use_file_association": false,
@@ -387,6 +387,221 @@
             "published USD files",
             "task/context folders",
             "representation-only folders"
+          ]
+        }
+      ],
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish"
+      ]
+    },
+    "C:\\Users\\justi\\Desktop\\SK_launcher\\asset_layout_sandbox\\library_only_vendor_drop": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "modeling",
+        "lookdev",
+        "layout",
+        "animation",
+        "vfx",
+        "lighting"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "vendor_drop_2026"
+        ]
+      },
+      "entity_sources": [
+        {
+          "path": "vendor_drop_2026",
+          "entity_type": "asset",
+          "role": "library_asset",
+          "confidence": "high",
+          "evidence": [
+            "direct source geometry files",
+            "texture folders",
+            "texture map naming"
+          ]
+        }
+      ],
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish",
+            "root"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish",
+        "root"
+      ]
+    },
+    "C:\\Users\\justi\\Desktop\\SK_launcher\\asset_layout_sandbox\\shots_only_sequence": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "animation",
+        "layout"
+      ],
+      "entity_roots": {
+        "shot": [
+          "seq"
+        ],
+        "asset": [
+          "assets"
+        ]
+      },
+      "entity_sources": [
+        {
+          "path": "seq",
+          "entity_type": "shot",
+          "role": "shot",
+          "confidence": "high",
+          "evidence": [
+            "entity publish folders",
+            "entity preview folders",
+            "published USD files",
+            "task/context folders",
+            "shot-like child names",
+            "review media",
+            "representation-only folders"
+          ]
+        }
+      ],
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "review"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish"
+      ]
+    },
+    "C:\\Users\\justi\\Desktop\\SK_launcher\\asset_layout_sandbox\\messy_hybrid": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "lookdev",
+        "modeling"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "dropbox_from_vendor",
+          "builds"
+        ]
+      },
+      "entity_sources": [
+        {
+          "path": "dropbox_from_vendor",
+          "entity_type": "asset",
+          "role": "library_asset",
+          "confidence": "high",
+          "evidence": [
+            "direct source geometry files",
+            "texture folders",
+            "texture map naming"
+          ]
+        },
+        {
+          "path": "builds",
+          "entity_type": "asset",
+          "role": "pipeline_asset",
+          "confidence": "high",
+          "evidence": [
+            "entity publish folders",
+            "entity preview folders",
+            "published USD files",
+            "task/context folders"
           ]
         }
       ],

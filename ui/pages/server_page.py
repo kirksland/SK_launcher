@@ -155,6 +155,22 @@ class AssetManagerPage(QtWidgets.QWidget):
         onboarding_actions.addWidget(self.asset_onboarding_detect_btn, 0)
         self.asset_onboarding_default_btn = QtWidgets.QPushButton("Use Default Layout")
         onboarding_actions.addWidget(self.asset_onboarding_default_btn, 0)
+        self.asset_onboarding_merge_library_btn = QtWidgets.QToolButton()
+        self.asset_onboarding_merge_library_btn.setText("Merge Library into Assets")
+        self.asset_onboarding_merge_library_btn.setAutoRaise(True)
+        self.asset_onboarding_merge_library_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
+        self.asset_onboarding_merge_library_btn.setToolTip(
+            "Use this when source files are part of your working asset list, not a separate library."
+        )
+        onboarding_actions.addWidget(self.asset_onboarding_merge_library_btn, 0)
+        self.asset_onboarding_manual_btn = QtWidgets.QToolButton()
+        self.asset_onboarding_manual_btn.setText("Manual Map")
+        self.asset_onboarding_manual_btn.setAutoRaise(True)
+        self.asset_onboarding_manual_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
+        self.asset_onboarding_manual_btn.setToolTip(
+            "Manually assign project folders to Shots, Assets or Library."
+        )
+        onboarding_actions.addWidget(self.asset_onboarding_manual_btn, 0)
         self.asset_onboarding_rescan_btn = QtWidgets.QToolButton()
         self.asset_onboarding_rescan_btn.setText("Re-scan")
         self.asset_onboarding_rescan_btn.setAutoRaise(True)
