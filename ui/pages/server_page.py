@@ -16,7 +16,7 @@ from ui.utils.styles import (
 from video.player import VideoController
 
 
-class _AssetVersionsList(QtWidgets.QListWidget):
+class _AssetInventoryList(QtWidgets.QListWidget):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.setDragEnabled(True)
@@ -440,7 +440,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_video_layout.addLayout(controls)
         inspector_layout.addWidget(self.asset_video_box, 1)
 
-        versions_panel = self._make_panel("Versions", "")
+        versions_panel = self._make_panel("Inventory", "")
         versions_layout = versions_panel.layout()  # type: ignore[assignment]
         versions_header = QtWidgets.QHBoxLayout()
         self.asset_context_combo = QtWidgets.QComboBox()
@@ -450,12 +450,12 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_context_combo.setCurrentText("All")
         versions_header.addWidget(self.asset_context_combo, 0)
         versions_header.addStretch(1)
-        self.asset_versions_hint = QtWidgets.QLabel("Published bundles")
+        self.asset_versions_hint = QtWidgets.QLabel("Inventory")
         self.asset_versions_hint.setStyleSheet(muted_text_style(size_px=11))
         self.asset_versions_hint.setVisible(False)
         versions_header.addWidget(self.asset_versions_hint, 0)
         versions_layout.addLayout(versions_header)
-        self.asset_versions_list = _AssetVersionsList()
+        self.asset_versions_list = _AssetInventoryList()
         versions_layout.addWidget(self.asset_versions_list, 1)
         inspector_layout.addWidget(versions_panel, 1)
 

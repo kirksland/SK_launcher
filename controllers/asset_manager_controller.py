@@ -10,11 +10,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from core.asset_detection import DetectedProjectLayout, detect_project_layout
 from core.asset_details import (
     build_asset_meta_text,
-    empty_versions_message,
     normalize_list_context,
     pick_best_context,
     read_history_note,
 )
+from core.asset_inventory import build_entity_inventory
 from core.asset_browser import (
     entity_prefixes,
     filter_entity_dirs,
@@ -27,103 +27,9 @@ from core.metadata import load_metadata
 from core.settings import normalize_asset_schema, save_settings
 from core.watchers import update_watcher_paths
 from ui.utils.thumbnails import build_thumbnail_pixmap
+from ui.dialogs.asset_layout_mapper_dialog import AssetLayoutMapperDialog
+from ui.widgets.asset_inventory_renderer import AssetInventoryRenderer
 from ui.widgets.asset_version_row import AssetVersionRow
-from core.versions import group_asset_versions
-
-
-LIBRARY_SOURCE_EXTS = {
-    ".abc",
-    ".blend",
-    ".fbx",
-    ".gltf",
-    ".glb",
-    ".json",
-    ".mtl",
-    ".obj",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".exr",
-    ".tif",
-    ".tiff",
-    ".txt",
-}
-
-
-class _ManualLayoutDropList(QtWidgets.QListWidget):
-    def __init__(self, project_root: Path, title: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
-        super().__init__(parent)
-        self.project_root = project_root.resolve()
-        self.setAcceptDrops(True)
-        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.DropOnly)
-        self.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.setAlternatingRowColors(True)
-        self.setToolTip(f"Drop the parent folders that should appear as {title}.")
-
-    def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # type: ignore[override]
-        if self._mime_paths(event.mimeData()):
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event: QtGui.QDragMoveEvent) -> None:  # type: ignore[override]
-        if self._mime_paths(event.mimeData()):
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event: QtGui.QDropEvent) -> None:  # type: ignore[override]
-        accepted = False
-        for path in self._mime_paths(event.mimeData()):
-            accepted = self.add_folder(path) or accepted
-        if accepted:
-            event.acceptProposedAction()
-            return
-        super().dropEvent(event)
-
-    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
-        if event.key() in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace):
-            for item in self.selectedItems():
-                self.takeItem(self.row(item))
-            return
-        super().keyPressEvent(event)
-
-    def add_folder(self, path: Path) -> bool:
-        try:
-            resolved = path.resolve()
-            relative = resolved.relative_to(self.project_root)
-        except (OSError, ValueError):
-            return False
-        if not resolved.is_dir() or not relative.parts:
-            return False
-        rel_text = str(relative).replace("\\", "/")
-        for index in range(self.count()):
-            if self.item(index).data(QtCore.Qt.ItemDataRole.UserRole) == rel_text:
-                return False
-        item = QtWidgets.QListWidgetItem(rel_text)
-        item.setData(QtCore.Qt.ItemDataRole.UserRole, rel_text)
-        self.addItem(item)
-        return True
-
-    def relative_paths(self) -> list[str]:
-        return [
-            str(self.item(index).data(QtCore.Qt.ItemDataRole.UserRole))
-            for index in range(self.count())
-            if self.item(index).data(QtCore.Qt.ItemDataRole.UserRole)
-        ]
-
-    @staticmethod
-    def _mime_paths(mime: QtCore.QMimeData) -> list[Path]:
-        paths: list[Path] = []
-        for url in mime.urls():
-            if url.isLocalFile():
-                paths.append(Path(url.toLocalFile()))
-        if not paths and mime.hasText():
-            for line in mime.text().splitlines():
-                text = line.strip()
-                if text:
-                    paths.append(Path(text))
-        return paths
 
 
 class AssetManagerController:
@@ -549,7 +455,6 @@ class AssetManagerController:
             )
         record = self._entity_record_for_path(entity_dir)
         layout = getattr(self.w, "_asset_resolved_layout", None)
-        is_library_entity = bool(record and record.role == "library_asset")
         self.w._preview_images = (
             layout.representation_paths(record, "preview_image") if layout and record is not None else []
         )
@@ -581,106 +486,28 @@ class AssetManagerController:
         self.w.asset_meta.setText(build_asset_meta_text(owner, status, context, entity_dir.name))
 
         self.w.asset_versions_list.clear()
-        if is_library_entity:
-            self._populate_library_source_files(entity_dir)
-            self.w.asset_history_list.clear()
-            self.w.asset_history_list.addItem(read_history_note(entity_dir))
-            return
-
-        usd_versions = layout.representation_paths(record, "usd", context=list_context) if layout and record else []
-        video_versions = (
-            layout.representation_paths(record, "review_video", context=list_context)
-            if layout and record and self.w._asset_current_entity_type == "shot"
-            else []
+        inventory = build_entity_inventory(
+            entity_dir=entity_dir,
+            entity_type=self.w._asset_current_entity_type,
+            record=record,
+            layout=layout,
+            context=list_context,
+            context_label=context,
         )
-        image_versions = layout.representation_paths(record, "preview_image") if layout and record else []
-        grouped = group_asset_versions(usd_versions, video_versions, image_versions)
-        if hasattr(self.w.asset_page, "asset_versions_hint"):
-            self.w.asset_page.asset_versions_hint.setText(
-                f"{len(grouped)} bundle(s) in {context}" if grouped else f"No bundles in {context}"
-            )
-        if grouped:
-            for base_name, entries in grouped.items():
-                row = AssetVersionRow(base_name, entries, parent=self.w.asset_versions_list)
-                item = QtWidgets.QListWidgetItem()
-                item.setSizeHint(QtCore.QSize(280, 40))
-                self.w.asset_versions_list.addItem(item)
-                self.w.asset_versions_list.setItemWidget(item, row)
+        inventory_renderer = AssetInventoryRenderer(
+            self.w.asset_versions_list,
+            self.w.asset_page.asset_versions_hint if hasattr(self.w.asset_page, "asset_versions_hint") else None,
+        )
+        first_video = inventory_renderer.render(
+            inventory,
+            on_selected_path=self._sync_asset_version_preview,
+        )
 
-                def sync_item_data(
-                    _row: AssetVersionRow = row,
-                    _item: QtWidgets.QListWidgetItem = item,
-                ) -> None:
-                    path, kind = _row.selected_path()
-                    if path is None:
-                        _item.setData(QtCore.Qt.ItemDataRole.UserRole, "")
-                        _item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, None)
-                        return
-                    _item.setData(QtCore.Qt.ItemDataRole.UserRole, str(path))
-                    _item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, kind)
-
-                def sync_item_data_and_preview(
-                    _row: AssetVersionRow = row,
-                    _item: QtWidgets.QListWidgetItem = item,
-                ) -> None:
-                    sync_item_data(_row, _item)
-                    path, kind = _row.selected_path()
-                    if path is not None:
-                        self._sync_asset_version_preview(path, kind)
-
-                row.selection_changed.connect(sync_item_data_and_preview)
-                sync_item_data()
-        else:
-            self.w.asset_versions_list.addItem(empty_versions_message(self.w._asset_current_entity_type))
-
-        if not self.w._preview_images and video_versions:
-            self.w.asset_video_controller.preview_first_frame(video_versions[0])
+        if not self.w._preview_images and first_video is not None:
+            self.w.asset_video_controller.preview_first_frame(first_video)
 
         self.w.asset_history_list.clear()
         self.w.asset_history_list.addItem(read_history_note(entity_dir))
-
-    def _populate_library_source_files(self, entity_dir: Path) -> None:
-        files = self._collect_library_source_files(entity_dir)
-        if hasattr(self.w.asset_page, "asset_versions_hint"):
-            self.w.asset_page.asset_versions_hint.setText(
-                f"{len(files)} source file(s)" if files else "No source files found"
-            )
-        if not files:
-            self.w.asset_versions_list.addItem(
-                "No source files found in this library item.\nCheck the manual mapping if this folder is not the real asset root."
-            )
-            return
-        for path in files:
-            try:
-                rel_path = path.relative_to(entity_dir)
-            except ValueError:
-                rel_path = path
-            item = QtWidgets.QListWidgetItem(f"{rel_path.as_posix()}\n{path.suffix.upper().lstrip('.') or 'FILE'}")
-            item.setData(QtCore.Qt.ItemDataRole.UserRole, str(path))
-            kind = "image" if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".exr", ".tif", ".tiff"} else "source"
-            item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, kind)
-            item.setToolTip(str(path))
-            self.w.asset_versions_list.addItem(item)
-
-    @staticmethod
-    def _collect_library_source_files(entity_dir: Path) -> list[Path]:
-        if not entity_dir.exists():
-            return []
-        found: list[Path] = []
-        try:
-            for path in entity_dir.rglob("*"):
-                if not path.is_file() or path.suffix.lower() not in LIBRARY_SOURCE_EXTS:
-                    continue
-                found.append(path)
-        except OSError:
-            return []
-
-        def sort_key(path: Path) -> tuple[int, str]:
-            suffix = path.suffix.lower()
-            priority = 0 if suffix in {".fbx", ".obj", ".abc", ".blend", ".gltf", ".glb"} else 1
-            return (priority, path.relative_to(entity_dir).as_posix().lower())
-
-        return sorted(found, key=sort_key)[:200]
 
     def _update_preview_label(self) -> None:
         total = len(getattr(self.w, "_preview_images", []))
@@ -934,123 +761,15 @@ class AssetManagerController:
             else deepcopy(self._effective_project_schema(project_path))
         )
 
-        dialog = QtWidgets.QDialog(self.w)
-        dialog.setWindowTitle(f"Manual Asset Layout: {project_path.name}")
-        dialog.setModal(True)
-        dialog.resize(920, 560)
-
-        root_layout = QtWidgets.QVBoxLayout(dialog)
-        root_layout.setContentsMargins(14, 14, 14, 14)
-        root_layout.setSpacing(10)
-
-        intro = QtWidgets.QLabel(
-            "Drag collection folders from the project tree into Shots, Assets or Library. "
-            "Use parent folders that contain entities, for example a folder that contains many props or shots."
-        )
-        intro.setWordWrap(True)
-        root_layout.addWidget(intro, 0)
-
-        body = QtWidgets.QHBoxLayout()
-        body.setSpacing(12)
-        root_layout.addLayout(body, 1)
-
-        model = QtWidgets.QFileSystemModel(dialog)
-        model.setReadOnly(True)
-        model.setFilter(QtCore.QDir.Filter.AllDirs | QtCore.QDir.Filter.NoDotAndDotDot)
-        model.setRootPath(str(project_path))
-
-        tree = QtWidgets.QTreeView()
-        tree.setModel(model)
-        tree.setRootIndex(model.index(str(project_path)))
-        tree.setHeaderHidden(True)
-        tree.setDragEnabled(True)
-        tree.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        for column in (1, 2, 3):
-            tree.setColumnHidden(column, True)
-        body.addWidget(tree, 2)
-
-        columns = QtWidgets.QWidget()
-        columns_layout = QtWidgets.QVBoxLayout(columns)
-        columns_layout.setContentsMargins(0, 0, 0, 0)
-        columns_layout.setSpacing(8)
-        body.addWidget(columns, 3)
-
-        shots_list = self._manual_mapping_group(columns_layout, project_path, "Shots")
-        assets_list = self._manual_mapping_group(columns_layout, project_path, "Assets")
-        library_list = self._manual_mapping_group(columns_layout, project_path, "Library")
-        self._seed_manual_mapping_lists(project_path, seed_schema, shots_list, assets_list, library_list)
-
-        add_row = QtWidgets.QHBoxLayout()
-        add_row.setSpacing(8)
-        columns_layout.addLayout(add_row)
-
-        def selected_folder() -> Optional[Path]:
-            index = tree.currentIndex()
-            if not index.isValid():
-                return None
-            path = Path(model.filePath(index))
-            return path if path.is_dir() else None
-
-        for label, target in (
-            ("Add Selected to Shots", shots_list),
-            ("Add Selected to Assets", assets_list),
-            ("Add Selected to Library", library_list),
-        ):
-            button = QtWidgets.QPushButton(label)
-            button.clicked.connect(lambda _checked=False, target=target: target.add_folder(selected_folder() or Path()))
-            add_row.addWidget(button)
-
-        cleanup_row = QtWidgets.QHBoxLayout()
-        cleanup_row.setSpacing(8)
-        columns_layout.addLayout(cleanup_row)
-        remove_btn = QtWidgets.QToolButton()
-        remove_btn.setText("Remove Selected")
-        clear_btn = QtWidgets.QToolButton()
-        clear_btn.setText("Clear All")
-        cleanup_row.addWidget(remove_btn, 0)
-        cleanup_row.addWidget(clear_btn, 0)
-        cleanup_row.addStretch(1)
-
-        def remove_selected() -> None:
-            for list_widget in (shots_list, assets_list, library_list):
-                for item in list_widget.selectedItems():
-                    list_widget.takeItem(list_widget.row(item))
-
-        def clear_all() -> None:
-            for list_widget in (shots_list, assets_list, library_list):
-                list_widget.clear()
-
-        remove_btn.clicked.connect(remove_selected)
-        clear_btn.clicked.connect(clear_all)
-
-        buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.StandardButton.Save
-            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
-        )
-        root_layout.addWidget(buttons, 0)
-        buttons.rejected.connect(dialog.reject)
-
-        def save_manual_layout() -> None:
-            schema = self._schema_from_manual_mapping(
-                seed_schema,
-                shots=shots_list.relative_paths(),
-                assets=assets_list.relative_paths(),
-                library=library_list.relative_paths(),
-            )
-            if not schema.get("entity_sources"):
-                QtWidgets.QMessageBox.warning(
-                    dialog,
-                    "Manual Asset Layout",
-                    "Assign at least one folder before saving the manual layout.",
-                )
-                return
-            self._save_project_schema(project_path, schema)
-            dialog.accept()
-            self.set_project_context(project_path)
-            self.set_asset_status("Manual asset layout saved.")
-
-        buttons.accepted.connect(save_manual_layout)
-        dialog.exec()
+        dialog = AssetLayoutMapperDialog(project_path, seed_schema, parent=self.w)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        schema = dialog.schema()
+        if schema is None:
+            return
+        self._save_project_schema(project_path, schema)
+        self.set_project_context(project_path)
+        self.set_asset_status("Manual asset layout saved.")
 
     def accept_detected_layout_with_library_merged(self) -> None:
         project_root = getattr(self.w, "_asset_current_project_root", None)
@@ -1101,96 +820,6 @@ class AssetManagerController:
         if override:
             return normalize_asset_schema(override)
         return normalize_asset_schema(self.w._asset_schema)
-
-    @staticmethod
-    def _manual_mapping_group(
-        parent_layout: QtWidgets.QVBoxLayout,
-        project_root: Path,
-        title: str,
-    ) -> _ManualLayoutDropList:
-        group = QtWidgets.QGroupBox(title)
-        layout = QtWidgets.QVBoxLayout(group)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-        list_widget = _ManualLayoutDropList(project_root, title)
-        list_widget.setMinimumHeight(90)
-        layout.addWidget(list_widget)
-        parent_layout.addWidget(group, 1)
-        return list_widget
-
-    @staticmethod
-    def _seed_manual_mapping_lists(
-        project_root: Path,
-        schema: dict,
-        shots_list: _ManualLayoutDropList,
-        assets_list: _ManualLayoutDropList,
-        library_list: _ManualLayoutDropList,
-    ) -> None:
-        sources = schema.get("entity_sources", [])
-        if isinstance(sources, list) and sources:
-            for source in sources:
-                if not isinstance(source, dict):
-                    continue
-                rel_path = str(source.get("path", "")).strip()
-                if not rel_path:
-                    continue
-                role = str(source.get("role", "")).strip().lower()
-                target = library_list if role == "library_asset" else assets_list
-                if source.get("entity_type") == "shot" or role == "shot":
-                    target = shots_list
-                target.add_folder(project_root.joinpath(*[part for part in rel_path.split("/") if part]))
-            return
-
-        for rel_path in schema.get("entity_roots", {}).get("shot", []):
-            shots_list.add_folder(project_root.joinpath(*[part for part in str(rel_path).split("/") if part]))
-        for rel_path in schema.get("entity_roots", {}).get("asset", []):
-            assets_list.add_folder(project_root.joinpath(*[part for part in str(rel_path).split("/") if part]))
-
-    @staticmethod
-    def _schema_from_manual_mapping(
-        seed_schema: dict,
-        *,
-        shots: list[str],
-        assets: list[str],
-        library: list[str],
-    ) -> dict:
-        schema = deepcopy(seed_schema)
-        sources: list[dict] = []
-        for rel_path in shots:
-            sources.append(
-                {
-                    "path": rel_path,
-                    "entity_type": "shot",
-                    "role": "shot",
-                    "confidence": "high",
-                    "evidence": ["user manual mapping"],
-                }
-            )
-        for rel_path in assets:
-            sources.append(
-                {
-                    "path": rel_path,
-                    "entity_type": "asset",
-                    "role": "pipeline_asset",
-                    "confidence": "high",
-                    "evidence": ["user manual mapping"],
-                }
-            )
-        for rel_path in library:
-            sources.append(
-                {
-                    "path": rel_path,
-                    "entity_type": "asset",
-                    "role": "library_asset",
-                    "confidence": "high",
-                    "evidence": ["user manual mapping"],
-                }
-            )
-        schema["entity_sources"] = sources
-        schema.setdefault("entity_roots", {})
-        schema["entity_roots"]["shot"] = list(shots)
-        schema["entity_roots"]["asset"] = list(dict.fromkeys([*assets, *library]))
-        return schema
 
     def _set_asset_onboarding(self, project_root: Path, detected: DetectedProjectLayout) -> None:
         roots = []

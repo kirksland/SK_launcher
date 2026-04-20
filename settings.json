@@ -640,6 +640,90 @@
       "usd_search": [
         "publish"
       ]
+    },
+    "C:\\Users\\justi\\Desktop\\SK_launcher\\asset_layout_sandbox\\standard_pipeline": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "animation",
+        "layout",
+        "lighting",
+        "lookdev",
+        "modeling"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "assets"
+        ]
+      },
+      "entity_sources": [
+        {
+          "path": "assets",
+          "entity_type": "asset",
+          "role": "pipeline_asset",
+          "confidence": "high",
+          "evidence": [
+            "entity publish folders",
+            "entity preview folders",
+            "published USD files",
+            "task/context folders",
+            "representation-only folders"
+          ]
+        },
+        {
+          "path": "shots",
+          "entity_type": "shot",
+          "role": "shot",
+          "confidence": "high",
+          "evidence": [
+            "entity publish folders",
+            "entity preview folders",
+            "entity work folders",
+            "published USD files",
+            "task/context folders",
+            "shot-like child names",
+            "review media"
+          ]
+        }
+      ],
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish"
+      ]
     }
   },
   "project_tree_batch_size": 20,
