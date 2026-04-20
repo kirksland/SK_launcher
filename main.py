@@ -25,6 +25,7 @@ from core.settings import (
     normalize_houdini_exe,
     normalize_asset_schema,
     normalize_asset_manager_projects,
+    normalize_asset_project_schemas,
     save_settings,
     settings_startup_issues,
 )
@@ -375,6 +376,10 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._asset_schema = normalize_asset_schema(
             self.settings.get("asset_schema", DEFAULT_ASSET_SCHEMA)
         )
+        self._asset_project_schemas = normalize_asset_project_schemas(
+            self.settings.get("asset_project_schemas", {})
+        )
+        self._asset_active_schema = dict(self._asset_schema)
         self.test_pipeline_root = TEST_PIPELINE_ROOT
         self._project_cache: Dict[Path, Tuple[float, List[Path], float]] = {}
         self._asset_cache: Dict[Path, Tuple[float, List[Path], float]] = {}
@@ -580,12 +585,20 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.asset_pages = self.asset_page.asset_pages
         self.asset_search_input = self.asset_page.asset_search_input
+        self.asset_layout_btn = self.asset_page.asset_layout_btn
         self.asset_refresh_btn = self.asset_page.asset_refresh_btn
         self.asset_auto_refresh = self.asset_page.asset_auto_refresh
+        self.asset_onboarding_card = self.asset_page.asset_onboarding_card
+        self.asset_onboarding_summary = self.asset_page.asset_onboarding_summary
+        self.asset_onboarding_details = self.asset_page.asset_onboarding_details
+        self.asset_onboarding_detect_btn = self.asset_page.asset_onboarding_detect_btn
+        self.asset_onboarding_default_btn = self.asset_page.asset_onboarding_default_btn
+        self.asset_onboarding_rescan_btn = self.asset_page.asset_onboarding_rescan_btn
         self.asset_path_label = self.asset_page.asset_path_label
         self.asset_grid = self.asset_page.asset_grid
         self.asset_back_btn = self.asset_page.asset_back_btn
         self.asset_details_title = self.asset_page.asset_details_title
+        self.asset_main_split = self.asset_page.asset_main_split
         self.asset_shots_filter = self.asset_page.asset_shots_filter
         self.asset_shots_size = self.asset_page.asset_shots_size
         self.asset_shots_list = self.asset_page.asset_shots_list
@@ -701,6 +714,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.remove_asset_btn.clicked.connect(self.remove_selected_project_from_asset_manager)
 
         self.asset_search_input.textChanged.connect(self.asset_controller.refresh_asset_manager)
+        self.asset_layout_btn.clicked.connect(self.asset_controller.reopen_layout_setup)
         self.asset_refresh_btn.clicked.connect(self.asset_controller.refresh_asset_manager)
         self.asset_auto_refresh.toggled.connect(self.asset_controller.toggle_asset_auto_refresh)
         self.asset_grid.itemClicked.connect(self.asset_controller.open_asset_details)
@@ -725,6 +739,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_commit_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_push_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_fetch_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
+        self.asset_onboarding_detect_btn.clicked.connect(self.asset_controller.accept_detected_layout)
+        self.asset_onboarding_default_btn.clicked.connect(self.asset_controller.accept_default_layout)
+        self.asset_onboarding_rescan_btn.clicked.connect(self.asset_controller.redetect_layout)
 
         self.client_refresh_btn.clicked.connect(self.client_controller.refresh_client_catalog)
         self.client_bind_btn.clicked.connect(self.client_controller.clone_client_project)

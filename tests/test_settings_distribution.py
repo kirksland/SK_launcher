@@ -57,11 +57,55 @@ class SettingsDistributionTests(unittest.TestCase):
         self.assertEqual(settings["projects_dir"], "D:/Projects")
         self.assertEqual(settings["server_repo_dir"], "D:/Server")
 
+    def test_load_settings_upgrades_legacy_asset_schema(self) -> None:
+        root = self._make_case_dir("settings_asset_schema")
+        settings_path = root / "settings.json"
+        settings_path.write_text(
+            '{"asset_schema": {"usd_search": ["publish", "cache/usd"]}}',
+            encoding="utf-8",
+        )
+        settings = load_settings(settings_path)
+        schema = settings["asset_schema"]
+        self.assertEqual(schema["schema_version"], 1)
+        self.assertEqual(schema["usd_search"], ["publish", "cache/usd"])
+        self.assertEqual(
+            schema["representations"]["usd"]["folders"],
+            ["publish", "cache/usd"],
+        )
+
     def test_save_settings_writes_explicit_path(self) -> None:
         root = self._make_case_dir("settings_save")
         settings_path = root / "User" / "settings.json"
         save_settings({"projects_dir": "D:/Projects"}, settings_path)
         self.assertTrue(settings_path.exists())
+
+    def test_save_settings_normalizes_asset_schema_before_writing(self) -> None:
+        root = self._make_case_dir("settings_save_schema")
+        settings_path = root / "User" / "settings.json"
+        save_settings({"asset_schema": {"usd_search": ["Publish", "root"]}}, settings_path)
+        payload = settings_path.read_text(encoding="utf-8")
+        self.assertIn('"schema_version": 1', payload)
+        self.assertIn('"usd_search": [', payload)
+        self.assertIn('"publish"', payload)
+
+    def test_load_settings_normalizes_project_asset_overrides(self) -> None:
+        root = self._make_case_dir("settings_project_schema")
+        settings_path = root / "settings.json"
+        settings_path.write_text(
+            (
+                '{"asset_project_schemas": {'
+                '"C:/show/projectA": {"usd_search": ["publish", "cache/usd"]}'
+                "}}"
+            ),
+            encoding="utf-8",
+        )
+        settings = load_settings(settings_path)
+        project_schemas = settings["asset_project_schemas"]
+        self.assertIn("C:/show/projectA", project_schemas)
+        self.assertEqual(
+            project_schemas["C:/show/projectA"]["representations"]["usd"]["folders"],
+            ["publish", "cache/usd"],
+        )
 
     def test_active_settings_path_prefers_env_override(self) -> None:
         root = self._make_case_dir("settings_env")

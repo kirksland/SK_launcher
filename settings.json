@@ -1,8 +1,9 @@
 {
   "projects_dir": "C:\\Users\\justi\\Documents\\HoudiniProjects",
-  "template_hip": "C:\\Users\\justi\\Documents\\houdini21.0\\skyforge_launcher\\untitled.hipnc",
+  "template_hip": "C:\\Users\\justi\\Desktop\\SK_launcher\\untitled.hipnc",
   "new_hip_pattern": "{projectName}_001.hipnc",
   "use_file_association": false,
+  "show_splash_screen": true,
   "houdini_exe": "C:\\Program Files\\Side Effects Software\\Houdini 21.0.559\\bin\\houdini.exe",
   "server_repo_dir": "C:\\Users\\justi\\Documents\\studio project\\StudioProject",
   "video_backend": "opencv",
@@ -21,10 +22,227 @@
     }
   ],
   "asset_schema": {
+    "schema_version": 1,
+    "preset_id": "default_v1",
+    "contexts": [
+      "modeling",
+      "lookdev",
+      "layout",
+      "animation",
+      "vfx",
+      "lighting"
+    ],
+    "entity_roots": {
+      "shot": [
+        "shots"
+      ],
+      "asset": [
+        "assets"
+      ]
+    },
+    "representations": {
+      "usd": {
+        "extensions": [
+          ".usd",
+          ".usda",
+          ".usdc",
+          ".usdnc"
+        ],
+        "folders": [
+          "publish",
+          "root"
+        ]
+      },
+      "review_video": {
+        "extensions": [
+          ".mp4",
+          ".mov"
+        ],
+        "folders": [
+          "publish"
+        ]
+      },
+      "preview_image": {
+        "extensions": [
+          ".png",
+          ".jpg",
+          ".jpeg"
+        ],
+        "folders": [
+          "preview"
+        ]
+      }
+    },
     "usd_search": [
       "publish",
       "root"
     ]
+  },
+  "asset_project_schemas": {
+    "C:\\Users\\justi\\Documents\\HoudiniProjects\\Mardini_2026": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "lookdev",
+        "modeling"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "assets"
+        ]
+      },
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish"
+      ]
+    },
+    "C:\\Users\\justi\\Documents\\HoudiniProjects\\BarScene_v2.2": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "modeling",
+        "lookdev",
+        "layout",
+        "animation",
+        "vfx",
+        "lighting"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "library/assets"
+        ]
+      },
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish",
+            "root"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish",
+        "root"
+      ]
+    },
+    "C:\\Users\\justi\\Documents\\HoudiniProjects\\test_pipeline": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "animation",
+        "layout",
+        "lighting",
+        "vfx",
+        "lookdev",
+        "modeling"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "assets",
+          "library/assets"
+        ]
+      },
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish"
+      ]
+    }
   },
   "project_tree_batch_size": 20,
   "project_tree_batch_delay_ms": 24,

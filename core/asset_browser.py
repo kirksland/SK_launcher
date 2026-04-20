@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
+from core.asset_schema import entity_root_candidates
 from core.fs import name_prefix
 
 
@@ -29,12 +30,41 @@ def existing_project_paths(entries: Iterable[Mapping[str, object]]) -> list[Path
     return paths
 
 
-def list_project_entities(project_root: Path) -> tuple[list[Path], list[Path]]:
-    shots_root = project_root / "shots"
-    assets_root = project_root / "assets"
-    shots = sorted([path for path in shots_root.iterdir() if path.is_dir()]) if shots_root.exists() else []
-    assets = sorted([path for path in assets_root.iterdir() if path.is_dir()]) if assets_root.exists() else []
+def list_project_entities(
+    project_root: Path,
+    schema: Mapping[str, Any] | None = None,
+) -> tuple[list[Path], list[Path]]:
+    shots = _list_entity_dirs(project_root, "shot", schema)
+    assets = _list_entity_dirs(project_root, "asset", schema)
     return shots, assets
+
+
+def _list_entity_dirs(
+    project_root: Path,
+    entity_type: str,
+    schema: Mapping[str, Any] | None = None,
+) -> list[Path]:
+    root_names = entity_root_candidates(dict(schema or {}), entity_type) if schema else []
+    if not root_names:
+        root_names = ["shots"] if entity_type == "shot" else ["assets"]
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for root_name in root_names:
+        root_path = project_root / root_name
+        if not root_path.exists():
+            continue
+        try:
+            children = sorted(
+                [path for path in root_path.iterdir() if path.is_dir()],
+                key=lambda path: path.name.lower(),
+            )
+        except OSError:
+            continue
+        for child in children:
+            if child not in seen:
+                seen.add(child)
+                found.append(child)
+    return found
 
 
 def entity_prefixes(entity_dirs: Sequence[Path]) -> list[str]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from core.dcc import detect_dcc_for_path, supported_scene_extensions
 
@@ -76,8 +76,10 @@ def list_usd_versions(
     entity_dir: Path,
     context: Optional[str] = None,
     search_locations: Optional[List[str]] = None,
+    extensions: Optional[Iterable[str]] = None,
 ) -> List[Path]:
     locations = [loc.lower() for loc in (search_locations or ["publish"])]
+    allowed_exts = tuple(str(ext).lower() for ext in (extensions or USD_EXTS))
     usd_files: List[Path] = []
     seen: set[Path] = set()
 
@@ -90,13 +92,13 @@ def list_usd_versions(
                 context_dir = publish_dir / context
                 if not context_dir.exists():
                     continue
-                candidates = [p for p in context_dir.rglob("*") if p.is_file() and p.suffix.lower() in USD_EXTS]
+                candidates = [p for p in context_dir.rglob("*") if p.is_file() and p.suffix.lower() in allowed_exts]
             else:
-                candidates = [p for p in publish_dir.rglob("*") if p.is_file() and p.suffix.lower() in USD_EXTS]
+                candidates = [p for p in publish_dir.rglob("*") if p.is_file() and p.suffix.lower() in allowed_exts]
         elif loc == "root":
             candidates = [
                 p for p in entity_dir.iterdir()
-                if p.is_file() and p.suffix.lower() in USD_EXTS
+                if p.is_file() and p.suffix.lower() in allowed_exts
             ]
         else:
             continue
@@ -109,19 +111,35 @@ def list_usd_versions(
     return sorted(usd_files, key=lambda p: p.name)
 
 
-def list_review_videos(entity_dir: Path, context: Optional[str] = None) -> List[Path]:
-    publish_dir = entity_dir / "publish"
-    if not publish_dir.exists():
-        return []
-    if context:
-        context_dir = publish_dir / context
-        if not context_dir.exists():
-            return []
-        files = list(context_dir.rglob("*"))
-    else:
-        files = list(publish_dir.rglob("*"))
-    videos = [p for p in files if p.is_file() and p.suffix.lower() in (".mp4", ".mov")]
-    return sorted(videos, key=lambda p: p.name)
+def list_review_videos(
+    entity_dir: Path,
+    context: Optional[str] = None,
+    folder_names: Optional[Iterable[str]] = None,
+    extensions: Optional[Iterable[str]] = None,
+) -> List[Path]:
+    folders = [str(folder).replace("\\", "/").strip("/").lower() for folder in (folder_names or ["publish"])]
+    allowed_exts = tuple(str(ext).lower() for ext in (extensions or (".mp4", ".mov")))
+    found: List[Path] = []
+    seen: set[Path] = set()
+    for folder in folders:
+        root = entity_dir.joinpath(*[part for part in folder.split("/") if part])
+        if not root.exists():
+            continue
+        if context:
+            context_dir = root / context
+            search_root = context_dir if context_dir.exists() else root
+        else:
+            search_root = root
+        try:
+            files = list(search_root.rglob("*"))
+        except OSError:
+            continue
+        videos = [p for p in files if p.is_file() and p.suffix.lower() in allowed_exts]
+        for path in sorted(videos, key=lambda p: p.name):
+            if path not in seen:
+                seen.add(path)
+                found.append(path)
+    return found
 
 
 def group_versions(usd_files: List[Path], video_files: List[Path]) -> List[Tuple[str, Optional[Path], Optional[Path]]]:
@@ -141,19 +159,34 @@ def name_prefix(name: str) -> str:
     return name.split("_", 1)[0].lower()
 
 
-def latest_preview_image(entity_dir: Path) -> Optional[Path]:
-    preview_dir = entity_dir / "preview"
-    if not preview_dir.exists():
-        return None
-    candidates = [p for p in preview_dir.iterdir() if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg")]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+def latest_preview_image(
+    entity_dir: Path,
+    folder_names: Optional[Iterable[str]] = None,
+    extensions: Optional[Iterable[str]] = None,
+) -> Optional[Path]:
+    images = list_preview_images(entity_dir, folder_names=folder_names, extensions=extensions)
+    return images[0] if images else None
 
 
-def list_preview_images(entity_dir: Path) -> List[Path]:
-    preview_dir = entity_dir / "preview"
-    if not preview_dir.exists():
-        return []
-    candidates = [p for p in preview_dir.iterdir() if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg")]
-    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+def list_preview_images(
+    entity_dir: Path,
+    folder_names: Optional[Iterable[str]] = None,
+    extensions: Optional[Iterable[str]] = None,
+) -> List[Path]:
+    folders = [str(folder).replace("\\", "/").strip("/").lower() for folder in (folder_names or ["preview"])]
+    allowed_exts = tuple(str(ext).lower() for ext in (extensions or (".png", ".jpg", ".jpeg")))
+    found: List[Path] = []
+    seen: set[Path] = set()
+    for folder in folders:
+        preview_dir = entity_dir.joinpath(*[part for part in folder.split("/") if part])
+        if not preview_dir.exists():
+            continue
+        try:
+            candidates = [p for p in preview_dir.rglob("*") if p.is_file() and p.suffix.lower() in allowed_exts]
+        except OSError:
+            continue
+        for path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+            if path not in seen:
+                seen.add(path)
+                found.append(path)
+    return found

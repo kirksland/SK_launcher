@@ -6,10 +6,10 @@ from typing import List, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.asset_detection import DetectedProjectLayout, detect_project_layout
 from core.asset_details import (
     build_asset_meta_text,
     empty_versions_message,
-    entity_type_for_path,
     normalize_list_context,
     pick_best_context,
     read_history_note,
@@ -19,17 +19,12 @@ from core.asset_browser import (
     existing_project_paths,
     filter_asset_entries,
     filter_entity_dirs,
-    list_project_entities,
     resolved_filter_choice,
 )
-from core.fs import (
-    latest_preview_image,
-    list_preview_images,
-    list_review_videos,
-    list_usd_versions,
-)
+from core.asset_layout import EntityRecord, resolve_asset_layout
+from core.asset_schema import entity_root_candidates
 from core.metadata import load_metadata
-from core.settings import save_settings
+from core.settings import normalize_asset_schema, save_settings
 from core.watchers import update_watcher_paths
 from ui.utils.thumbnails import build_thumbnail_pixmap
 from ui.widgets.asset_version_row import AssetVersionRow
@@ -63,6 +58,9 @@ class AssetManagerController:
         self._clear_asset_detail_lists(self.w)
         self.w._asset_current_project_root = None
         self.w._asset_current_entity = None
+        self.w._asset_current_entity_type = None
+        self.w._asset_active_schema = dict(self.w._asset_schema)
+        self.w._asset_resolved_layout = None
         self.w.asset_details_title.setText("No project selected")
         self.w.asset_path_label.setText(message)
         self.w.asset_meta.setText(message)
@@ -72,6 +70,9 @@ class AssetManagerController:
         self.w.asset_history_list.addItem("No entity selected")
         if hasattr(self.w.asset_page, "asset_selection_summary"):
             self.w.asset_page.asset_selection_summary.setText("No entity selected")
+        self._set_asset_onboarding_visible(False)
+        if hasattr(self.w, "asset_layout_btn"):
+            self.w.asset_layout_btn.setEnabled(False)
 
     def set_project_context(self, project_path: Optional[Path]) -> None:
         tracked_projects = self._tracked_asset_projects()
@@ -86,6 +87,27 @@ class AssetManagerController:
             )
             self.set_asset_status("Selected project is outside the Asset Manager scope.")
             return
+        if hasattr(self.w, "asset_layout_btn"):
+            self.w.asset_layout_btn.setEnabled(True)
+        active_schema = self._effective_project_schema(project_path)
+        self.w._asset_detected_layout = detect_project_layout(project_path, base_schema=active_schema)
+        has_override = str(project_path) in self.w._asset_project_schemas
+        if not has_override:
+            self._set_asset_onboarding(project_path, self.w._asset_detected_layout)
+            self._clear_asset_detail_lists(self.w)
+            self.w._asset_current_entity = None
+            self.w._asset_current_entity_type = None
+            self.w._asset_current_project_root = project_path
+            self.w.asset_details_title.setText(project_path.name)
+            self.w.asset_path_label.setText(f"{project_path.name} / Confirm asset layout")
+            self.w.asset_meta.setText("Confirm the detected asset layout before browsing entities.")
+            self.w.asset_versions_list.addItem("Layout setup required")
+            self.w.asset_history_list.addItem("Layout setup required")
+            self.set_asset_status("Confirm the detected layout or use the default layout.")
+            return
+        self._set_asset_onboarding_visible(False)
+        self.w._asset_active_schema = active_schema
+        self.w._asset_resolved_layout = resolve_asset_layout(project_path, active_schema)
         self.w.asset_details_title.setText(project_path.name)
         self.w.asset_path_label.setText(f"{project_path.name} / Select a shot or asset")
         if hasattr(self.w.asset_page, "asset_selection_summary"):
@@ -96,6 +118,7 @@ class AssetManagerController:
         self.w.asset_meta.setText("Select a shot or asset to view details.")
         self.w.asset_versions_list.addItem("No entity selected")
         self.w.asset_history_list.addItem("No entity selected")
+        self._sync_asset_contexts(active_schema)
         self._refresh_asset_entity_lists(target="both")
         self.set_asset_status(f"Asset Manager ready for {project_path.name}.")
 
@@ -179,8 +202,13 @@ class AssetManagerController:
             self.refresh_asset_manager()
 
     def _refresh_asset_entity_lists(self, target: str) -> None:
-        project_root = getattr(self.w, "_asset_current_project_root", self.w.test_pipeline_root)
-        shots, assets = list_project_entities(project_root)
+        layout = getattr(self.w, "_asset_resolved_layout", None)
+        if layout is None:
+            shots: list[EntityRecord] = []
+            assets: list[EntityRecord] = []
+        else:
+            shots = layout.entities("shot")
+            assets = layout.entities("asset")
 
         # Build filter options from prefixes
         shot_prefixes = entity_prefixes(shots)
@@ -221,14 +249,15 @@ class AssetManagerController:
         if target in ("both", "shots"):
             self.w.asset_shots_list.clear()
             visible_shots = filter_entity_dirs(
-                shots,
+                [item.source_path for item in shots],
                 prefix_filter=shot_filter,
                 search_text=search_text if active_tab == 0 else "",
             )
             for shot_dir in visible_shots:
                 shot_item = QtWidgets.QListWidgetItem(shot_dir.name)
                 shot_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(shot_dir))
-                preview = latest_preview_image(shot_dir)
+                shot_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "shot")
+                preview = layout.preview_path(self._entity_record_for_path(shot_dir)) if layout else None
                 if preview:
                     pix = self._get_scaled_preview_pixmap(preview, shot_dir, shot_icon_size)
                 else:
@@ -239,14 +268,15 @@ class AssetManagerController:
         if target in ("both", "assets"):
             self.w.asset_assets_list.clear()
             visible_assets = filter_entity_dirs(
-                assets,
+                [item.source_path for item in assets],
                 prefix_filter=asset_filter,
                 search_text=search_text if active_tab == 1 else "",
             )
             for asset_dir in visible_assets:
                 asset_item = QtWidgets.QListWidgetItem(asset_dir.name)
                 asset_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(asset_dir))
-                preview = latest_preview_image(asset_dir)
+                asset_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "asset")
+                preview = layout.preview_path(self._entity_record_for_path(asset_dir)) if layout else None
                 if preview:
                     pix = self._get_scaled_preview_pixmap(preview, asset_dir, asset_icon_size)
                 else:
@@ -313,7 +343,8 @@ class AssetManagerController:
 
     def on_asset_entity_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         entity_path = Path(str(item.data(QtCore.Qt.ItemDataRole.UserRole)))
-        self._load_entity_details(entity_path)
+        entity_type = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
+        self._load_entity_details(entity_path, entity_type if isinstance(entity_type, str) else None)
 
     def on_asset_tab_changed(self, index: int) -> None:
         if index == 0:
@@ -326,9 +357,9 @@ class AssetManagerController:
             self.w.asset_path_label.setText(f"{Path(project_root).name} / {tab_label}")
         self.refresh_active_list()
 
-    def _load_entity_details(self, entity_dir: Path) -> None:
+    def _load_entity_details(self, entity_dir: Path, entity_type: Optional[str] = None) -> None:
         self.w._asset_current_entity = entity_dir
-        self.w._asset_current_entity_type = entity_type_for_path(entity_dir)
+        self.w._asset_current_entity_type = entity_type or self._entity_type_for_path(entity_dir)
         project_root = getattr(self.w, "_asset_current_project_root", entity_dir.parent.parent)
         tab_label = "Shots" if self.w._asset_current_entity_type == "shot" else "Assets"
         self.w.asset_path_label.setText(f"{Path(project_root).name} / {tab_label} / {entity_dir.name}")
@@ -336,7 +367,11 @@ class AssetManagerController:
             self.w.asset_page.asset_selection_summary.setText(
                 f"{entity_dir.name} [{self.w._asset_current_entity_type.upper()}]"
             )
-        self.w._preview_images = list_preview_images(entity_dir)
+        record = self._entity_record_for_path(entity_dir)
+        layout = getattr(self.w, "_asset_resolved_layout", None)
+        self.w._preview_images = (
+            layout.representation_paths(record, "preview_image") if layout and record is not None else []
+        )
         self.w._preview_index = 0
         if self.w._preview_images:
             preview = self.w._preview_images[self.w._preview_index]
@@ -365,13 +400,13 @@ class AssetManagerController:
         self.w.asset_meta.setText(build_asset_meta_text(owner, status, context, entity_dir.name))
 
         self.w.asset_versions_list.clear()
-        usd_versions = list_usd_versions(
-            entity_dir,
-            context=list_context,
-            search_locations=self.w._asset_schema.get("usd_search"),
+        usd_versions = layout.representation_paths(record, "usd", context=list_context) if layout and record else []
+        video_versions = (
+            layout.representation_paths(record, "review_video", context=list_context)
+            if layout and record and self.w._asset_current_entity_type == "shot"
+            else []
         )
-        video_versions = list_review_videos(entity_dir, context=list_context) if self.w._asset_current_entity_type == "shot" else []
-        image_versions = list_preview_images(entity_dir)
+        image_versions = layout.representation_paths(record, "preview_image") if layout and record else []
         grouped = group_asset_versions(usd_versions, video_versions, image_versions)
         if hasattr(self.w.asset_page, "asset_versions_hint"):
             self.w.asset_page.asset_versions_hint.setText(
@@ -495,13 +530,11 @@ class AssetManagerController:
 
     def _pick_best_context(self, entity_dir: Path, current: str) -> str:
         def has_content(ctx: str) -> bool:
-            if list_usd_versions(
-                entity_dir,
-                context=ctx,
-                search_locations=self.w._asset_schema.get("usd_search"),
-            ):
+            record = self._entity_record_for_path(entity_dir)
+            layout = getattr(self.w, "_asset_resolved_layout", None)
+            if layout and record and layout.representation_paths(record, "usd", context=ctx):
                 return True
-            if list_review_videos(entity_dir, context=ctx):
+            if layout and record and layout.representation_paths(record, "review_video", context=ctx):
                 return True
             return False
 
@@ -603,12 +636,15 @@ class AssetManagerController:
             project_path = Path(str(entry.get("local_path", "")))
             if project_path.exists():
                 paths.append(project_path)
-                shots_root = project_path / "shots"
-                assets_root = project_path / "assets"
-                if shots_root.exists():
-                    paths.append(shots_root)
-                if assets_root.exists():
-                    paths.append(assets_root)
+                project_schema = self._effective_project_schema(project_path)
+                for root_name in entity_root_candidates(project_schema, "shot"):
+                    shots_root = project_path / root_name
+                    if shots_root.exists():
+                        paths.append(shots_root)
+                for root_name in entity_root_candidates(project_schema, "asset"):
+                    assets_root = project_path / root_name
+                    if assets_root.exists():
+                        paths.append(assets_root)
         entity = getattr(self.w, "_asset_current_entity", None)
         if entity and Path(entity).exists():
             paths.append(Path(entity))
@@ -624,3 +660,129 @@ class AssetManagerController:
         if not Path(project_root).exists():
             return
         os.startfile(str(project_root))  # type: ignore[attr-defined]
+
+    def accept_detected_layout(self) -> None:
+        project_root = getattr(self.w, "_asset_current_project_root", None)
+        detected = getattr(self.w, "_asset_detected_layout", None)
+        if project_root is None or not isinstance(detected, DetectedProjectLayout):
+            return
+        self._save_project_schema(project_root, detected.schema)
+        self.set_project_context(Path(project_root))
+
+    def accept_default_layout(self) -> None:
+        project_root = getattr(self.w, "_asset_current_project_root", None)
+        if project_root is None:
+            return
+        self._save_project_schema(Path(project_root), self.w._asset_schema)
+        self.set_project_context(Path(project_root))
+
+    def redetect_layout(self) -> None:
+        project_root = getattr(self.w, "_asset_current_project_root", None)
+        if project_root is None:
+            return
+        self.set_project_context(Path(project_root))
+
+    def reopen_layout_setup(self) -> None:
+        project_root = getattr(self.w, "_asset_current_project_root", None)
+        if project_root is None:
+            self.set_asset_status("Select a tracked project first to review its asset layout.")
+            return
+        project_path = Path(project_root)
+        detected = detect_project_layout(project_path, base_schema=self._effective_project_schema(project_path))
+        self.w._asset_detected_layout = detected
+        self.w._asset_current_project_root = project_path
+        self.w.asset_details_title.setText(project_path.name)
+        self.w.asset_path_label.setText(f"{project_path.name} / Review asset layout")
+        self.w.asset_meta.setText("Review the detected layout and confirm a replacement if needed.")
+        self._clear_asset_detail_lists(self.w)
+        self.w.asset_versions_list.addItem("Layout review in progress")
+        self.w.asset_history_list.addItem("Layout review in progress")
+        self._set_asset_onboarding(project_path, detected)
+        self.set_asset_status("Asset layout review reopened. Your saved layout stays unchanged until you confirm a new one.")
+
+    def _save_project_schema(self, project_root: Path, schema: object) -> None:
+        normalized = normalize_asset_schema(schema)
+        self.w._asset_project_schemas[str(project_root)] = normalized
+        self.w.settings["asset_project_schemas"] = dict(self.w._asset_project_schemas)
+        save_settings(self.w.settings)
+
+    def _effective_project_schema(self, project_root: Path) -> dict:
+        override = self.w._asset_project_schemas.get(str(project_root))
+        if override:
+            return normalize_asset_schema(override)
+        return normalize_asset_schema(self.w._asset_schema)
+
+    def _set_asset_onboarding(self, project_root: Path, detected: DetectedProjectLayout) -> None:
+        roots = []
+        shot_roots = detected.schema.get("entity_roots", {}).get("shot", [])
+        asset_roots = detected.schema.get("entity_roots", {}).get("asset", [])
+        if shot_roots:
+            roots.append(f"Shots: {', '.join(shot_roots)}")
+        if asset_roots:
+            roots.append(f"Assets: {', '.join(asset_roots)}")
+        reps = []
+        usd_folders = detected.schema.get("representations", {}).get("usd", {}).get("folders", [])
+        video_folders = detected.schema.get("representations", {}).get("review_video", {}).get("folders", [])
+        image_folders = detected.schema.get("representations", {}).get("preview_image", {}).get("folders", [])
+        if usd_folders:
+            reps.append(f"USD: {', '.join(usd_folders)}")
+        if video_folders:
+            reps.append(f"Review: {', '.join(video_folders)}")
+        if image_folders:
+            reps.append(f"Preview: {', '.join(image_folders)}")
+        summary = (
+            f"{project_root.name} layout review. "
+            f"Detected layout confidence: {detected.confidence.upper()}."
+        )
+        details = "\n".join(part for part in [
+            " / ".join(roots) if roots else "",
+            " / ".join(reps) if reps else "",
+            f"Contexts: {', '.join(detected.schema.get('contexts', []))}" if detected.schema.get("contexts") else "",
+            f"Warnings: {'; '.join(detected.warnings)}" if detected.warnings else "",
+            f"Needs review: {'; '.join(detected.unresolved)}" if detected.unresolved else "",
+        ] if part)
+        self.w.asset_onboarding_summary.setText(summary)
+        self.w.asset_onboarding_details.setText(details)
+        self._set_asset_onboarding_visible(True)
+
+    def _set_asset_onboarding_visible(self, visible: bool) -> None:
+        self.w.asset_onboarding_card.setVisible(visible)
+        self.w.asset_main_split.setVisible(not visible)
+
+    def _sync_asset_contexts(self, schema: dict) -> None:
+        contexts = schema.get("contexts", [])
+        if not isinstance(contexts, list) or not contexts:
+            contexts = ["modeling", "lookdev", "layout", "animation", "vfx", "lighting"]
+        current = self.w.asset_context_combo.currentText() or "All"
+        self.w.asset_context_combo.blockSignals(True)
+        self.w.asset_context_combo.clear()
+        self.w.asset_context_combo.addItem("All")
+        for context in contexts:
+            self.w.asset_context_combo.addItem(str(context))
+        if current not in ["All", *[str(c) for c in contexts]]:
+            current = "All"
+        self.w.asset_context_combo.setCurrentText(current)
+        self.w.asset_context_combo.blockSignals(False)
+
+    def _entity_type_for_path(self, entity_dir: Path) -> str:
+        layout = getattr(self.w, "_asset_resolved_layout", None)
+        if layout is not None:
+            return layout.entity_type_for_path(entity_dir)
+        schema = getattr(self.w, "_asset_active_schema", self.w._asset_schema)
+        for root_name in entity_root_candidates(schema, "shot"):
+            if all(part in entity_dir.parts for part in root_name.split("/")):
+                return "shot"
+        for root_name in entity_root_candidates(schema, "asset"):
+            if all(part in entity_dir.parts for part in root_name.split("/")):
+                return "asset"
+        return "shot" if self.w.asset_work_tabs.currentIndex() == 0 else "asset"
+
+    def _entity_record_for_path(self, entity_dir: Path) -> Optional[EntityRecord]:
+        layout = getattr(self.w, "_asset_resolved_layout", None)
+        if layout is None:
+            return None
+        entity_type = layout.entity_type_for_path(entity_dir)
+        for record in layout.entities(entity_type):
+            if record.source_path == entity_dir:
+                return record
+        return None
