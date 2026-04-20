@@ -16,13 +16,12 @@ from core.asset_details import (
 )
 from core.asset_browser import (
     entity_prefixes,
-    existing_project_paths,
-    filter_asset_entries,
     filter_entity_dirs,
     resolved_filter_choice,
 )
 from core.asset_layout import EntityRecord, resolve_asset_layout
 from core.asset_schema import entity_root_candidates
+from core.fs import find_projects
 from core.metadata import load_metadata
 from core.settings import normalize_asset_schema, save_settings
 from core.watchers import update_watcher_paths
@@ -47,13 +46,6 @@ class AssetManagerController:
         self.set_project_context(project_path)
         self._refresh_asset_watch_paths()
 
-    def _tracked_asset_projects(self) -> list[Path]:
-        entries = filter_asset_entries(
-            self.w._asset_manager_projects,
-            self.w.asset_search_input.text(),
-        )
-        return existing_project_paths(entries)
-
     def _clear_asset_browser_state(self, message: str) -> None:
         self._clear_asset_detail_lists(self.w)
         self.w._asset_current_project_root = None
@@ -75,17 +67,15 @@ class AssetManagerController:
             self.w.asset_layout_btn.setEnabled(False)
 
     def set_project_context(self, project_path: Optional[Path]) -> None:
-        tracked_projects = self._tracked_asset_projects()
-        self.w.project_controller.prune_cache(tracked_projects, self.w._asset_cache)
+        available_projects = find_projects(self.w.projects_dir)
+        self.w.project_controller.prune_cache(available_projects, self.w._asset_cache)
         if project_path is None:
             self._clear_asset_browser_state("Select a project in Projects to browse its assets.")
             self.set_asset_status("No project selected.")
             return
-        if project_path not in tracked_projects:
-            self._clear_asset_browser_state(
-                f"{project_path.name} is not in Asset Manager. Add it from the Projects page to browse its assets here."
-            )
-            self.set_asset_status("Selected project is outside the Asset Manager scope.")
+        if not project_path.exists():
+            self._clear_asset_browser_state(f"{project_path.name} does not exist anymore.")
+            self.set_asset_status("Selected project is missing.")
             return
         if hasattr(self.w, "asset_layout_btn"):
             self.w.asset_layout_btn.setEnabled(True)
@@ -126,6 +116,7 @@ class AssetManagerController:
     def _clear_asset_detail_lists(window: QtWidgets.QMainWindow) -> None:
         window.asset_shots_list.clear()
         window.asset_assets_list.clear()
+        window.asset_library_list.clear()
         window.asset_versions_list.clear()
         window.asset_history_list.clear()
 
@@ -170,12 +161,14 @@ class AssetManagerController:
             self.set_asset_status(f"Copied: {normalized}")
 
     def show_asset_context_menu(self, pos: QtCore.QPoint) -> None:
-        item = self.w.asset_assets_list.itemAt(pos)
+        sender = self.w.sender()
+        list_widget = sender if isinstance(sender, QtWidgets.QListWidget) else self.w.asset_assets_list
+        item = list_widget.itemAt(pos)
         if item is None:
             return
         menu = QtWidgets.QMenu(self.w)
         action = menu.addAction("Copy Asset Path")
-        chosen = menu.exec(self.w.asset_assets_list.mapToGlobal(pos))
+        chosen = menu.exec(list_widget.mapToGlobal(pos))
         if chosen == action:
             path = str(item.data(QtCore.Qt.ItemDataRole.UserRole))
             normalized = self.w._to_houdini_path(path)
@@ -187,35 +180,38 @@ class AssetManagerController:
         if item is None:
             return
         menu = QtWidgets.QMenu(self.w)
-        action = menu.addAction("Remove from Asset Manager")
+        action = menu.addAction("Copy Project Path")
         chosen = menu.exec(self.w.asset_grid.mapToGlobal(pos))
         if chosen == action:
             path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
             if not path_text:
                 return
-            project_path = str(path_text)
-            self.w._asset_manager_projects = [
-                e for e in self.w._asset_manager_projects if e.get("local_path") != project_path
-            ]
-            self.w.settings["asset_manager_projects"] = list(self.w._asset_manager_projects)
-            save_settings(self.w.settings)
-            self.refresh_asset_manager()
+            normalized = self.w._to_houdini_path(str(path_text))
+            QtWidgets.QApplication.clipboard().setText(normalized)
+            self.set_asset_status(f"Copied: {normalized}")
 
     def _refresh_asset_entity_lists(self, target: str) -> None:
         layout = getattr(self.w, "_asset_resolved_layout", None)
         if layout is None:
             shots: list[EntityRecord] = []
             assets: list[EntityRecord] = []
+            library_assets: list[EntityRecord] = []
         else:
-            shots = layout.entities("shot")
-            assets = layout.entities("asset")
+            shots = layout.entities_by_role("shot")
+            assets = layout.entities_by_role("pipeline_asset")
+            library_assets = layout.entities_by_role("library_asset")
 
         # Build filter options from prefixes
-        shot_prefixes = entity_prefixes(shots)
-        asset_prefixes = entity_prefixes(assets)
+        shot_paths = [item.source_path for item in shots]
+        asset_paths = [item.source_path for item in assets]
+        library_paths = [item.source_path for item in library_assets]
+        shot_prefixes = entity_prefixes(shot_paths)
+        asset_prefixes = entity_prefixes(asset_paths)
+        library_prefixes = entity_prefixes(library_paths)
 
         prev_shot_filter = self.w.asset_shots_filter.currentText() if self.w.asset_shots_filter.count() else "All"
         prev_asset_filter = self.w.asset_assets_filter.currentText() if self.w.asset_assets_filter.count() else "All"
+        prev_library_filter = self.w.asset_library_filter.currentText() if self.w.asset_library_filter.count() else "All"
 
         self.w.asset_shots_filter.blockSignals(True)
         self.w.asset_shots_filter.clear()
@@ -237,9 +233,20 @@ class AssetManagerController:
         )
         self.w.asset_assets_filter.blockSignals(False)
 
+        self.w.asset_library_filter.blockSignals(True)
+        self.w.asset_library_filter.clear()
+        self.w.asset_library_filter.addItem("All")
+        for p in library_prefixes:
+            self.w.asset_library_filter.addItem(p)
+        self.w.asset_library_filter.setCurrentText(
+            resolved_filter_choice(prev_library_filter, ["All", *library_prefixes])
+        )
+        self.w.asset_library_filter.blockSignals(False)
+
         # Apply filters
         shot_filter = self.w.asset_shots_filter.currentText()
         asset_filter = self.w.asset_assets_filter.currentText()
+        library_filter = self.w.asset_library_filter.currentText()
         search_text = self.w.asset_entity_search.text().strip().lower()
         active_tab = self.w.asset_work_tabs.currentIndex()
 
@@ -249,7 +256,7 @@ class AssetManagerController:
         if target in ("both", "shots"):
             self.w.asset_shots_list.clear()
             visible_shots = filter_entity_dirs(
-                [item.source_path for item in shots],
+                shot_paths,
                 prefix_filter=shot_filter,
                 search_text=search_text if active_tab == 0 else "",
             )
@@ -268,7 +275,7 @@ class AssetManagerController:
         if target in ("both", "assets"):
             self.w.asset_assets_list.clear()
             visible_assets = filter_entity_dirs(
-                [item.source_path for item in assets],
+                asset_paths,
                 prefix_filter=asset_filter,
                 search_text=search_text if active_tab == 1 else "",
             )
@@ -283,6 +290,25 @@ class AssetManagerController:
                     pix = self._get_placeholder_pixmap(asset_dir, asset_icon_size)
                 asset_item.setIcon(QtGui.QIcon(pix))
                 self.w.asset_assets_list.addItem(asset_item)
+
+        if target in ("both", "library"):
+            self.w.asset_library_list.clear()
+            visible_library_assets = filter_entity_dirs(
+                library_paths,
+                prefix_filter=library_filter,
+                search_text=search_text if active_tab == 2 else "",
+            )
+            for library_dir in visible_library_assets:
+                library_item = QtWidgets.QListWidgetItem(library_dir.name)
+                library_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(library_dir))
+                library_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "asset")
+                preview = layout.preview_path(self._entity_record_for_path(library_dir)) if layout else None
+                if preview:
+                    pix = self._get_scaled_preview_pixmap(preview, library_dir, asset_icon_size)
+                else:
+                    pix = self._get_placeholder_pixmap(library_dir, asset_icon_size)
+                library_item.setIcon(QtGui.QIcon(pix))
+                self.w.asset_library_list.addItem(library_item)
 
     def _get_scaled_preview_pixmap(
         self, preview_path: Path, entity_dir: Path, size: QtCore.QSize
@@ -326,8 +352,12 @@ class AssetManagerController:
     def refresh_assets_list(self, *_: object) -> None:
         self._refresh_asset_entity_lists(target="assets")
 
+    def refresh_library_list(self, *_: object) -> None:
+        self._refresh_asset_entity_lists(target="library")
+
     def refresh_active_list(self, *_: object) -> None:
-        target = "shots" if self.w.asset_work_tabs.currentIndex() == 0 else "assets"
+        target_by_index = {0: "shots", 1: "assets", 2: "library"}
+        target = target_by_index.get(self.w.asset_work_tabs.currentIndex(), "assets")
         self._refresh_asset_entity_lists(target=target)
 
     def apply_asset_shots_size(self, label: str, refresh: bool = True) -> None:
@@ -349,11 +379,13 @@ class AssetManagerController:
     def on_asset_tab_changed(self, index: int) -> None:
         if index == 0:
             self.w.asset_entity_search.setPlaceholderText("Search shots...")
-        else:
+        elif index == 1:
             self.w.asset_entity_search.setPlaceholderText("Search assets...")
+        else:
+            self.w.asset_entity_search.setPlaceholderText("Search library...")
         project_root = getattr(self.w, "_asset_current_project_root", None)
         if project_root is not None:
-            tab_label = "Shots" if index == 0 else "Assets"
+            tab_label = {0: "Shots", 1: "Assets", 2: "Library"}.get(index, "Assets")
             self.w.asset_path_label.setText(f"{Path(project_root).name} / {tab_label}")
         self.refresh_active_list()
 
@@ -632,8 +664,13 @@ class AssetManagerController:
         if not hasattr(self, "_asset_watcher"):
             return
         paths: List[Path] = []
-        for entry in self.w._asset_manager_projects:
-            project_path = Path(str(entry.get("local_path", "")))
+        project_paths = find_projects(self.w.projects_dir)
+        current_project = getattr(self.w, "_asset_current_project_root", None)
+        if current_project is not None:
+            current_project_path = Path(current_project)
+            if current_project_path.exists() and current_project_path not in project_paths:
+                project_paths.append(current_project_path)
+        for project_path in project_paths:
             if project_path.exists():
                 paths.append(project_path)
                 project_schema = self._effective_project_schema(project_path)

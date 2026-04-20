@@ -136,9 +136,11 @@ class ProjectsPage(QtWidgets.QWidget):
         footer.addWidget(self.open_btn)
 
         self.add_asset_btn = QtWidgets.QPushButton("Add to Asset Manager")
+        self.add_asset_btn.setVisible(False)
         footer.addWidget(self.add_asset_btn)
 
         self.remove_asset_btn = QtWidgets.QPushButton("Remove from Asset Manager")
+        self.remove_asset_btn.setVisible(False)
         footer.addWidget(self.remove_asset_btn)
 
         self.status = QtWidgets.QLabel("")

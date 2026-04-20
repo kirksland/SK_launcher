@@ -19,6 +19,10 @@
     {
       "local_path": "C:\\Users\\justi\\Documents\\HoudiniProjects\\Mardini_2026",
       "client_id": null
+    },
+    {
+      "local_path": "C:\\Users\\justi\\Desktop\\SK_launcher\\asset_layout_sandbox\\pipeline_plus_library",
+      "client_id": null
     }
   ],
   "asset_schema": {
@@ -40,6 +44,26 @@
         "assets"
       ]
     },
+    "entity_sources": [
+      {
+        "path": "shots",
+        "entity_type": "shot",
+        "role": "shot",
+        "confidence": "medium",
+        "evidence": [
+          "legacy entity_roots"
+        ]
+      },
+      {
+        "path": "assets",
+        "entity_type": "asset",
+        "role": "pipeline_asset",
+        "confidence": "medium",
+        "evidence": [
+          "legacy entity_roots"
+        ]
+      }
+    ],
     "representations": {
       "usd": {
         "extensions": [
@@ -94,6 +118,26 @@
           "assets"
         ]
       },
+      "entity_sources": [
+        {
+          "path": "shots",
+          "entity_type": "shot",
+          "role": "shot",
+          "confidence": "medium",
+          "evidence": [
+            "legacy entity_roots"
+          ]
+        },
+        {
+          "path": "assets",
+          "entity_type": "asset",
+          "role": "pipeline_asset",
+          "confidence": "medium",
+          "evidence": [
+            "legacy entity_roots"
+          ]
+        }
+      ],
       "representations": {
         "usd": {
           "extensions": [
@@ -149,6 +193,26 @@
           "library/assets"
         ]
       },
+      "entity_sources": [
+        {
+          "path": "shots",
+          "entity_type": "shot",
+          "role": "shot",
+          "confidence": "medium",
+          "evidence": [
+            "legacy entity_roots"
+          ]
+        },
+        {
+          "path": "library/assets",
+          "entity_type": "asset",
+          "role": "pipeline_asset",
+          "confidence": "medium",
+          "evidence": [
+            "legacy entity_roots"
+          ]
+        }
+      ],
       "representations": {
         "usd": {
           "extensions": [
@@ -203,10 +267,129 @@
           "shots"
         ],
         "asset": [
-          "assets",
-          "library/assets"
+          "library/assets",
+          "assets"
         ]
       },
+      "entity_sources": [
+        {
+          "path": "library/assets",
+          "entity_type": "asset",
+          "role": "library_asset",
+          "confidence": "high",
+          "evidence": [
+            "direct source geometry files",
+            "texture folders",
+            "texture map naming"
+          ]
+        },
+        {
+          "path": "assets",
+          "entity_type": "asset",
+          "role": "pipeline_asset",
+          "confidence": "high",
+          "evidence": [
+            "entity publish folders",
+            "entity preview folders",
+            "published USD files",
+            "task/context folders",
+            "representation-only folders"
+          ]
+        },
+        {
+          "path": "shots",
+          "entity_type": "shot",
+          "role": "shot",
+          "confidence": "high",
+          "evidence": [
+            "entity publish folders",
+            "entity preview folders",
+            "entity work folders",
+            "published USD files",
+            "task/context folders",
+            "shot-like child names",
+            "review media"
+          ]
+        }
+      ],
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish"
+      ]
+    },
+    "C:\\Users\\justi\\Desktop\\SK_launcher\\asset_layout_sandbox\\pipeline_plus_library": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "lookdev",
+        "modeling"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "incoming_models",
+          "production_items"
+        ]
+      },
+      "entity_sources": [
+        {
+          "path": "incoming_models",
+          "entity_type": "asset",
+          "role": "library_asset",
+          "confidence": "high",
+          "evidence": [
+            "direct source geometry files",
+            "texture folders",
+            "texture map naming"
+          ]
+        },
+        {
+          "path": "production_items",
+          "entity_type": "asset",
+          "role": "pipeline_asset",
+          "confidence": "high",
+          "evidence": [
+            "entity publish folders",
+            "entity preview folders",
+            "published USD files",
+            "task/context folders",
+            "representation-only folders"
+          ]
+        }
+      ],
       "representations": {
         "usd": {
           "extensions": [

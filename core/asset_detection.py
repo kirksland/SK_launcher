@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from core.asset_schema import default_asset_schema, normalize_asset_schema
+from core.asset_profile import AssetFolderProfile, profile_entity_collection
 
 COMMON_ENTITY_ROOT_ALIASES = {
     "shot": ["shots", "seq", "sequences", "library/shots"],
@@ -38,14 +39,27 @@ def detect_project_layout(
     schema = normalize_asset_schema(base_schema or default_asset_schema())
     evidence: Dict[str, List[str]] = {
         "entity_roots": [],
+        "entity_sources": [],
         "representations": [],
         "contexts": [],
     }
     warnings: List[str] = []
     unresolved: List[str] = []
 
-    detected_shot_roots = _detect_entity_roots(project_root, "shot", schema)
-    detected_asset_roots = _detect_entity_roots(project_root, "asset", schema)
+    profiles = _detect_entity_source_profiles(project_root, schema)
+    if profiles:
+        schema["entity_sources"] = [_profile_to_source(project_root, profile) for profile in profiles]
+
+    detected_shot_roots = [
+        str(profile.path.relative_to(project_root)).replace("\\", "/").lower()
+        for profile in profiles
+        if profile.entity_type == "shot" and profile.role != "representation_source"
+    ] or _detect_entity_roots(project_root, "shot", schema)
+    detected_asset_roots = [
+        str(profile.path.relative_to(project_root)).replace("\\", "/").lower()
+        for profile in profiles
+        if profile.entity_type == "asset" and profile.role not in {"representation_source", "unknown_asset"}
+    ] or _detect_entity_roots(project_root, "asset", schema)
     if detected_shot_roots:
         schema["entity_roots"]["shot"] = detected_shot_roots
         evidence["entity_roots"].append(f"shot={', '.join(detected_shot_roots)}")
@@ -56,6 +70,12 @@ def detect_project_layout(
         evidence["entity_roots"].append(f"asset={', '.join(detected_asset_roots)}")
     else:
         warnings.append("No asset root detected")
+
+    for profile in profiles:
+        rel = str(profile.path.relative_to(project_root)).replace("\\", "/")
+        evidence["entity_sources"].append(
+            f"{profile.role}:{rel} ({profile.confidence}; {', '.join(profile.evidence)})"
+        )
 
     sample_entities = _sample_entity_dirs(project_root, schema)
     detected_contexts = _detect_contexts(sample_entities)
@@ -104,6 +124,67 @@ def _detect_entity_roots(project_root: Path, entity_type: str, schema: Dict[str,
             if has_child_dir and candidate not in found:
                 found.append(candidate)
     return found
+
+
+def _detect_entity_source_profiles(project_root: Path, schema: Dict[str, Any]) -> List[AssetFolderProfile]:
+    candidates = _candidate_collection_roots(project_root, schema)
+    profiles: List[AssetFolderProfile] = []
+    for candidate in candidates:
+        profile = profile_entity_collection(candidate)
+        if profile.role == "representation_source":
+            continue
+        if profile.role == "unknown_asset" and profile.confidence == "low":
+            continue
+        profiles.append(profile)
+    profiles.sort(key=lambda profile: (profile.entity_type, profile.role, str(profile.path).lower()))
+    return profiles
+
+
+def _candidate_collection_roots(project_root: Path, schema: Dict[str, Any]) -> List[Path]:
+    candidates: List[Path] = []
+    seen: set[Path] = set()
+
+    def add(path: Path) -> None:
+        if not path.exists() or not path.is_dir() or path in seen:
+            return
+        try:
+            if not any(child.is_dir() for child in path.iterdir()):
+                return
+        except OSError:
+            return
+        seen.add(path)
+        candidates.append(path)
+
+    for entity_type in ("shot", "asset"):
+        for root_name in schema.get("entity_roots", {}).get(entity_type, []):
+            add(project_root.joinpath(*[part for part in str(root_name).split("/") if part]))
+        for root_name in COMMON_ENTITY_ROOT_ALIASES.get(entity_type, []):
+            add(project_root.joinpath(*[part for part in root_name.split("/") if part]))
+
+    try:
+        first_level = [child for child in project_root.iterdir() if child.is_dir()]
+    except OSError:
+        first_level = []
+
+    for child in first_level:
+        add(child)
+        try:
+            for grandchild in child.iterdir():
+                if grandchild.is_dir():
+                    add(grandchild)
+        except OSError:
+            continue
+    return candidates
+
+
+def _profile_to_source(project_root: Path, profile: AssetFolderProfile) -> Dict[str, Any]:
+    return {
+        "path": str(profile.path.relative_to(project_root)).replace("\\", "/").lower(),
+        "entity_type": profile.entity_type,
+        "role": profile.role,
+        "confidence": profile.confidence,
+        "evidence": profile.evidence,
+    }
 
 
 def _sample_entity_dirs(project_root: Path, schema: Dict[str, Any]) -> List[Path]:

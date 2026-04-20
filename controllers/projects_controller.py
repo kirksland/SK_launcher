@@ -125,10 +125,7 @@ class ProjectsController:
         )
         if not directory:
             return
-        self.w.projects_dir = Path(directory)
-        self.w.path_label.setText(f"Projects: {self.w.projects_dir}")
-        self.refresh_projects()
-        self.refresh_project_watch_paths()
+        self.w.apply_projects_dir(Path(directory), persist=True, sync_settings_field=True)
 
     def create_project(self) -> None:
         name, ok = QtWidgets.QInputDialog.getText(self.w, "New Project", "Project name:")

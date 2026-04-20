@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from core.asset_schema import entity_root_candidates, representation_extensions, representation_folders
+from core.asset_schema import entity_root_candidates, entity_sources_for_role, entity_sources_for_type, representation_extensions, representation_folders
 
 ENTITY_TYPE_ROOT_NAMES = {
     "shot": ["shots", "shot", "seq", "sequence", "sequences"],
@@ -21,6 +21,7 @@ COMMON_REPRESENTATION_FOLDERS = {
 @dataclass(frozen=True)
 class EntityRecord:
     entity_type: str
+    role: str
     name: str
     source_path: Path
 
@@ -46,6 +47,14 @@ class ResolvedAssetLayout:
 
     def entities(self, entity_type: str) -> List[EntityRecord]:
         return list(self._entities.get(entity_type, []))
+
+    def entities_by_role(self, role: str) -> List[EntityRecord]:
+        return [
+            entity
+            for entities in self._entities.values()
+            for entity in entities
+            if entity.role == role
+        ]
 
     def representation_paths(
         self,
@@ -80,7 +89,23 @@ class ResolvedAssetLayout:
     def _build_entities(self, entity_type: str) -> List[EntityRecord]:
         records: List[EntityRecord] = []
         seen: set[Path] = set()
-        for root_name in entity_root_candidates(self.schema, entity_type):
+        sources = entity_sources_for_type(self.schema, entity_type)
+        if not sources:
+            sources = [
+                {
+                    "path": root_name,
+                    "entity_type": entity_type,
+                    "role": "shot" if entity_type == "shot" else "pipeline_asset",
+                }
+                for root_name in entity_root_candidates(self.schema, entity_type)
+            ]
+        for source in sources:
+            role = str(source.get("role", "pipeline_asset")).strip().lower()
+            if role == "representation_source":
+                continue
+            root_name = str(source.get("path", "")).strip()
+            if not root_name:
+                continue
             root_path = self.project_root.joinpath(*[part for part in root_name.split("/") if part])
             if not root_path.exists():
                 continue
@@ -95,7 +120,7 @@ class ResolvedAssetLayout:
                 if child in seen:
                     continue
                 seen.add(child)
-                records.append(EntityRecord(entity_type=entity_type, name=child.name, source_path=child))
+                records.append(EntityRecord(entity_type=entity_type, role=role, name=child.name, source_path=child))
         return records
 
     def _resolve_representation_sources(self) -> Dict[tuple[str, str], List[RepresentationSource]]:

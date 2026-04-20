@@ -604,6 +604,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_shots_list = self.asset_page.asset_shots_list
         self.asset_assets_filter = self.asset_page.asset_assets_filter
         self.asset_assets_list = self.asset_page.asset_assets_list
+        self.asset_library_filter = self.asset_page.asset_library_filter
+        self.asset_library_list = self.asset_page.asset_library_list
         self.asset_entity_search = self.asset_page.asset_entity_search
         self.asset_open_folder_btn = self.asset_page.asset_open_folder_btn
         self.asset_work_tabs = self.asset_page.asset_work_tabs
@@ -722,12 +724,15 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_shots_filter.currentTextChanged.connect(self.asset_controller.refresh_shots_list)
         self.asset_shots_size.currentTextChanged.connect(self.asset_controller.on_asset_shots_size_changed)
         self.asset_assets_filter.currentTextChanged.connect(self.asset_controller.refresh_assets_list)
+        self.asset_library_filter.currentTextChanged.connect(self.asset_controller.refresh_library_list)
         self.asset_entity_search.textChanged.connect(self.asset_controller.refresh_active_list)
         self.asset_open_folder_btn.clicked.connect(self.asset_controller.open_asset_project_folder)
         self.asset_work_tabs.currentChanged.connect(self.asset_controller.on_asset_tab_changed)
         self.asset_shots_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
         self.asset_assets_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
         self.asset_assets_list.customContextMenuRequested.connect(self.asset_controller.show_asset_context_menu)
+        self.asset_library_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
+        self.asset_library_list.customContextMenuRequested.connect(self.asset_controller.show_asset_context_menu)
         self.asset_prev_btn.clicked.connect(self.asset_controller.prev_preview_image)
         self.asset_next_btn.clicked.connect(self.asset_controller.next_preview_image)
         self.asset_fullscreen_btn.clicked.connect(self.asset_controller.toggle_asset_video_fullscreen)
@@ -875,6 +880,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         use_assoc = self.settings_use_assoc.isChecked()
         show_splash_screen = self.settings_show_splash.isChecked()
         houdini_exe = normalize_houdini_exe(self.settings_houdini_exe.text())
+        resolved_projects_dir = Path(projects_dir) if projects_dir else DEFAULT_PROJECTS_DIR
         backend_label = self.settings_video_backend.currentText().strip().lower()
         if backend_label == "opencv":
             video_backend = "opencv"
@@ -887,7 +893,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.settings.update(
             {
-                "projects_dir": projects_dir,
+                "projects_dir": str(resolved_projects_dir),
                 "server_repo_dir": server_repo_dir,
                 "template_hip": template_hip,
                 "new_hip_pattern": pattern,
@@ -900,7 +906,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         )
         save_settings(self.settings)
 
-        self.projects_dir = Path(projects_dir) if projects_dir else DEFAULT_PROJECTS_DIR
         self.server_repo_dir = Path(server_repo_dir) if server_repo_dir else Path(DEFAULT_SETTINGS["server_repo_dir"])
         self._template_hip = Path(template_hip) if template_hip else DEFAULT_TEMPLATE_HIP
         self._new_hip_pattern = pattern or "{projectName}_001.hipnc"
@@ -909,13 +914,32 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._houdini_exe = houdini_exe
         self._video_backend_pref = video_backend
 
-        self.path_label.setText(f"Projects: {self.projects_dir}")
-        self.project_controller.refresh_projects()
-        self.asset_controller.refresh_asset_manager()
-        self.project_controller.refresh_project_watch_paths()
-        self.asset_controller.refresh_asset_watch_paths()
+        self.apply_projects_dir(resolved_projects_dir, persist=False, sync_settings_field=False)
         self._is_first_run = False
         self.settings_page.set_startup_context(False)
+        self._refresh_settings_validation()
+
+    def apply_projects_dir(
+        self,
+        directory: Path,
+        *,
+        persist: bool,
+        sync_settings_field: bool,
+    ) -> None:
+        self.projects_dir = Path(directory)
+        self.settings["projects_dir"] = str(self.projects_dir)
+        if sync_settings_field and hasattr(self, "settings_projects_dir"):
+            self.settings_projects_dir.blockSignals(True)
+            self.settings_projects_dir.setText(str(self.projects_dir))
+            self.settings_projects_dir.blockSignals(False)
+        if persist:
+            save_settings(self.settings)
+
+        self.path_label.setText(f"Projects: {self.projects_dir}")
+        self.project_controller.refresh_projects()
+        self.project_controller.refresh_project_watch_paths()
+        self.asset_controller.refresh_asset_manager()
+        self.asset_controller.refresh_asset_watch_paths()
         self._refresh_settings_validation()
 
     def _handle_startup_configuration(self) -> None:
@@ -968,6 +992,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         )
         if directory:
             self.settings_projects_dir.setText(directory)
+            self.apply_projects_dir(Path(directory), persist=False, sync_settings_field=False)
 
     def _browse_settings_server_dir(self) -> None:
         directory = QtWidgets.QFileDialog.getExistingDirectory(
