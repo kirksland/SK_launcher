@@ -60,6 +60,7 @@ from core.board_edit.tool_stack import (
 from core.board_apply_runtime import BoardApplyRuntime
 from core.board_io import backup_board_payload, board_path, load_board_payload, save_board_payload
 from core.board_media_cache import BoardMediaCache
+from controllers.board_group_actions_controller import BoardGroupActionsController
 from controllers.board_groups_controller import BoardGroupsController
 from core.board_state import (
     ApplyPayloadState,
@@ -85,20 +86,9 @@ from core.board_state import (
 )
 from core.board_scene.dialogs import NoteTextEditor, PopupOutsideCloseFilter
 from core.board_scene.groups import (
-    add_selected_items_to_group,
     build_rename_destination,
     collapse_items_by_group,
-    create_group_from_items,
-    find_group_for_item,
-    filter_group_member_items,
-    prune_empty_groups,
-    reassign_items_to_groups,
-    remove_items_from_groups,
-    scene_groups,
-    select_group_members,
     serialize_group_members,
-    try_add_item_to_groups,
-    ungroup_items,
 )
 from core.board_scene.items import BoardGroupItem, BoardImageItem, BoardNoteItem, BoardSequenceItem, BoardVideoItem
 from core.houdini_env import build_houdini_env
@@ -202,6 +192,7 @@ class BoardController:
         self._scene = self.w.board_page.scene
         self._scene.changed.connect(self._on_scene_changed)
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
+        self._group_actions = BoardGroupActionsController(self)
         self._groups_panel = BoardGroupsController(self)
         self.w.board_page.edit_timeline_play_btn.clicked.connect(self._toggle_edit_timeline_play)
         self.w.board_page.edit_sequence_timeline.playheadChanged.connect(self._on_edit_sequence_timeline_playhead)
@@ -1094,46 +1085,18 @@ class BoardController:
         self.edit_note(item)
 
     def add_group(self) -> None:
-        items = filter_group_member_items(self._scene.selectedItems())
-        if not items:
-            self._notify("Select items to group.")
-            return
-        color = QtWidgets.QColorDialog.getColor(QtGui.QColor("#4aa3ff"), self.w, "Group color")
-        if not color.isValid():
-            return
-        if create_group_from_items(
-            self._scene,
-            group_factory=BoardGroupItem,
-            color=color,
-            items=items,
-        ) is None:
-            return
-        self._commit_scene_mutation(history=False, update_groups=True)
+        self._group_actions.add_group()
 
     def ungroup_selected(self) -> None:
-        groups = [i for i in self._scene.selectedItems() if isinstance(i, BoardGroupItem)]
-        if not groups:
-            self._notify("Select a group to ungroup.")
-            return
-        ungroup_items(self._scene, groups)
-        self._commit_scene_mutation(history=False, update_groups=True)
+        self._group_actions.ungroup_selected()
 
     def try_add_item_to_group(
         self, item: QtWidgets.QGraphicsItem, scene_pos: Optional[QtCore.QPointF]
     ) -> None:
-        if scene_pos is None:
-            scene_pos = item.sceneBoundingRect().center()
-        if try_add_item_to_groups(item, self._groups(), scene_pos):
-            self._commit_scene_mutation(history=True, update_groups=True)
+        self._group_actions.try_add_item_to_group(item, scene_pos)
 
     def handle_item_drop(self, items: list[QtWidgets.QGraphicsItem]) -> None:
-        moved = [i for i in items if isinstance(i, (BoardImageItem, BoardNoteItem, BoardVideoItem, BoardSequenceItem))]
-        if not moved:
-            return
-        groups = self._groups()
-        if not groups:
-            return
-        reassign_items_to_groups(moved, groups)
+        self._group_actions.handle_item_drop(items)
 
     def delete_selected_items(self) -> None:
         selected = list(self._scene.selectedItems())
@@ -1149,27 +1112,25 @@ class BoardController:
             self.end_scene_interaction(history=True, update_groups=True)
 
     def remove_selected_from_groups(self) -> None:
-        if remove_items_from_groups(self._scene.selectedItems(), self._groups()):
-            self._commit_scene_mutation(history=True, update_groups=True)
+        self._group_actions.remove_selected_from_groups()
 
     def add_selected_to_group(self, group_key: int) -> None:
         self._groups_panel.add_selected_to_group(group_key)
 
     def _add_selected_items_to_group_ref(self, group: BoardGroupItem) -> None:
-        if add_selected_items_to_group(group, self._scene.selectedItems()):
-            self._commit_scene_mutation(history=True, update_groups=True)
+        self._group_actions.add_selected_items_to_group_ref(group)
 
     def select_group_members(self, group_item: BoardGroupItem) -> None:
-        select_group_members(self._scene.selectedItems(), group_item)
+        self._group_actions.select_group_members(group_item)
 
     def _groups(self) -> list[BoardGroupItem]:
-        return scene_groups(self._scene.items(), BoardGroupItem)
+        return self._group_actions.groups()
 
     def _prune_empty_groups(self) -> bool:
-        return prune_empty_groups(self._scene, self._scene.items(), BoardGroupItem)
+        return self._group_actions.prune_empty_groups()
 
     def _find_group_for_item(self, item: QtWidgets.QGraphicsItem) -> Optional[BoardGroupItem]:
-        return find_group_for_item(self._groups(), item)
+        return self._group_actions.find_group_for_item(item)
 
     def fit_view(self) -> None:
         self._refresh_scene_workspace()
