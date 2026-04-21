@@ -75,7 +75,10 @@ class AssetManagerController:
             self.set_project_context(None)
             return
         path_text = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
-        self.set_project_context(Path(str(path_text)) if path_text else None)
+        project_path = Path(str(path_text)) if path_text else None
+        if self._project_context_is_current(project_path):
+            return
+        self.set_project_context(project_path)
 
     def _apply_queued_project_context(self) -> None:
         project_path = self._pending_project_context
@@ -91,6 +94,14 @@ class AssetManagerController:
         except Exception:
             return False
 
+    def _project_context_is_current(self, project_path: Optional[Path]) -> bool:
+        current_root = getattr(self.w, "_asset_current_project_root", None)
+        if project_path is None:
+            return current_root is None
+        if current_root != project_path:
+            return False
+        return getattr(self.w, "_asset_resolved_layout", None) is not None or self.w.asset_onboarding_card.isVisible()
+
     def _clear_asset_browser_state(self, message: str) -> None:
         self._clear_asset_detail_lists(self.w)
         self.w._asset_current_project_root = None
@@ -101,8 +112,8 @@ class AssetManagerController:
         self.w.asset_details_title.setText("No project selected")
         self.w.asset_path_label.setText(message)
         self.w.asset_meta.setText(message)
-        self.w.asset_versions_list.clear()
-        self.w.asset_versions_list.addItem("No entity selected")
+        self.w.asset_inventory_list.clear()
+        self.w.asset_inventory_list.addItem("No entity selected")
         self.w.asset_history_list.clear()
         self.w.asset_history_list.addItem("No entity selected")
         if hasattr(self.w.asset_page, "asset_selection_summary"):
@@ -124,6 +135,9 @@ class AssetManagerController:
             return
         if hasattr(self.w, "asset_layout_btn"):
             self.w.asset_layout_btn.setEnabled(True)
+        self.w.asset_path_label.setText(f"{project_path.name} / Loading inventory...")
+        self.set_asset_status("Scanning project layout...")
+        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         active_schema = self._effective_project_schema(project_path)
         self.w._asset_detected_layout = detect_project_layout(project_path, base_schema=active_schema)
         has_override = str(project_path) in self.w._asset_project_schemas
@@ -136,7 +150,7 @@ class AssetManagerController:
             self.w.asset_details_title.setText(project_path.name)
             self.w.asset_path_label.setText(f"{project_path.name} / Confirm asset layout")
             self.w.asset_meta.setText("Confirm the detected asset layout before browsing entities.")
-            self.w.asset_versions_list.addItem("Layout setup required")
+            self.w.asset_inventory_list.addItem("Layout setup required")
             self.w.asset_history_list.addItem("Layout setup required")
             self.set_asset_status("Confirm the detected layout or use the default layout.")
             return
@@ -151,7 +165,7 @@ class AssetManagerController:
         self._clear_asset_detail_lists(self.w)
         self.w.asset_preview.clear()
         self.w.asset_meta.setText("Select a shot or asset to view details.")
-        self.w.asset_versions_list.addItem("No entity selected")
+        self.w.asset_inventory_list.addItem("No entity selected")
         self.w.asset_history_list.addItem("No entity selected")
         self._sync_asset_contexts(active_schema)
         self._refresh_asset_entity_lists(target="both")
@@ -163,7 +177,7 @@ class AssetManagerController:
         window.asset_shots_list.clear()
         window.asset_assets_list.clear()
         window.asset_library_list.clear()
-        window.asset_versions_list.clear()
+        window.asset_inventory_list.clear()
         window.asset_history_list.clear()
 
     def open_asset_details(self, item: QtWidgets.QListWidgetItem) -> None:
@@ -185,11 +199,11 @@ class AssetManagerController:
         self.w.asset_status.setText(elided)
         self.w.asset_status.setToolTip(text)
 
-    def show_asset_version_context_menu(self, pos: QtCore.QPoint) -> None:
-        item = self.w.asset_versions_list.itemAt(pos)
+    def show_asset_inventory_context_menu(self, pos: QtCore.QPoint) -> None:
+        item = self.w.asset_inventory_list.itemAt(pos)
         if item is None:
             return
-        widget = self.w.asset_versions_list.itemWidget(item)
+        widget = self.w.asset_inventory_list.itemWidget(item)
         path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
         kind = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
         if isinstance(widget, AssetVersionRow):
@@ -200,7 +214,7 @@ class AssetManagerController:
         menu = QtWidgets.QMenu(self.w)
         label = "Copy Path" if kind not in ("usd", "video", "image") else f"Copy {str(kind).upper()} Path"
         action = menu.addAction(label)
-        chosen = menu.exec(self.w.asset_versions_list.mapToGlobal(pos))
+        chosen = menu.exec(self.w.asset_inventory_list.mapToGlobal(pos))
         if chosen == action:
             normalized = self.w._to_houdini_path(path_text)
             QtWidgets.QApplication.clipboard().setText(normalized)
@@ -528,7 +542,7 @@ class AssetManagerController:
         list_context = normalize_list_context(context)
         self.w.asset_meta.setText(build_asset_meta_text(owner, status, context, entity_dir.name))
 
-        self.w.asset_versions_list.clear()
+        self.w.asset_inventory_list.clear()
         inventory = build_entity_inventory(
             entity_dir=entity_dir,
             entity_type=self.w._asset_current_entity_type,
@@ -538,12 +552,12 @@ class AssetManagerController:
             context_label=context,
         )
         inventory_renderer = AssetInventoryRenderer(
-            self.w.asset_versions_list,
-            self.w.asset_page.asset_versions_hint if hasattr(self.w.asset_page, "asset_versions_hint") else None,
+            self.w.asset_inventory_list,
+            self.w.asset_page.asset_inventory_hint if hasattr(self.w.asset_page, "asset_inventory_hint") else None,
         )
         first_video = inventory_renderer.render(
             inventory,
-            on_selected_path=self._sync_asset_version_preview,
+            on_selected_path=self._sync_asset_inventory_preview,
         )
 
         if not self.w._preview_images and first_video is not None:
@@ -651,7 +665,7 @@ class AssetManagerController:
             self.w.asset_context_combo.blockSignals(False)
         return chosen
 
-    def on_asset_version_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
+    def on_asset_inventory_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         kind = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
         path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
         if not path_text:
@@ -664,9 +678,9 @@ class AssetManagerController:
             self.set_asset_status(f"Selected source file: {self.w._to_houdini_path(str(path))}")
             return
         if path.exists():
-            self._sync_asset_version_preview(path, kind)
+            self._sync_asset_inventory_preview(path, kind)
 
-    def _sync_asset_version_preview(self, path: Path, kind: Optional[str]) -> None:
+    def _sync_asset_inventory_preview(self, path: Path, kind: Optional[str]) -> None:
         if not path.exists():
             return
         if kind == "video":
@@ -847,7 +861,7 @@ class AssetManagerController:
         self.w.asset_path_label.setText(f"{project_path.name} / Review asset layout")
         self.w.asset_meta.setText("Review the detected layout and confirm a replacement if needed.")
         self._clear_asset_detail_lists(self.w)
-        self.w.asset_versions_list.addItem("Layout review in progress")
+        self.w.asset_inventory_list.addItem("Layout review in progress")
         self.w.asset_history_list.addItem("Layout review in progress")
         self._set_asset_onboarding(project_path, detected)
         self.set_asset_status("Asset layout review reopened. Your saved layout stays unchanged until you confirm a new one.")

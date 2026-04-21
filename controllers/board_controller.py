@@ -6,7 +6,6 @@ import time
 import uuid
 import shutil
 import urllib.request
-import hashlib
 from collections import deque
 from pathlib import Path
 from typing import Optional
@@ -58,6 +57,10 @@ from core.board_edit.tool_stack import (
     tool_stack_is_effective,
     upsert_tool_settings,
 )
+from core.board_apply_runtime import BoardApplyRuntime
+from core.board_io import backup_board_payload, board_path, load_board_payload, save_board_payload
+from core.board_media_cache import BoardMediaCache
+from controllers.board_groups_controller import BoardGroupsController
 from core.board_state import (
     ApplyPayloadState,
     apply_exr_preview_result,
@@ -86,24 +89,14 @@ from core.board_scene.groups import (
     build_rename_destination,
     collapse_items_by_group,
     create_group_from_items,
-    editable_name_for_tree_path,
     find_group_for_item,
-    find_scene_item_for_tree_info,
-    first_selected_tree_info,
     filter_group_member_items,
-    group_tree_menu_flags,
-    populate_tree_item_metadata,
     prune_empty_groups,
     reassign_items_to_groups,
     remove_items_from_groups,
     scene_groups,
     select_group_members,
-    select_tree_info_target,
     serialize_group_members,
-    tree_info_is_renamable,
-    tree_info_for_scene_item,
-    tree_label_for_scene_item,
-    tree_path_for_info,
     try_add_item_to_groups,
     ungroup_items,
 )
@@ -146,24 +139,13 @@ class BoardController:
         self._saving = False
         self._last_save_ts = 0.0
         self._board_state: dict = {"items": [], "image_display_overrides": {}}
-        self._pixmap_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
-        self._video_thumb_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
-        self._sequence_thumb_cache: dict[tuple[Path, int], tuple[float, QtGui.QPixmap]] = {}
-        self._thumb_cache_dir: Optional[Path] = None
-        self._max_display_dim = 2048
-        self._low_quality = False
-        self._visible_images: set[int] = set()
+        self._media_cache = BoardMediaCache(max_display_dim=2048)
         self._history: list[str] = []
         self._history_index = -1
         self._history_timer: Optional[QtCore.QTimer] = None
-        self._group_tree_timer: Optional[QtCore.QTimer] = None
         self._post_load_reapply_timer: Optional[QtCore.QTimer] = None
-        self._group_tree_refs: dict[int, BoardGroupItem] = {}
-        self._syncing_tree_selection = False
-        self._group_tree_inline_rename: Optional[dict[str, object]] = None
-        self._apply_timer: Optional[QtCore.QTimer] = None
         self._apply_state = ApplyPayloadState()
-        self._board_loading_total = 0
+        self._apply_runtime = BoardApplyRuntime(self.w, self._apply_state, self._apply_payload_batch)
         self._scene_interaction_depth = 0
         self._convert_thread: Optional[QtCore.QThread] = None
         self._convert_worker: Optional[VideoToSequenceWorker] = None
@@ -220,9 +202,7 @@ class BoardController:
         self._scene = self.w.board_page.scene
         self._scene.changed.connect(self._on_scene_changed)
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
-        self.w.board_page.groups_tree.itemClicked.connect(self._on_group_tree_clicked)
-        self.w.board_page.groups_tree.itemDoubleClicked.connect(self._on_group_tree_double_clicked)
-        self.w.board_page.groups_tree.itemChanged.connect(self._on_group_tree_item_changed)
+        self._groups_panel = BoardGroupsController(self)
         self.w.board_page.edit_timeline_play_btn.clicked.connect(self._toggle_edit_timeline_play)
         self.w.board_page.edit_sequence_timeline.playheadChanged.connect(self._on_edit_sequence_timeline_playhead)
         self.w.board_page.edit_timeline.playheadChanged.connect(self._on_edit_timeline_playhead)
@@ -401,6 +381,30 @@ class BoardController:
     def _edit_crop_bottom(self, value: float) -> None:
         self._edit_session.crop_bottom = float(value)
 
+    @property
+    def _max_display_dim(self) -> int:
+        return self._media_cache.max_display_dim
+
+    @_max_display_dim.setter
+    def _max_display_dim(self, value: int) -> None:
+        self._media_cache.max_display_dim = int(value)
+
+    @property
+    def _low_quality(self) -> bool:
+        return self._media_cache.low_quality
+
+    @_low_quality.setter
+    def _low_quality(self, value: bool) -> None:
+        self._media_cache.low_quality = bool(value)
+
+    @property
+    def _visible_images(self) -> set[int]:
+        return self._media_cache.visible_images
+
+    @_visible_images.setter
+    def _visible_images(self, value: set[int]) -> None:
+        self._media_cache.visible_images = set(value)
+
     def _log_export_event(self, message: str) -> None:
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         line = f"[EXPORT] {stamp} {message}"
@@ -499,13 +503,7 @@ class BoardController:
             return False
 
     def _group_tree_is_editing(self) -> bool:
-        if self._shutting_down:
-            return False
-        try:
-            tree = self.w.board_page.groups_tree
-            return tree.state() == QtWidgets.QAbstractItemView.State.EditingState
-        except Exception:
-            return False
+        return self._groups_panel.is_editing()
 
     def shutdown(self) -> None:
         if self._shutting_down:
@@ -519,21 +517,7 @@ class BoardController:
             self._scene.selectionChanged.disconnect(self._on_scene_selection_changed)
         except Exception:
             pass
-        try:
-            tree = self.w.board_page.groups_tree
-            tree.itemClicked.disconnect(self._on_group_tree_clicked)
-        except Exception:
-            pass
-        try:
-            tree = self.w.board_page.groups_tree
-            tree.itemDoubleClicked.disconnect(self._on_group_tree_double_clicked)
-        except Exception:
-            pass
-        try:
-            tree = self.w.board_page.groups_tree
-            tree.itemChanged.disconnect(self._on_group_tree_item_changed)
-        except Exception:
-            pass
+        self._groups_panel.shutdown()
         try:
             if self._history_timer is not None and self._history_timer.isActive():
                 self._history_timer.stop()
@@ -541,23 +525,12 @@ class BoardController:
             pass
         self._history_timer = None
         try:
-            if self._group_tree_timer is not None and self._group_tree_timer.isActive():
-                self._group_tree_timer.stop()
-        except Exception:
-            pass
-        self._group_tree_timer = None
-        try:
             if self._post_load_reapply_timer is not None and self._post_load_reapply_timer.isActive():
                 self._post_load_reapply_timer.stop()
         except Exception:
             pass
         self._post_load_reapply_timer = None
-        try:
-            if self._apply_timer is not None and self._apply_timer.isActive():
-                self._apply_timer.stop()
-        except Exception:
-            pass
-        self._apply_timer = None
+        self._apply_runtime.cancel()
         try:
             if self._edit_preview_timer is not None and self._edit_preview_timer.isActive():
                 self._edit_preview_timer.stop()
@@ -602,6 +575,9 @@ class BoardController:
         if self._project_root and self._dirty:
             self.save_board()
         project_changed = project_root != self._project_root
+        if project_changed:
+            self._cancel_pending_board_load()
+            self._media_cache.reset_project_scoped()
         self._project_root = project_root
         enabled = project_root is not None
         self.w.board_add_image_btn.setEnabled(enabled)
@@ -631,6 +607,16 @@ class BoardController:
             self._loaded_project_root = None
             self._board_state_loaded = False
         self._dirty = False
+
+    def _cancel_pending_board_load(self) -> None:
+        self._apply_runtime.cancel()
+        self._loading = False
+        try:
+            self._scene.blockSignals(False)
+        except Exception:
+            pass
+        if hasattr(self.w.board_page, "set_loading_overlay"):
+            self.w.board_page.set_loading_overlay(False)
 
     def add_image(self) -> None:
         if not self._project_root:
@@ -1167,9 +1153,9 @@ class BoardController:
             self._commit_scene_mutation(history=True, update_groups=True)
 
     def add_selected_to_group(self, group_key: int) -> None:
-        group = self._group_tree_refs.get(int(group_key))
-        if group is None:
-            return
+        self._groups_panel.add_selected_to_group(group_key)
+
+    def _add_selected_items_to_group_ref(self, group: BoardGroupItem) -> None:
         if add_selected_items_to_group(group, self._scene.selectedItems()):
             self._commit_scene_mutation(history=True, update_groups=True)
 
@@ -1299,11 +1285,11 @@ class BoardController:
     def save_board(self) -> None:
         if not self._project_root:
             return
-        board_path = self._project_root / ".skyforge_board.json"
-        existing_payload = self._read_board_payload(board_path)
+        path = board_path(self._project_root)
+        existing_payload = load_board_payload(self._project_root)
         if self._should_block_empty_board_save(existing_payload):
-            self._backup_board_payload(board_path, existing_payload, "blocked-empty-save")
-            print(f"[BOARD] Skipped suspicious empty save: {board_path}")
+            backup_board_payload(self._project_root, existing_payload, "blocked-empty-save")
+            print(f"[BOARD] Skipped suspicious empty save: {path}")
             self._notify(
                 "Skipped board save to avoid overwriting an existing board with an empty scene."
             )
@@ -1313,7 +1299,7 @@ class BoardController:
         try:
             self._saving = True
             self._last_save_ts = time.time()
-            board_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            save_board_payload(self._project_root, data)
             self._dirty = False
             self._loaded_project_root = self._project_root
             self._board_state_loaded = True
@@ -1329,19 +1315,8 @@ class BoardController:
     def _payload_item_count(payload: object) -> int:
         return payload_item_count(payload)
 
-    @staticmethod
-    def _read_board_payload(board_path: Path) -> Optional[dict]:
-        if not board_path.exists():
-            return None
-        try:
-            payload = json.loads(board_path.read_text(encoding="utf-8"))
-        except Exception:
-            return None
-        return payload if isinstance(payload, dict) else None
-
     def _board_load_in_progress(self) -> bool:
-        timer_active = self._apply_timer is not None and self._apply_timer.isActive()
-        return self._loading or timer_active or self._apply_state.has_pending()
+        return self._loading or self._apply_runtime.in_progress()
 
     def _should_block_empty_board_save(self, existing_payload: Optional[dict]) -> bool:
         if not self._project_root:
@@ -1354,43 +1329,31 @@ class BoardController:
             return True
         return not self._dirty
 
-    def _backup_board_payload(
-        self, board_path: Path, payload: Optional[dict], reason: str
-    ) -> Optional[Path]:
-        if not self._project_root or not isinstance(payload, dict):
-            return None
-        backup_dir = self._project_root / ".skyforge_board_backups"
-        try:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            stamp = time.strftime("%Y%m%d_%H%M%S")
-            safe_reason = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in reason)
-            backup_path = backup_dir / f"{stamp}_{safe_reason}.json"
-            backup_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            return backup_path
-        except Exception:
-            return None
-
     def load_board(self) -> None:
         if not self._project_root:
             return
-        board_path = self._project_root / ".skyforge_board.json"
+        load_generation = self._apply_runtime.generation
+        path = board_path(self._project_root)
         if self._saving:
             return
-        print(f"[BOARD] Load board: {board_path}")
+        print(f"[BOARD] Load board: {path}")
         self._loading = True
         self.w.board_page.set_loading_overlay(True, f"Reading {self._project_root.name} board data...")
-        if not board_path.exists():
+        if not path.exists():
             payload = {"items": [], "image_display_overrides": {}}
+            if load_generation != self._apply_runtime.generation:
+                return
             self._set_board_state(payload)
             self._loaded_project_root = self._project_root
             self._board_state_loaded = True
             self._start_apply_payload(payload)
             return
-        try:
-            payload = json.loads(board_path.read_text(encoding="utf-8"))
-        except Exception:
+        payload = load_board_payload(self._project_root)
+        if payload is None:
             self._loading = False
             self.w.board_page.set_loading_overlay(False)
+            return
+        if load_generation != self._apply_runtime.generation:
             return
         payload = self._set_board_state(payload)
         self._loaded_project_root = self._project_root
@@ -1410,13 +1373,11 @@ class BoardController:
 
     def _start_apply_payload(self, payload: dict) -> None:
         payload = self._set_board_state(payload)
-        self._board_loading_total = payload_item_count(payload)
+        total = payload_item_count(payload)
         self.w.board_page.set_loading_overlay(
             True,
-            f"Rebuilding {self._board_loading_total} board item(s)...",
+            f"Rebuilding {total} board item(s)...",
         )
-        if self._apply_timer is not None and self._apply_timer.isActive():
-            self._apply_timer.stop()
         self._scene.blockSignals(True)
         self._scene.clear()
         self._image_exr_display_overrides = prepare_apply_state(
@@ -1424,23 +1385,19 @@ class BoardController:
             payload,
             parse_overrides=self._parse_image_display_overrides,
         )
-        if self._apply_timer is None:
-            self._apply_timer = QtCore.QTimer(self.w)
-            self._apply_timer.setSingleShot(True)
-            self._apply_timer.timeout.connect(self._apply_payload_batch)
         print(f"[BOARD] Apply payload start: {len(self._apply_state.queue)} items")
-        self._apply_timer.start(0)
+        self._apply_runtime.start(total)
 
     def _apply_payload_batch(self) -> None:
+        if not self._apply_runtime.is_current():
+            return
         batch_size = 20
         count = 0
         assets_dir = self._project_root / ".skyforge_board_assets" if self._project_root else None
-        remaining_before = len(self._apply_state.queue)
-        if self._board_loading_total:
-            done = max(0, self._board_loading_total - remaining_before)
+        if self._apply_runtime.total:
             self.w.board_page.set_loading_overlay(
                 True,
-                f"Rebuilding board items... {done}/{self._board_loading_total}",
+                f"Rebuilding board items... {self._apply_runtime.done_count()}/{self._apply_runtime.total}",
             )
         while self._apply_state.queue and count < batch_size:
             entry = self._apply_state.queue.popleft()
@@ -1470,7 +1427,7 @@ class BoardController:
             )
 
         if self._apply_state.queue:
-            self._apply_timer.start(10)
+            self._apply_runtime.schedule_next(10)
             return
 
         apply_pending_groups_to_scene(
@@ -3229,9 +3186,9 @@ class BoardController:
         if max_dim is None:
             max_dim = self._max_display_dim
         key = (path, max_dim)
-        cached = self._pixmap_cache.get(key)
-        if cached and cached[0] == mtime:
-            return cached[1]
+        cached = self._media_cache.cached_pixmap(self._media_cache.pixmaps, path, max_dim, mtime)
+        if cached is not None:
+            return cached
         pixmap = QtGui.QPixmap(str(path))
         if pixmap.isNull() and path.suffix.lower() == ".exr":
             pixmap = self._get_exr_pixmap(path, max_dim)
@@ -3243,33 +3200,13 @@ class BoardController:
                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                     QtCore.Qt.TransformationMode.SmoothTransformation,
                 )
-        self._pixmap_cache[key] = (mtime, pixmap)
-        return pixmap
+        return self._media_cache.store_pixmap(self._media_cache.pixmaps, path, max_dim, mtime, pixmap)
 
     def _get_thumb_cache_dir(self) -> Optional[Path]:
-        if self._thumb_cache_dir is not None:
-            return self._thumb_cache_dir
-        if self._project_root is None:
-            return None
-        cache_dir = self._project_root / ".skyforge_cache" / "exr_thumbs"
-        try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            return None
-        self._thumb_cache_dir = cache_dir
-        return cache_dir
+        return self._media_cache.project_thumb_cache_dir(self._project_root)
 
     def _exr_cache_key(self, path: Path, max_dim: int) -> Optional[Path]:
-        cache_dir = self._get_thumb_cache_dir()
-        if cache_dir is None:
-            return None
-        try:
-            mtime = path.stat().st_mtime
-        except Exception:
-            mtime = 0.0
-        key_src = f"{path.resolve()}|{mtime:.6f}|{max_dim}"
-        key = hashlib.sha1(key_src.encode("utf-8")).hexdigest()
-        return cache_dir / f"{key}.png"
+        return self._media_cache.exr_cache_path(self._project_root, path, max_dim)
 
     def _get_exr_pixmap(self, path: Path, max_dim: int) -> QtGui.QPixmap:
         cache_path = self._exr_cache_key(path, max_dim)
@@ -3392,9 +3329,9 @@ class BoardController:
         except Exception:
             return self._build_media_placeholder("VIDEO", path.name)
         key = (path, max_dim)
-        cached = self._video_thumb_cache.get(key)
-        if cached and cached[0] == mtime:
-            return cached[1]
+        cached = self._media_cache.cached_pixmap(self._media_cache.video_thumbnails, path, max_dim, mtime)
+        if cached is not None:
+            return cached
         if cv2 is None:
             return self._build_media_placeholder("VIDEO", path.name)
         pixmap = QtGui.QPixmap()
@@ -3423,8 +3360,13 @@ class BoardController:
                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                     QtCore.Qt.TransformationMode.SmoothTransformation,
                 )
-        self._video_thumb_cache[key] = (mtime, pixmap)
-        return pixmap
+        return self._media_cache.store_pixmap(
+            self._media_cache.video_thumbnails,
+            path,
+            max_dim,
+            mtime,
+            pixmap,
+        )
 
     def _get_video_frame_pixmap(self, path: Path, frame_index: int, max_dim: int) -> Optional[QtGui.QPixmap]:
         if cv2 is None:
@@ -3569,17 +3511,22 @@ class BoardController:
         except Exception:
             return self._build_media_placeholder("SEQ", dir_path.name)
         key = (dir_path, max_dim)
-        cached = self._sequence_thumb_cache.get(key)
-        if cached and cached[0] == mtime:
-            return cached[1]
+        cached = self._media_cache.cached_pixmap(self._media_cache.sequence_thumbnails, dir_path, max_dim, mtime)
+        if cached is not None:
+            return cached
         frames = self._sequence_frame_paths(dir_path)
         if not frames:
             return self._build_media_placeholder("SEQ", dir_path.name)
         pixmap = self._get_display_pixmap(frames[0], max_dim)
         if pixmap.isNull():
             pixmap = self._build_media_placeholder("SEQ", dir_path.name)
-        self._sequence_thumb_cache[key] = (mtime, pixmap)
-        return pixmap
+        return self._media_cache.store_pixmap(
+            self._media_cache.sequence_thumbnails,
+            dir_path,
+            max_dim,
+            mtime,
+            pixmap,
+        )
 
     def _is_video_file(self, path: Path) -> bool:
         return path.is_file() and path.suffix.lower() in VIDEO_EXTS
@@ -3882,342 +3829,28 @@ class BoardController:
         self._history_index = 0
 
     def _schedule_group_tree_update(self) -> None:
-        if not self._ui_alive():
-            return
-        if self._group_tree_timer is not None:
-            return
-        self._group_tree_timer = QtCore.QTimer(self.w)
-        self._group_tree_timer.setSingleShot(True)
-        self._group_tree_timer.timeout.connect(self._update_group_tree)
-        self._group_tree_timer.start(200)
+        self._groups_panel.schedule_update()
 
     def _update_group_tree(self) -> None:
-        self._group_tree_timer = None
-        if not self._ui_alive():
-            return
-        if self._group_tree_is_editing():
-            self._schedule_group_tree_update()
-            return
-        tree = self.w.board_page.groups_tree
-        try:
-            tree.blockSignals(True)
-            tree.clear()
-        except Exception:
-            return
-        self._group_tree_refs = {}
-        groups = self._groups()
-        root_groups = QtWidgets.QTreeWidgetItem(["Groups"])
-        root_groups.setForeground(0, QtGui.QColor("#c6ccd6"))
-        tree.addTopLevelItem(root_groups)
-        for idx, group in enumerate(groups, start=1):
-            title = f"Group {idx}"
-            top = QtWidgets.QTreeWidgetItem([title])
-            top.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("group", idx))
-            top.setForeground(0, QtGui.QColor(group.color_hex()))
-            root_groups.addChild(top)
-            self._group_tree_refs[idx] = group
-            for member in group.members():
-                info = tree_info_for_scene_item(member, BoardNoteItem)
-                label = tree_label_for_scene_item(member, BoardNoteItem, self._resolve_project_path)
-                if info is None or not label:
-                    continue
-                child = QtWidgets.QTreeWidgetItem([label])
-                populate_tree_item_metadata(
-                    child,
-                    info,
-                    project_root=self._project_root,
-                    resolve_project_path=self._resolve_project_path,
-                )
-                top.addChild(child)
-
-        root_ungrouped = QtWidgets.QTreeWidgetItem(["Ungrouped"])
-        root_ungrouped.setForeground(0, QtGui.QColor("#c6ccd6"))
-        tree.addTopLevelItem(root_ungrouped)
-        for item in self._scene.items():
-            if item.data(0) not in ("image", "note", "video", "sequence"):
-                continue
-            if self._find_group_for_item(item) is not None:
-                continue
-            info = tree_info_for_scene_item(item, BoardNoteItem)
-            label = tree_label_for_scene_item(item, BoardNoteItem, self._resolve_project_path)
-            if info is None or not label:
-                continue
-            child = QtWidgets.QTreeWidgetItem([label])
-            populate_tree_item_metadata(
-                child,
-                info,
-                project_root=self._project_root,
-                resolve_project_path=self._resolve_project_path,
-            )
-            root_ungrouped.addChild(child)
-
-        try:
-            tree.expandAll()
-            tree.blockSignals(False)
-        except Exception:
-            return
-        self._sync_tree_selection_from_scene()
+        self._groups_panel.update_tree()
 
     def _sync_tree_selection_from_scene(self) -> None:
-        if not self._ui_alive() or not self._scene_alive():
-            return
-        if self._group_tree_is_editing():
-            return
-        if self._syncing_tree_selection:
-            return
-        try:
-            tree = self.w.board_page.groups_tree
-        except Exception:
-            return
-        try:
-            selected = [i for i in self._scene.selectedItems() if i.data(0) in ("image", "note", "video", "sequence")]
-        except Exception:
-            return
-        if not selected:
-            try:
-                tree.blockSignals(True)
-                tree.clearSelection()
-                tree.blockSignals(False)
-            except Exception:
-                pass
-            return
-        target = first_selected_tree_info(selected, BoardNoteItem)
-        if target is None:
-            return
-        self._syncing_tree_selection = True
-        try:
-            it = QtWidgets.QTreeWidgetItemIterator(tree)
-            while it.value():
-                node = it.value()
-                info = node.data(0, QtCore.Qt.ItemDataRole.UserRole)
-                if info == target:
-                    try:
-                        tree.blockSignals(True)
-                        tree.setCurrentItem(node)
-                        tree.scrollToItem(node)
-                        tree.blockSignals(False)
-                    except Exception:
-                        pass
-                    break
-                it += 1
-        finally:
-            self._syncing_tree_selection = False
+        self._groups_panel.sync_tree_selection_from_scene()
 
     def _on_scene_selection_changed(self) -> None:
-        if not self._ui_alive() or not self._scene_alive():
-            return
-        if self._group_tree_is_editing():
-            return
-        if self._syncing_tree_selection:
-            return
-        try:
-            self._sync_tree_selection_from_scene()
-        except Exception:
-            return
-
-    def _on_group_tree_clicked(self, item: QtWidgets.QTreeWidgetItem) -> None:
-        if not self._ui_alive():
-            return
-        info = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
-        if not (isinstance(info, tuple) and info):
-            return
-        if str(info[0]) == "group":
-            group = self._group_tree_refs.get(int(info[1]))
-            if group is not None:
-                self.select_group_members(group)
-            return
-        self._select_tree_info_target(info)
-
-    def _on_group_tree_double_clicked(self, item: QtWidgets.QTreeWidgetItem, _column: int) -> None:
-        if not self._ui_alive():
-            return
-        info = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
-        if not (isinstance(info, tuple) and info):
-            return
-        if tree_info_is_renamable(info):
-            self._begin_group_tree_inline_rename(item, info)
-
-    def _editable_name_for_tree_info(self, info: tuple) -> str:
-        return editable_name_for_tree_path(info, self._tree_info_path(info))
-
-    def _begin_group_tree_inline_rename(self, item: QtWidgets.QTreeWidgetItem, info: tuple) -> None:
-        if not self._ui_alive():
-            return
-        if not tree_info_is_renamable(info):
-            return
-        tree = self.w.board_page.groups_tree
-        editable = self._editable_name_for_tree_info(info).strip()
-        if not editable:
-            return
-        self._group_tree_inline_rename = {
-            "item": item,
-            "info": info,
-            "old_text": item.text(0),
-        }
-        tree.blockSignals(True)
-        flags = item.flags()
-        if not (flags & QtCore.Qt.ItemFlag.ItemIsEditable):
-            item.setFlags(flags | QtCore.Qt.ItemFlag.ItemIsEditable)
-        item.setText(0, editable)
-        tree.blockSignals(False)
-        tree.setCurrentItem(item)
-        tree.setFocus()
-
-        def _open_editor() -> None:
-            if not self._ui_alive():
-                return
-            try:
-                tree.editItem(item, 0)
-            except Exception:
-                return
-
-        QtCore.QTimer.singleShot(0, _open_editor)
-
-    def _on_group_tree_item_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
-        if not self._ui_alive():
-            return
-        if column != 0:
-            return
-        state = self._group_tree_inline_rename
-        if not state:
-            return
-        if state.get("item") is not item:
-            return
-        self._group_tree_inline_rename = None
-        info = state.get("info")
-        old_text = str(state.get("old_text", ""))
-        flags = item.flags()
-        if flags & QtCore.Qt.ItemFlag.ItemIsEditable:
-            item.setFlags(flags & ~QtCore.Qt.ItemFlag.ItemIsEditable)
-        if not isinstance(info, tuple):
-            self._schedule_group_tree_update()
-            return
-        new_name = item.text(0).strip()
-        if not new_name:
-            self._schedule_group_tree_update()
-            return
-        renamed = self.rename_group_tree_entry(info, desired_name=new_name)
-        if not renamed:
-            tree = self.w.board_page.groups_tree
-            tree.blockSignals(True)
-            item.setText(0, old_text)
-            tree.blockSignals(False)
+        self._groups_panel.on_scene_selection_changed()
 
     def _find_scene_item_for_tree_info(self, info: tuple) -> Optional[QtWidgets.QGraphicsItem]:
-        return find_scene_item_for_tree_info(self._scene.items(), info, BoardNoteItem)
+        return self._groups_panel.find_scene_item_for_tree_info(info)
 
     def _select_tree_info_target(self, info: tuple) -> None:
-        if not self._ui_alive():
-            return
-        select_tree_info_target(
-            self._scene.selectedItems(),
-            info,
-            group_refs=self._group_tree_refs,
-            find_scene_item=self._find_scene_item_for_tree_info,
-        )
+        self._groups_panel.select_tree_info_target(info)
 
     def _tree_info_path(self, info: tuple) -> Optional[Path]:
-        return tree_path_for_info(
-            info,
-            project_root=self._project_root,
-            resolve_project_path=self._resolve_project_path,
-        )
+        return self._groups_panel.tree_info_path(info)
 
     def show_groups_tree_context_menu(self, pos: QtCore.QPoint) -> bool:
-        if not self._ui_alive():
-            return False
-        tree = self.w.board_page.groups_tree
-        item = tree.itemAt(pos)
-        if item is None:
-            return False
-        info = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
-        if not (isinstance(info, tuple) and info):
-            return False
-        kind = str(info[0])
-        path = self._tree_info_path(info)
-        flags = group_tree_menu_flags(info, tree_path=path, pic_exts=set(PIC_EXTS))
-        menu = QtWidgets.QMenu(tree)
-        add_to_group = None
-        remove_from_group = None
-        ungroup = None
-        open_item = None
-        convert_video = None
-        convert_pic = None
-        rename_entry = None
-        copy_path = None
-
-        if flags.get("add_to_group"):
-            add_to_group = menu.addAction("Add Selected To Group")
-        if flags.get("ungroup"):
-            ungroup = menu.addAction("Ungroup")
-        elif flags.get("open_item"):
-            if kind == "image":
-                open_item = menu.addAction("Edit Image")
-            elif kind == "video":
-                open_item = menu.addAction("Open Video")
-            elif kind == "sequence":
-                open_item = menu.addAction("Open Sequence")
-            elif kind == "note":
-                open_item = menu.addAction("Edit Note")
-            if flags.get("convert_video"):
-                convert_video = menu.addAction("Convert Video To Sequence")
-            if flags.get("rename_entry"):
-                rename_entry = menu.addAction("Rename...")
-                if flags.get("copy_path"):
-                    copy_path = menu.addAction("Copy Path")
-                if flags.get("convert_pic"):
-                    convert_pic = menu.addAction("Convert PICNC...")
-            if flags.get("remove_from_group"):
-                remove_from_group = menu.addAction("Remove From Group")
-        else:
-            return False
-
-        action = menu.exec(tree.mapToGlobal(pos))
-        if action is None:
-            return True
-        if action == add_to_group:
-            self.add_selected_to_group(info[1])
-            return True
-        if action == ungroup:
-            self._select_tree_info_target(info)
-            self.ungroup_selected()
-            return True
-        if action == remove_from_group:
-            self._select_tree_info_target(info)
-            self.remove_selected_from_groups()
-            return True
-        if action == open_item:
-            target = self._find_scene_item_for_tree_info(info)
-            if target is None:
-                self._notify("Item not found.")
-                return True
-            if kind == "image":
-                self.open_image_item(target)
-            elif kind in ("video", "sequence"):
-                self.open_media_item(target)
-            elif kind == "note" and isinstance(target, BoardNoteItem):
-                self.edit_note(target)
-            return True
-        if action == convert_video:
-            target = self._find_scene_item_for_tree_info(info)
-            if target is not None:
-                self.convert_video_to_sequence(target)
-            return True
-        if action == convert_pic:
-            src_path = self._tree_info_path(info)
-            if src_path is not None:
-                self.convert_picnc_interactive(src_path)
-            return True
-        if action == rename_entry:
-            self._begin_group_tree_inline_rename(item, info)
-            return True
-        if action == copy_path:
-            path = self._tree_info_path(info)
-            if path is not None:
-                QtWidgets.QApplication.clipboard().setText(str(path))
-                self._notify(f"Copied: {path}")
-            return True
-        return True
+        return self._groups_panel.show_context_menu(pos)
 
     def rename_group_tree_entry(self, info: tuple, desired_name: Optional[str] = None) -> bool:
         if not self._ui_alive():

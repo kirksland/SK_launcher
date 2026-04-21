@@ -622,8 +622,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_fullscreen_btn = self.asset_page.asset_fullscreen_btn
         self.asset_video_slider = self.asset_page.asset_video_slider
         self.asset_context_combo = self.asset_page.asset_context_combo
-        self.asset_versions_list = self.asset_page.asset_versions_list
-        self.asset_versions_list.setContextMenuPolicy(
+        self.asset_inventory_list = self.asset_page.asset_inventory_list
+        self.asset_versions_list = self.asset_inventory_list
+        self.asset_inventory_list.setContextMenuPolicy(
             QtCore.Qt.ContextMenuPolicy.CustomContextMenu
         )
         self.asset_history_list = self.asset_page.asset_history_list
@@ -739,9 +740,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_next_btn.clicked.connect(self.asset_controller.next_preview_image)
         self.asset_fullscreen_btn.clicked.connect(self.asset_controller.toggle_asset_video_fullscreen)
         self.asset_context_combo.currentTextChanged.connect(self.asset_controller.update_asset_context)
-        self.asset_versions_list.itemClicked.connect(self.asset_controller.on_asset_version_clicked)
-        self.asset_versions_list.customContextMenuRequested.connect(
-            self.asset_controller.show_asset_version_context_menu
+        self.asset_inventory_list.itemClicked.connect(self.asset_controller.on_asset_inventory_clicked)
+        self.asset_inventory_list.customContextMenuRequested.connect(
+            self.asset_controller.show_asset_inventory_context_menu
         )
         self.asset_commit_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_push_btn.clicked.connect(self.asset_controller.asset_placeholder_action)

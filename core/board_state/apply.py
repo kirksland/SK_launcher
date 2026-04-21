@@ -16,6 +16,7 @@ class ApplyPayloadState:
     payload_ref: dict | None = None
     phase: str = "idle"
     base_label: str | None = None
+    generation: int = 0
 
     def reset(self) -> None:
         self.queue.clear()
@@ -26,6 +27,7 @@ class ApplyPayloadState:
         self.note_map = {}
         self.payload_ref = None
         self.phase = "idle"
+        self.generation = 0
 
     def has_pending(self) -> bool:
         return bool(self.queue)

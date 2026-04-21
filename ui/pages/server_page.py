@@ -450,13 +450,15 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_context_combo.setCurrentText("All")
         versions_header.addWidget(self.asset_context_combo, 0)
         versions_header.addStretch(1)
-        self.asset_versions_hint = QtWidgets.QLabel("Inventory")
-        self.asset_versions_hint.setStyleSheet(muted_text_style(size_px=11))
-        self.asset_versions_hint.setVisible(False)
-        versions_header.addWidget(self.asset_versions_hint, 0)
+        self.asset_inventory_hint = QtWidgets.QLabel("Inventory")
+        self.asset_inventory_hint.setStyleSheet(muted_text_style(size_px=11))
+        self.asset_inventory_hint.setVisible(False)
+        versions_header.addWidget(self.asset_inventory_hint, 0)
         versions_layout.addLayout(versions_header)
-        self.asset_versions_list = _AssetInventoryList()
-        versions_layout.addWidget(self.asset_versions_list, 1)
+        self.asset_inventory_list = _AssetInventoryList()
+        self.asset_versions_hint = self.asset_inventory_hint
+        self.asset_versions_list = self.asset_inventory_list
+        versions_layout.addWidget(self.asset_inventory_list, 1)
         inspector_layout.addWidget(versions_panel, 1)
 
         history_panel = self._make_panel("Notes", "Quick notes and git actions for the current entity are grouped here for now.")
