@@ -11,25 +11,9 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
-from core.board_edit.crop_scene import (
-    apply_crop_to_item,
-    begin_crop_handle_drag,
-    clear_crop_handle_items,
-    create_crop_handle_items,
-    crop_handles_active,
-    crop_values_from_drag,
-)
-from core.board_edit.handles import (
-    CropHandleDragState,
-    CropHandleLayout,
-    sanitize_crop,
-)
+from core.board_edit.handles import CropHandleDragState, CropHandleLayout
 from core.board_edit.panels import default_panel_state
-from core.board_edit.media_runtime import (
-    SequencePlaybackRuntime,
-    VideoPlaybackRuntime,
-    play_button_label,
-)
+from core.board_edit.media_runtime import SequencePlaybackRuntime, VideoPlaybackRuntime, play_button_label
 from core.board_edit.workers import (
     UiBridge,
     VideoToSequenceWorker,
@@ -38,6 +22,7 @@ from core.board_edit.session import EditSessionState, EditVisualState
 from core.board_apply_runtime import BoardApplyRuntime
 from core.board_io import backup_board_payload, board_path, load_board_payload, save_board_payload
 from core.board_media_cache import BoardMediaCache
+from controllers.board_edit_focus_controller import BoardEditFocusController
 from controllers.board_edit_preview_controller import BoardEditPreviewController
 from controllers.board_edit_timeline_controller import BoardEditTimelineController
 from controllers.board_edit_tools_controller import BoardEditToolsController
@@ -71,7 +56,6 @@ from core.board_scene.items import BoardGroupItem, BoardImageItem, BoardNoteItem
 from core.houdini_env import build_houdini_env
 from tools.board_tools.edit import discover_edit_tools, get_edit_tool
 from tools.board_tools.image import apply_image_tool_stack, build_bcs_stack
-from tools.board_tools.registry import get_board_tool, get_board_tool_scene_runtime
 from video.player import VideoController
 
 try:
@@ -92,11 +76,6 @@ VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 if TYPE_CHECKING:
     from core.board_edit.workers import ExrChannelPreviewWorker, ImageAdjustPreviewWorker, VideoSegmentWorker
-
-
-def _sanitize_crop_settings(left: float, top: float, right: float, bottom: float) -> tuple[float, float, float, float]:
-    return sanitize_crop(left, top, right, bottom)
-
 
 class BoardController:
     def __init__(self, window: QtWidgets.QMainWindow) -> None:
@@ -146,6 +125,7 @@ class BoardController:
         self._edit_tools = BoardEditToolsController(self)
         self._edit_timeline = BoardEditTimelineController(self)
         self._edit_preview = BoardEditPreviewController(self)
+        self._edit_focus = BoardEditFocusController(self)
         self._edit_image_thread: Optional[QtCore.QThread] = None
         self._edit_image_worker: Optional[ImageAdjustPreviewWorker] = None
         self._edit_preview_timer: Optional[QtCore.QTimer] = None
@@ -1966,104 +1946,37 @@ class BoardController:
         self._on_edit_image_tool_panel_changed("vibrance")
 
     def _apply_crop_to_focus_item(self) -> None:
-        scene_runtime = self._scene_tool_runtime("crop")
-        apply_hook = getattr(scene_runtime, "apply_to_focus_item", None) if scene_runtime is not None else None
-        if callable(apply_hook):
-            apply_hook(self)
-            return
-        if not apply_crop_to_item(
-            self._focus_item,
-            (
-                self._edit_crop_left,
-                self._edit_crop_top,
-                self._edit_crop_right,
-                self._edit_crop_bottom,
-            ),
-        ):
-            return
-        group = self._find_group_for_item(self._focus_item)
-        if group is not None:
-            group.update_bounds()
-        self._refresh_scene_workspace()
-        self._refresh_focus_scene_handles()
+        self._edit_focus.apply_crop_to_focus_item()
 
     def _selected_scene_tool_id(self) -> str:
-        selected = self._selected_tool_entry()
-        selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
-        tool_caps = get_board_tool(selected_id)
-        if tool_caps is None or not tool_caps.has_scene:
-            return ""
-        return selected_id
+        return self._edit_focus.selected_scene_tool_id()
 
     def _scene_tool_runtime(self, tool_id: str | None = None) -> object | None:
-        target_id = str(tool_id or "").strip().lower() or self._selected_scene_tool_id()
-        if not target_id:
-            return None
-        return get_board_tool_scene_runtime(target_id)
+        return self._edit_focus.scene_tool_runtime(tool_id)
 
     def _clear_focus_crop_handles(self, *, reset_drag: bool = True) -> None:
-        scene_runtime = self._scene_tool_runtime()
-        clear_hook = getattr(scene_runtime, "clear_handles", None) if scene_runtime is not None else None
-        if callable(clear_hook):
-            clear_hook(self, reset_drag)
-            return
-        (
-            self._focus_handle_frame,
-            self._focus_handle_items,
-            self._focus_crop_layout,
-        ) = clear_crop_handle_items(
-            self._scene,
-            self._focus_handle_frame,
-            self._focus_handle_items,
-        )
-        if reset_drag:
-            self._focus_crop_drag = None
+        self._edit_focus.clear_crop_handles(reset_drag=reset_drag)
 
     def _crop_handles_active(self) -> bool:
-        return self._selected_scene_tool_id() != ""
+        return self._edit_focus.crop_handles_active()
 
     def _refresh_focus_scene_handles(self) -> None:
-        scene_runtime = self._scene_tool_runtime()
-        refresh_hook = getattr(scene_runtime, "refresh_handles", None) if scene_runtime is not None else None
-        if callable(refresh_hook):
-            refresh_hook(self)
-            return
-        self._clear_focus_crop_handles(reset_drag=False)
+        self._edit_focus.refresh_scene_handles()
 
     def _refresh_focus_crop_handles(self) -> None:
         self._refresh_focus_scene_handles()
 
     def _on_edit_scene_tool_panel_changed(self, tool_id: str) -> None:
-        scene_runtime = self._scene_tool_runtime(tool_id)
-        panel_hook = getattr(scene_runtime, "panel_value_changed", None) if scene_runtime is not None else None
-        if callable(panel_hook):
-            panel_hook(self)
-            return
-        self._on_edit_image_tool_panel_changed(
-            tool_id,
-            insert_at=getattr(get_edit_tool(tool_id), "stack_insert_at", None),
-        )
+        self._edit_focus.on_scene_tool_panel_changed(tool_id)
 
     def handle_view_mouse_press(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
-        scene_runtime = self._scene_tool_runtime()
-        handler = getattr(scene_runtime, "mouse_press", None) if scene_runtime is not None else None
-        if callable(handler):
-            return bool(handler(self, scene_pos, event))
-        return False
+        return self._edit_focus.handle_view_mouse_press(scene_pos, event)
 
     def handle_view_mouse_move(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
-        scene_runtime = self._scene_tool_runtime()
-        handler = getattr(scene_runtime, "mouse_move", None) if scene_runtime is not None else None
-        if callable(handler):
-            return bool(handler(self, scene_pos, event))
-        return False
+        return self._edit_focus.handle_view_mouse_move(scene_pos, event)
 
     def handle_view_mouse_release(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
-        scene_runtime = self._scene_tool_runtime()
-        handler = getattr(scene_runtime, "mouse_release", None) if scene_runtime is not None else None
-        if callable(handler):
-            return bool(handler(self, scene_pos, event))
-        return False
+        return self._edit_focus.handle_view_mouse_release(scene_pos, event)
 
     def _set_current_crop(
         self,
@@ -2074,29 +1987,13 @@ class BoardController:
         *,
         schedule_preview: bool = True,
     ) -> None:
-        left, top, right, bottom = _sanitize_crop_settings(left, top, right, bottom)
-        self._edit_crop_left = left
-        self._edit_crop_top = top
-        self._edit_crop_right = right
-        self._edit_crop_bottom = bottom
-        self.w.board_page.set_image_tool_panel_state(
-            "crop",
-            {"left": left, "top": top, "right": right, "bottom": bottom},
+        self._edit_focus.set_current_crop(
+            left,
+            top,
+            right,
+            bottom,
+            schedule_preview=schedule_preview,
         )
-        self._set_tool_state_in_stack(
-            "crop",
-            {"left": left, "top": top, "right": right, "bottom": bottom},
-            add_if_missing=True,
-        )
-        self._apply_crop_to_focus_item()
-        if isinstance(self._focus_item, BoardImageItem):
-            self._commit_current_focus_image_override()
-            if schedule_preview:
-                self._schedule_focus_image_preview()
-        elif isinstance(self._focus_item, BoardVideoItem):
-            self._commit_current_focus_video_override()
-            if schedule_preview:
-                self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
 
     def _on_edit_crop_changed(self, *_: object) -> None:
         self._on_edit_scene_tool_panel_changed("crop")
@@ -2227,110 +2124,10 @@ class BoardController:
         self._edit_preview.handle_image_adjust_preview_finished(success, payload, error)
 
     def enter_focus_mode(self, item: QtWidgets.QGraphicsItem) -> None:
-        if self._focus_item is item:
-            return
-        self.exit_focus_mode()
-        self._focus_item = item
-        try:
-            self.w.board_page.view.setFocus()
-        except Exception:
-            pass
-        scene = self._scene
-        # Dim non-focused items and disable interaction.
-        for obj in scene.items():
-            if obj is item:
-                continue
-            self._focus_saved[id(obj)] = (obj.isEnabled(), obj.opacity())
-            obj.setEnabled(False)
-            obj.setOpacity(0.15)
-        # Add overlay
-        self._refresh_scene_workspace(extra_rect=item.sceneBoundingRect())
-        overlay = QtWidgets.QGraphicsRectItem(scene.sceneRect())
-        overlay.setBrush(QtGui.QColor(0, 0, 0, 120))
-        overlay.setPen(QtCore.Qt.PenStyle.NoPen)
-        overlay.setZValue(9_000)
-        scene.addItem(overlay)
-        self._focus_overlay = overlay
-        # Bring focused item to front
-        item.setZValue(10_000)
-        self.w.board_page.set_edit_panel_visible(True)
-        self._edit_focus_kind = str(item.data(0) or "")
-        self._refresh_focus_crop_handles()
+        self._edit_focus.enter_focus_mode(item)
 
     def exit_focus_mode(self) -> None:
-        if self._focus_item is None:
-            return
-        self._clear_focus_crop_handles()
-        # Restore item states
-        for obj in self._scene.items():
-            saved = self._focus_saved.pop(id(obj), None)
-            if saved is not None:
-                enabled, opacity = saved
-                obj.setEnabled(enabled)
-                obj.setOpacity(opacity)
-        if self._focus_overlay is not None:
-            self._scene.removeItem(self._focus_overlay)
-            self._focus_overlay = None
-        if self._focus_item is not None:
-            if isinstance(self._focus_item, BoardImageItem):
-                filename = str(self._focus_item.data(1) or "").strip()
-                if not filename or filename not in self._image_exr_display_overrides:
-                    self._focus_item.set_override_pixmap(None)
-                    self._focus_item.set_crop_norm(*self._default_crop_settings())
-            if isinstance(self._focus_item, BoardVideoItem):
-                filename = str(self._focus_item.data(1) or "").strip()
-                override = self._image_exr_display_overrides.get(filename)
-                if isinstance(override, dict):
-                    self._apply_override_to_video_item(self._focus_item, override)
-                else:
-                    self._focus_item.set_override_pixmap(None)
-                    self._focus_item.set_crop_norm(*self._default_crop_settings())
-            if isinstance(self._focus_item, BoardSequenceItem):
-                self._focus_item.set_override_pixmap(None)
-            self._focus_item.setZValue(0)
-        self._focus_item = None
-        self._reset_edit_session_for_kind("")
-        self._edit_timeline_scrubbing = False
-        self._sequence_playback.stop()
-        self._video_playback.stop()
-        self.w.board_page.edit_timeline_play_btn.setText(play_button_label(False))
-        if self._video_preview_timer is not None and self._video_preview_timer.isActive():
-            self._video_preview_timer.stop()
-        self._video_preview_pending = None
-        self._release_focus_video_cap()
-        if self._edit_preview_timer is not None and self._edit_preview_timer.isActive():
-            self._edit_preview_timer.stop()
-        self._edit_preview_timer = None
-        self._edit_preview_pending_channel = None
-        self._edit_preview_dragging = False
-        self._edit_exr_preview_pending_channel = None
-        self._edit_exr_preview_pending_max_dim = 0
-        self._edit_image_preview_pending_path = None
-        self._edit_image_preview_pending_max_dim = 0
-        if self._edit_exr_thread is not None:
-            try:
-                self._edit_exr_thread.quit()
-                self._edit_exr_thread.wait(1000)
-            except Exception:
-                pass
-        self._edit_exr_preview_busy = False
-        self._edit_exr_thread = None
-        self._edit_exr_worker = None
-        if self._edit_image_thread is not None:
-            try:
-                self._edit_image_thread.quit()
-                self._edit_image_thread.wait(1000)
-            except Exception:
-                pass
-        self._edit_image_preview_busy = False
-        self._edit_image_thread = None
-        self._edit_image_worker = None
-        self._edit_image_path = None
-        self._edit_exr_path = None
-        self.w.board_page.set_image_adjust_controls_visible(False)
-        self.w.board_page.set_edit_panel_visible(False)
-        self.w.board_page.set_timeline_bar_visible(False)
-        self.w.board_page.set_edit_preview_visible(True)
+        self._edit_focus.exit_focus_mode()
 
     def _queue_exr_channel_preview(self, channel: str, max_dim: int = 0) -> None:
         self._edit_preview.queue_exr_channel_preview(channel, max_dim=max_dim)
@@ -2621,60 +2418,16 @@ class BoardController:
             return None
 
     def _ensure_focus_video_cap(self) -> None:
-        if cv2 is None:
-            return
-        if self._focus_video_path is None:
-            return
-        if self._focus_video_cap is not None:
-            return
-        try:
-            cap = cv2.VideoCapture(str(self._focus_video_path))
-            if cap.isOpened():
-                self._focus_video_cap = cap
-                self._focus_video_cap_frame_index = -1
-        except Exception:
-            self._focus_video_cap = None
-            self._focus_video_cap_frame_index = -1
+        self._edit_focus.ensure_video_cap()
 
     def _release_focus_video_cap(self) -> None:
-        try:
-            if self._focus_video_cap is not None:
-                self._focus_video_cap.release()
-        except Exception:
-            pass
-        self._focus_video_cap = None
-        self._focus_video_cap_frame_index = -1
+        self._edit_focus.release_video_cap()
 
     def _schedule_video_focus_preview(self, frame_index: int, delay_ms: int = 40, immediate: bool = False) -> None:
-        self._video_preview_pending = int(frame_index)
-        if self._video_preview_timer is None:
-            self._video_preview_timer = QtCore.QTimer(self.w)
-            self._video_preview_timer.setSingleShot(True)
-            self._video_preview_timer.timeout.connect(self._flush_video_focus_preview)
-        if immediate:
-            if self._video_preview_timer.isActive():
-                self._video_preview_timer.stop()
-            self._flush_video_focus_preview()
-            return
-        if not self._video_preview_timer.isActive():
-            self._video_preview_timer.start(max(10, int(delay_ms)))
+        self._edit_focus.schedule_video_preview(frame_index, delay_ms=delay_ms, immediate=immediate)
 
     def _flush_video_focus_preview(self) -> None:
-        if self._video_preview_pending is None:
-            return
-        idx = self._video_preview_pending
-        self._video_preview_pending = None
-        if not isinstance(self._focus_item, BoardVideoItem):
-            return
-        self._ensure_focus_video_cap()
-        max_dim = self._edit_video_playback_dim if self._video_playback.is_playing() else self._max_display_dim
-        pixmap = self._get_focus_video_frame_pixmap(
-            idx,
-            max_dim=max_dim,
-            prefer_fast=self._video_playback.is_playing(),
-        )
-        if pixmap is not None:
-            self._focus_item.set_override_pixmap(pixmap)
+        self._edit_focus.flush_video_preview()
 
     def _get_focus_video_frame_pixmap(
         self,
@@ -2682,45 +2435,11 @@ class BoardController:
         max_dim: int,
         prefer_fast: bool = False,
     ) -> Optional[QtGui.QPixmap]:
-        if cv2 is None:
-            return None
-        if self._focus_video_cap is None:
-            return None
-        try:
-            target_frame = max(0, int(frame_index))
-            sequential_read = target_frame == (self._focus_video_cap_frame_index + 1)
-            if not sequential_read:
-                self._focus_video_cap.set(1, target_frame)  # CAP_PROP_POS_FRAMES
-            ok, frame = self._focus_video_cap.read()
-            if not ok or frame is None:
-                return None
-            self._focus_video_cap_frame_index = target_frame
-            if max_dim > 0:
-                h, w = frame.shape[:2]
-                largest_dim = max(w, h)
-                if largest_dim > max_dim:
-                    scale = float(max_dim) / float(largest_dim)
-                    new_size = (
-                        max(1, int(round(w * scale))),
-                        max(1, int(round(h * scale))),
-                    )
-                    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-                    frame = cv2.resize(frame, new_size, interpolation=interpolation)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb.shape
-            bytes_per_line = ch * w
-            image = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
-            pixmap = QtGui.QPixmap.fromImage(image.copy())
-            if not prefer_fast and max_dim > 0 and (pixmap.width() > max_dim or pixmap.height() > max_dim):
-                pixmap = pixmap.scaled(
-                    max_dim,
-                    max_dim,
-                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                    QtCore.Qt.TransformationMode.SmoothTransformation,
-                )
-            return pixmap
-        except Exception:
-            return None
+        return self._edit_focus.get_video_frame_pixmap(
+            frame_index,
+            max_dim=max_dim,
+            prefer_fast=prefer_fast,
+        )
 
     def _sequence_frame_paths(self, dir_path: Path) -> list[Path]:
         if not dir_path.exists() or not dir_path.is_dir():
