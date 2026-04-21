@@ -852,6 +852,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
     def _on_main_page_changed(self, index: int) -> None:
         # Ensure board visuals/overrides are freshly applied when entering the Board page.
+        if int(index) == 1 and hasattr(self, "asset_controller") and self.asset_controller is not None:
+            QtCore.QTimer.singleShot(0, self.asset_controller.ensure_project_context_loaded)
         if int(index) == 2 and hasattr(self, "board_controller") and self.board_controller is not None:
             QtCore.QTimer.singleShot(0, self.board_controller.ensure_board_loaded)
 

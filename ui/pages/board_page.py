@@ -943,6 +943,29 @@ class BoardPage(QtWidgets.QWidget):
         splitter.addWidget(self.view)
         splitter.setStretchFactor(1, 1)
 
+        self.loading_overlay = QtWidgets.QFrame(self.view)
+        self.loading_overlay.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.loading_overlay.setStyleSheet(
+            "QFrame {"
+            "background: rgba(23, 26, 31, 220);"
+            "border: 1px solid rgba(242, 193, 78, 70);"
+            "border-radius: 14px;"
+            "}"
+            "QLabel { background: transparent; border: 0; }"
+        )
+        loading_layout = QtWidgets.QVBoxLayout(self.loading_overlay)
+        loading_layout.setContentsMargins(18, 14, 18, 14)
+        loading_layout.setSpacing(6)
+        self.loading_title = QtWidgets.QLabel("Loading board")
+        self.loading_title.setStyleSheet("color: #f2c14e; font-weight: 700; font-size: 14px;")
+        loading_layout.addWidget(self.loading_title, 0)
+        self.loading_detail = QtWidgets.QLabel("Preparing workspace...")
+        self.loading_detail.setStyleSheet(muted_text_style())
+        self.loading_detail.setWordWrap(True)
+        loading_layout.addWidget(self.loading_detail, 0)
+        self.loading_overlay.setFixedWidth(300)
+        self.loading_overlay.hide()
+
         # Edit overlay (floating over the board view)
         self.edit_panel = QtWidgets.QFrame()
         self.edit_panel.setParent(self)
@@ -1532,6 +1555,23 @@ class BoardPage(QtWidgets.QWidget):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._position_edit_overlay()
+        self._position_loading_overlay()
+
+    def set_loading_overlay(self, visible: bool, detail: str = "Preparing workspace...") -> None:
+        self.loading_detail.setText(detail)
+        self.loading_overlay.setVisible(bool(visible))
+        self._position_loading_overlay()
+        if visible:
+            self.loading_overlay.raise_()
+
+    def _position_loading_overlay(self) -> None:
+        if not hasattr(self, "loading_overlay"):
+            return
+        width = self.loading_overlay.width()
+        height = max(84, self.loading_overlay.sizeHint().height())
+        self.loading_overlay.resize(width, height)
+        x = max(18, (self.view.width() - width) // 2)
+        self.loading_overlay.move(x, 18)
 
     def show_tool_add_menu(self, global_pos: QtCore.QPoint) -> bool:
         if not self.edit_panel.isVisible():

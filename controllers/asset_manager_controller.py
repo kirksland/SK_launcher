@@ -36,6 +36,11 @@ class AssetManagerController:
     def __init__(self, window: QtWidgets.QMainWindow) -> None:
         self.w = window
         self._thumb_cache: dict[tuple, tuple[float, QtGui.QPixmap]] = {}
+        self._pending_project_context: Optional[Path] = None
+        self._context_refresh_timer = QtCore.QTimer(self.w)
+        self._context_refresh_timer.setSingleShot(True)
+        self._context_refresh_timer.setInterval(80)
+        self._context_refresh_timer.timeout.connect(self._apply_queued_project_context)
 
     def refresh_asset_manager(self, *_: object) -> None:
         self.w.asset_grid.clear()
@@ -47,6 +52,44 @@ class AssetManagerController:
                 project_path = Path(str(path_text))
         self.set_project_context(project_path)
         self._refresh_asset_watch_paths()
+
+    def queue_project_context(self, project_path: Optional[Path]) -> None:
+        self._pending_project_context = project_path
+        if not self._asset_page_is_active():
+            if project_path is None:
+                self._clear_asset_browser_state("Select a project in Projects to browse its assets.")
+            else:
+                self.w._asset_current_project_root = project_path
+                self.w.asset_details_title.setText(project_path.name)
+                self.w.asset_path_label.setText(f"{project_path.name} / Inventory will load when opened")
+                self.set_asset_status("Asset Manager will load when opened.")
+            return
+        self._context_refresh_timer.start()
+
+    def ensure_project_context_loaded(self) -> None:
+        if self._pending_project_context is not None:
+            self._apply_queued_project_context()
+            return
+        current_item = self.w.project_grid.currentItem()
+        if current_item is None:
+            self.set_project_context(None)
+            return
+        path_text = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
+        self.set_project_context(Path(str(path_text)) if path_text else None)
+
+    def _apply_queued_project_context(self) -> None:
+        project_path = self._pending_project_context
+        self._pending_project_context = None
+        self.set_project_context(project_path)
+
+    def _asset_page_is_active(self) -> bool:
+        pages = getattr(self.w, "pages", None)
+        if pages is None:
+            return False
+        try:
+            return int(pages.currentIndex()) == 1
+        except Exception:
+            return False
 
     def _clear_asset_browser_state(self, message: str) -> None:
         self._clear_asset_detail_lists(self.w)

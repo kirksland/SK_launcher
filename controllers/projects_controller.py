@@ -232,21 +232,21 @@ class ProjectsController:
     ) -> None:
         if current is None:
             if hasattr(self.w, "asset_controller"):
-                self.w.asset_controller.set_project_context(None)
+                self.w.asset_controller.queue_project_context(None)
             if self._detail_pinned:
                 return
             return
         path_text = current.data(QtCore.Qt.ItemDataRole.UserRole)
         if not path_text:
             if hasattr(self.w, "asset_controller"):
-                self.w.asset_controller.set_project_context(None)
+                self.w.asset_controller.queue_project_context(None)
             if self._detail_pinned:
                 return
             return
         project_path = Path(str(path_text))
         if not project_path.exists():
             if hasattr(self.w, "asset_controller"):
-                self.w.asset_controller.set_project_context(None)
+                self.w.asset_controller.queue_project_context(None)
             if self._detail_pinned:
                 return
             return
@@ -255,7 +255,7 @@ class ProjectsController:
         self._detail_project_path = project_path
         self._show_project_detail(project_path)
         if hasattr(self.w, "asset_controller"):
-            self.w.asset_controller.set_project_context(project_path)
+            self.w.asset_controller.queue_project_context(project_path)
 
     def open_selected_project_folder(self) -> None:
         item = self.w.project_grid.currentItem()

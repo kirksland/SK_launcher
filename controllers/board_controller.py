@@ -163,6 +163,7 @@ class BoardController:
         self._group_tree_inline_rename: Optional[dict[str, object]] = None
         self._apply_timer: Optional[QtCore.QTimer] = None
         self._apply_state = ApplyPayloadState()
+        self._board_loading_total = 0
         self._scene_interaction_depth = 0
         self._convert_thread: Optional[QtCore.QThread] = None
         self._convert_worker: Optional[VideoToSequenceWorker] = None
@@ -467,7 +468,17 @@ class BoardController:
             return
         if self._board_state_loaded and self._loaded_project_root == self._project_root:
             return
+        self.w.board_page.project_label.setText(f"Project: {self._project_root.name} (loading...)")
         self.load_board()
+
+    def _board_page_is_active(self) -> bool:
+        pages = getattr(self.w, "pages", None)
+        if pages is None:
+            return False
+        try:
+            return int(pages.currentIndex()) == 2
+        except Exception:
+            return False
 
     def _ui_alive(self) -> bool:
         if self._shutting_down:
@@ -602,12 +613,15 @@ class BoardController:
         if project_root:
             base_label = f"Project: {project_root.name}"
             self._apply_state.base_label = base_label
-            self.w.board_page.project_label.setText(f"{base_label} (loading...)")
+            self.w.board_page.project_label.setText(
+                f"{base_label} (loading...)" if self._board_page_is_active() else f"{base_label} (ready)"
+            )
             if project_changed:
                 self._loaded_project_root = None
                 self._board_state_loaded = False
                 self._set_board_state({"items": [], "image_display_overrides": {}})
-            self._schedule_board_load()
+            if self._board_page_is_active():
+                self._schedule_board_load()
             if self._history_index < 0:
                 self._reset_history(self._current_board_state())
         else:
@@ -1364,6 +1378,7 @@ class BoardController:
             return
         print(f"[BOARD] Load board: {board_path}")
         self._loading = True
+        self.w.board_page.set_loading_overlay(True, f"Reading {self._project_root.name} board data...")
         if not board_path.exists():
             payload = {"items": [], "image_display_overrides": {}}
             self._set_board_state(payload)
@@ -1374,6 +1389,8 @@ class BoardController:
         try:
             payload = json.loads(board_path.read_text(encoding="utf-8"))
         except Exception:
+            self._loading = False
+            self.w.board_page.set_loading_overlay(False)
             return
         payload = self._set_board_state(payload)
         self._loaded_project_root = self._project_root
@@ -1393,6 +1410,11 @@ class BoardController:
 
     def _start_apply_payload(self, payload: dict) -> None:
         payload = self._set_board_state(payload)
+        self._board_loading_total = payload_item_count(payload)
+        self.w.board_page.set_loading_overlay(
+            True,
+            f"Rebuilding {self._board_loading_total} board item(s)...",
+        )
         if self._apply_timer is not None and self._apply_timer.isActive():
             self._apply_timer.stop()
         self._scene.blockSignals(True)
@@ -1413,6 +1435,13 @@ class BoardController:
         batch_size = 20
         count = 0
         assets_dir = self._project_root / ".skyforge_board_assets" if self._project_root else None
+        remaining_before = len(self._apply_state.queue)
+        if self._board_loading_total:
+            done = max(0, self._board_loading_total - remaining_before)
+            self.w.board_page.set_loading_overlay(
+                True,
+                f"Rebuilding board items... {done}/{self._board_loading_total}",
+            )
         while self._apply_state.queue and count < batch_size:
             entry = self._apply_state.queue.popleft()
             count += 1
@@ -1459,6 +1488,7 @@ class BoardController:
         self._reset_history(applied_state)
         if self._apply_state.base_label:
             self.w.board_page.project_label.setText(self._apply_state.base_label)
+        self.w.board_page.set_loading_overlay(False)
         QtCore.QTimer.singleShot(0, self._fit_view_after_load)
         self._schedule_post_load_reapply()
 
