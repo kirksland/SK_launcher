@@ -8,7 +8,7 @@ import shutil
 import urllib.request
 from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from core.board_edit.crop_scene import (
@@ -24,51 +24,29 @@ from core.board_edit.handles import (
     CropHandleLayout,
     sanitize_crop,
 )
-from core.board_edit.panels import default_panel_state, normalize_panel_state, panel_state_map_for_tools
+from core.board_edit.panels import default_panel_state
 from core.board_edit.media_runtime import (
     SequencePlaybackRuntime,
     VideoPlaybackRuntime,
-    clamp_playhead,
-    frame_label_text,
-    loop_next_playhead,
     play_button_label,
 )
 from core.board_edit.workers import (
-    ExrChannelPreviewWorker,
-    ExrInfoWorker,
-    ImageAdjustPreviewWorker,
     UiBridge,
-    VideoSegmentWorker,
     VideoToSequenceWorker,
 )
-from core.board_edit.session import (
-    EditSessionState,
-    EditVisualState,
-    coerce_color_adjustments,
-    default_tool_stack_for_kind,
-    tool_stack_from_override,
-)
-from core.board_edit.tool_stack import (
-    append_tool,
-    make_tool_entry,
-    move_tool,
-    normalize_tool_entries,
-    remove_tool_at,
-    tool_stack_is_effective,
-    upsert_tool_settings,
-)
+from core.board_edit.session import EditSessionState, EditVisualState
 from core.board_apply_runtime import BoardApplyRuntime
 from core.board_io import backup_board_payload, board_path, load_board_payload, save_board_payload
 from core.board_media_cache import BoardMediaCache
+from controllers.board_edit_preview_controller import BoardEditPreviewController
+from controllers.board_edit_timeline_controller import BoardEditTimelineController
+from controllers.board_edit_tools_controller import BoardEditToolsController
 from controllers.board_group_actions_controller import BoardGroupActionsController
 from controllers.board_groups_controller import BoardGroupsController
 from core.board_state import (
     ApplyPayloadState,
-    apply_exr_preview_result,
-    apply_image_adjust_preview_result,
     apply_pending_groups_to_scene,
     apply_image_override_to_item,
-    apply_preview_payload_to_item,
     apply_video_override_to_item,
     build_group_item,
     build_scene_item_from_entry,
@@ -77,7 +55,6 @@ from core.board_state import (
     commit_video_override,
     parse_image_display_overrides,
     payload_item_count,
-    preview_payload_to_pixmap,
     prepare_apply_state,
     rename_override_key,
     reapply_scene_overrides,
@@ -92,8 +69,8 @@ from core.board_scene.groups import (
 )
 from core.board_scene.items import BoardGroupItem, BoardImageItem, BoardNoteItem, BoardSequenceItem, BoardVideoItem
 from core.houdini_env import build_houdini_env
-from tools.board_tools.edit import available_tools_for_kind, discover_edit_tools, get_edit_tool, list_edit_tools
-from tools.board_tools.image import apply_image_tool_stack, build_bcs_stack, normalize_tool_stack
+from tools.board_tools.edit import discover_edit_tools, get_edit_tool
+from tools.board_tools.image import apply_image_tool_stack, build_bcs_stack
 from tools.board_tools.registry import get_board_tool, get_board_tool_scene_runtime
 from video.player import VideoController
 
@@ -112,6 +89,9 @@ except Exception:  # pragma: no cover - optional exr backend
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".exr"}
 PIC_EXTS = {".pic", ".picnc"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+if TYPE_CHECKING:
+    from core.board_edit.workers import ExrChannelPreviewWorker, ImageAdjustPreviewWorker, VideoSegmentWorker
 
 
 def _sanitize_crop_settings(left: float, top: float, right: float, bottom: float) -> tuple[float, float, float, float]:
@@ -163,6 +143,9 @@ class BoardController:
         self._edit_image_path: Optional[Path] = None
         self._edit_tool_specs = discover_edit_tools()
         self._edit_tool_defs: list[tuple[str, str]] = []
+        self._edit_tools = BoardEditToolsController(self)
+        self._edit_timeline = BoardEditTimelineController(self)
+        self._edit_preview = BoardEditPreviewController(self)
         self._edit_image_thread: Optional[QtCore.QThread] = None
         self._edit_image_worker: Optional[ImageAdjustPreviewWorker] = None
         self._edit_preview_timer: Optional[QtCore.QTimer] = None
@@ -228,38 +211,19 @@ class BoardController:
         self._shutting_down: bool = False
 
     def refresh_edit_tool_registry(self) -> dict[str, object]:
-        self._edit_tool_specs = discover_edit_tools(force=True)
-        self._sync_edit_tool_defs_for_kind(str(self._edit_focus_kind or "image"))
-        return dict(self._edit_tool_specs)
+        return self._edit_tools.refresh_registry()
 
     def available_edit_tools(self, media_kind: str) -> list[dict[str, object]]:
-        return [
-            {
-                "id": spec.id,
-                "label": spec.label,
-                "supports": tuple(spec.supports),
-                "tags": tuple(spec.tags),
-            }
-            for spec in available_tools_for_kind(media_kind)
-        ]
+        return self._edit_tools.available_tools(media_kind)
 
     def default_edit_tool_state(self, tool_id: str) -> dict[str, object]:
-        spec = get_edit_tool(tool_id)
-        if spec is None:
-            return {}
-        return {
-            "id": spec.id,
-            "enabled": True,
-            "settings": dict(spec.default_state()),
-        }
+        return self._edit_tools.default_tool_state(tool_id)
 
     def normalize_edit_tool_state(self, entry: object) -> dict[str, object]:
-        entries = normalize_tool_entries([entry])
-        return entries[0] if entries else {}
+        return self._edit_tools.normalize_tool_state(entry)
 
     def _sync_edit_tool_defs_for_kind(self, media_kind: str) -> None:
-        tools = available_tools_for_kind(media_kind)
-        self._edit_tool_defs = [(spec.id, spec.label) for spec in tools]
+        self._edit_tools.sync_defs_for_kind(media_kind)
 
     def _reset_edit_session_for_kind(self, media_kind: str) -> None:
         self.edit_session.focus_kind = str(media_kind or "").strip().lower() or None
@@ -1813,342 +1777,62 @@ class BoardController:
         controller.bind_controls(None, None)
 
     def _init_edit_video_timeline(self, path: Path) -> None:
-        self._edit_video_path = path
-        self._edit_video_playhead = 0
-        total = 0
-        fps = 24.0
-        if cv2 is not None:
-            try:
-                cap = cv2.VideoCapture(str(path))
-                if cap.isOpened():
-                    total = int(cap.get(7) or 0)  # CAP_PROP_FRAME_COUNT
-                    fps = float(cap.get(5) or 24.0)  # CAP_PROP_FPS
-                cap.release()
-            except Exception:
-                total = 0
-                fps = 24.0
-        self._edit_video_fps = max(1.0, float(fps))
-        self._video_playback.set_fps(self._edit_video_fps)
-        self._edit_video_total = max(0, total)
-        if self._edit_video_total <= 0:
-            self._edit_video_clips = []
-            self._edit_selected_clip = -1
-            self.w.board_page.edit_timeline.set_data(0, [], 0)
-            self.w.board_page.edit_timeline_split_btn.setEnabled(False)
-            self.w.board_page.edit_timeline_export_btn.setEnabled(False)
-            self.w.board_page.edit_video_status.setText("Timeline unavailable (no frame count).")
-            return
-        self._edit_video_clips = [(0, self._edit_video_total - 1)]
-        self._edit_selected_clip = 0
-        self.w.board_page.edit_timeline.set_data(
-            self._edit_video_total,
-            self._edit_video_clips,
-            self._edit_video_playhead,
-        )
-        self.w.board_page.edit_timeline.set_selected_clip(self._edit_selected_clip)
-        self.w.board_page.edit_timeline_split_btn.setEnabled(True)
-        self.w.board_page.edit_timeline_export_btn.setEnabled(True)
+        self._edit_timeline.init_video_timeline(path)
 
     def _set_edit_timeline_frame_label(self, frame: int) -> None:
-        if hasattr(self.w.board_page, "edit_timeline_frame_label"):
-            self.w.board_page.edit_timeline_frame_label.setText(frame_label_text(frame))
+        self._edit_timeline.set_frame_label(frame)
 
     def _apply_sequence_focus_frame(self, frame: int) -> None:
-        if not isinstance(self._focus_item, BoardSequenceItem):
-            return
-        if not self._edit_seq_frames:
-            return
-        idx = clamp_playhead(frame, len(self._edit_seq_frames))
-        frame_path = self._edit_seq_frames[idx]
-        pixmap = self._get_display_pixmap(frame_path, max_dim=self._max_display_dim)
-        self._focus_item.set_override_pixmap(pixmap)
+        self._edit_timeline.apply_sequence_focus_frame(frame)
 
     def _apply_video_focus_frame(self, frame: int) -> None:
-        if not isinstance(self._focus_item, BoardVideoItem):
-            return
-        idx = clamp_playhead(frame, self._edit_video_total)
-        if self._video_playback.is_playing():
-            self._schedule_video_focus_preview(idx, immediate=True)
-        else:
-            delay = 140 if self._edit_timeline_scrubbing else 40
-            self._schedule_video_focus_preview(idx, delay_ms=delay)
+        self._edit_timeline.apply_video_focus_frame(frame)
 
     def _on_edit_timeline_playhead(self, frame: int) -> None:
-        if self._edit_focus_kind == "sequence":
-            self._on_edit_sequence_timeline_playhead(int(frame))
-            return
-        self._edit_video_playhead = clamp_playhead(int(frame), self._edit_video_total)
-        if (
-            self._edit_video_controller is not None
-            and not self._edit_timeline_scrubbing
-            and not self._video_playback.is_playing()
-        ):
-            self._edit_video_controller.seek_frame(self._edit_video_playhead)
-        self._apply_video_focus_frame(self._edit_video_playhead)
-        self._set_edit_timeline_frame_label(self._edit_video_playhead)
+        self._edit_timeline.on_timeline_playhead(frame)
 
     def _on_edit_timeline_scrub_state(self, active: bool) -> None:
-        self._edit_timeline_scrubbing = bool(active)
-        if not active and self._edit_focus_kind == "video":
-            if self._edit_video_controller is not None:
-                self._edit_video_controller.seek_frame(self._edit_video_playhead)
-            if isinstance(self._focus_item, BoardVideoItem):
-                self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
+        self._edit_timeline.on_timeline_scrub_state(active)
 
     def _on_edit_timeline_selected(self, index: int) -> None:
-        self._edit_selected_clip = int(index)
+        self._edit_timeline.on_timeline_selected(index)
 
     def _find_clip_at_playhead(self) -> Optional[int]:
-        for idx, (start, end) in enumerate(self._edit_video_clips):
-            if start <= self._edit_video_playhead <= end:
-                return idx
-        return None
+        return self._edit_timeline.find_clip_at_playhead()
 
     def _split_edit_clip(self) -> None:
-        if not self._edit_video_clips:
-            return
-        idx = self._edit_selected_clip if self._edit_selected_clip >= 0 else self._find_clip_at_playhead()
-        if idx is None:
-            return
-        start, end = self._edit_video_clips[idx]
-        ph = self._edit_video_playhead
-        if ph <= start or ph >= end:
-            return
-        left = (start, ph)
-        right = (ph + 1, end)
-        self._edit_video_clips[idx:idx + 1] = [left, right]
-        self._edit_selected_clip = idx
-        self.w.board_page.edit_timeline.set_data(
-            self._edit_video_total,
-            self._edit_video_clips,
-            self._edit_video_playhead,
-        )
+        self._edit_timeline.split_clip()
 
     def _export_edit_clip(self) -> None:
-        if self._edit_video_path is None or not self._edit_video_clips:
-            return
-        self._log_export_event("Export clip requested.")
-        idx = self._edit_selected_clip if self._edit_selected_clip >= 0 else self._find_clip_at_playhead()
-        if idx is None:
-            self._log_export_event("Export aborted: no clip selected.")
-            return
-        start, end = self._edit_video_clips[idx]
-        self._log_export_event(f"Selected clip {idx}: frames {start}-{end}.")
-        if self._segment_thread is not None:
-            self._log_export_event("Export aborted: segment thread already running.")
-            self._notify("Export already running.")
-            return
-        if not self._project_root:
-            self._log_export_event("Export aborted: no project root.")
-            self._notify("Select a project first.")
-            return
-        assets_dir = self._project_root / ".skyforge_board_assets"
-        assets_dir.mkdir(parents=True, exist_ok=True)
-        out_dir = assets_dir / f"{self._edit_video_path.stem}_seg_{start}_{end}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        self._log_export_event(f"Output directory ready: {out_dir}")
-
-        dialog = QtWidgets.QProgressDialog("Exporting segment...", "Cancel", 0, 100, self.w)
-        dialog.setWindowTitle("Export Segment")
-        dialog.setMinimumDuration(0)
-        dialog.setAutoClose(False)
-        dialog.setAutoReset(False)
-        dialog.setRange(0, 0)
-        dialog.setValue(0)
-        dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-        dialog.setLabelText(
-            f"Preparing export for frames {start}-{end}...\nOutput: {out_dir.name}"
-        )
-        dialog.show()
-        self._log_export_event("Progress dialog shown.")
-        self._segment_dialog = dialog
-        self.w.board_page.edit_timeline_split_btn.setEnabled(False)
-        self.w.board_page.edit_timeline_export_btn.setEnabled(False)
-
-        worker = VideoSegmentWorker(self._edit_video_path, out_dir, start, end)
-        thread = QtCore.QThread(self.w)
-        worker.moveToThread(thread)
-        determinate_progress = False
-
-        def _on_status(text: str) -> None:
-            self._log_export_event(f"Worker status: {text}")
-            if self._segment_dialog is None:
-                return
-            self._segment_dialog.setLabelText(
-                f"{text}\nFrames {start}-{end}\nOutput: {out_dir.name}"
-            )
-
-        def _on_progress(current: int, total: int) -> None:
-            nonlocal determinate_progress
-            if self._segment_dialog is None:
-                return
-            if not determinate_progress:
-                self._segment_dialog.setRange(0, 100)
-                determinate_progress = True
-                self._log_export_event(f"Progress became determinate: total={total}")
-            percent = int((current / max(1, total)) * 100)
-            self._segment_dialog.setValue(min(100, max(0, percent)))
-            self._segment_dialog.setLabelText(
-                f"Exporting frames... {current}/{total}\nFrames {start}-{end}\nOutput: {out_dir.name}"
-            )
-
-        def _on_finished(success: bool, out_path: object, error: object) -> None:
-            self._log_export_event(f"Worker finished: success={success} out={out_path} error={error}")
-            if self._segment_dialog is not None:
-                self._segment_dialog.reset()
-                self._segment_dialog = None
-            self._segment_thread = None
-            self._segment_worker = None
-            self.w.board_page.edit_timeline_split_btn.setEnabled(True)
-            self.w.board_page.edit_timeline_export_btn.setEnabled(True)
-            if not success:
-                self._notify(str(error or "Export failed."))
-                return
-            if isinstance(out_path, Path):
-                if self._focus_item is not None:
-                    self.exit_focus_mode()
-                item = self.add_sequence_from_dir(out_path)
-                if item is not None:
-                    item.setSelected(True)
-                    self._reveal_scene_items([item])
-                    self.save_board()
-                    self._notify("Segment exported as sequence.")
-            else:
-                self._notify("Export completed.")
-
-        def _on_cancel() -> None:
-            self._log_export_event("Cancel requested.")
-            if self._segment_dialog is not None:
-                self._segment_dialog.setLabelText("Cancelling export...")
-            if self._segment_worker is not None:
-                self._segment_worker.cancel()
-
-        dialog.canceled.connect(_on_cancel)
-        worker.status.connect(_on_status)
-        worker.progress.connect(_on_progress)
-        worker.finished.connect(_on_finished)
-        worker.finished.connect(thread.quit)
-        thread.started.connect(worker.run)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(worker.deleteLater)
-
-        self._segment_thread = thread
-        self._segment_worker = worker
-
-        def _start_export_thread() -> None:
-            self._log_export_event("Starting export thread.")
-            if self._segment_thread is thread:
-                thread.start()
-
-        QtCore.QTimer.singleShot(0, _start_export_thread)
+        self._edit_timeline.export_clip()
 
     def _on_edit_sequence_timeline_playhead(self, frame: int) -> None:
-        if not self._edit_seq_frames:
-            return
-        idx = clamp_playhead(int(frame), len(self._edit_seq_frames))
-        self._edit_video_playhead = idx
-        self._set_edit_timeline_frame_label(idx)
-        self._apply_sequence_focus_frame(idx)
+        self._edit_timeline.on_sequence_timeline_playhead(frame)
 
     def _toggle_edit_sequence_play(self) -> None:
-        if not self._edit_seq_frames:
-            return
-        self._sequence_playback.set_fps(self._edit_seq_fps)
-        self._sequence_playback.toggle()
+        self._edit_timeline.toggle_sequence_play()
 
     def _on_sequence_play_state_changed(self, playing: bool) -> None:
-        if self._edit_focus_kind == "sequence":
-            self.w.board_page.edit_timeline_play_btn.setText(play_button_label(playing))
+        self._edit_timeline.on_sequence_play_state_changed(playing)
 
     def _on_video_play_state_changed(self, playing: bool) -> None:
-        if self._edit_focus_kind == "video":
-            self.w.board_page.edit_timeline_play_btn.setText(play_button_label(playing))
+        self._edit_timeline.on_video_play_state_changed(playing)
 
     def _toggle_edit_timeline_play(self) -> None:
-        if self._edit_focus_kind == "sequence":
-            self._toggle_edit_sequence_play()
-            return
-        if self._edit_focus_kind == "video":
-            if self._edit_video_total <= 0:
-                return
-            self._video_playback.set_fps(self._edit_video_fps)
-            self._video_playback.toggle()
+        self._edit_timeline.toggle_play()
 
     def _advance_edit_video_frame(self) -> None:
-        if self._edit_video_total <= 0:
-            return
-        nxt = loop_next_playhead(self._edit_video_playhead, self._edit_video_total)
-        self.w.board_page.edit_timeline.set_playhead(nxt)
-        self._on_edit_timeline_playhead(nxt)
+        self._edit_timeline.advance_video_frame()
 
     def _advance_edit_sequence_frame(self) -> None:
-        if not self._edit_seq_frames:
-            return
-        nxt = loop_next_playhead(self._edit_video_playhead, len(self._edit_seq_frames))
-        self.w.board_page.edit_timeline.set_playhead(nxt)
-        self._on_edit_sequence_timeline_playhead(nxt)
+        self._edit_timeline.advance_sequence_frame()
 
     def _load_exr_channels_into_panel(self, path: Path) -> None:
-        worker = ExrInfoWorker(path)
-        thread = QtCore.QThread(self.w)
-        worker.moveToThread(thread)
-        self.w.board_page._edit_exr_thread = thread  # type: ignore[attr-defined]
-        self.w.board_page._edit_exr_worker = worker  # type: ignore[attr-defined]
-        worker.finished.connect(self._ui_bridge.on_exr_info_finished)
-        worker.finished.connect(thread.quit)
-        thread.started.connect(worker.run)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
+        self._edit_preview.load_exr_channels_into_panel(path)
 
     @staticmethod
     def _build_exr_channel_options(channels: list[str]) -> tuple[list[tuple[str, str]], Optional[str]]:
-        clean = [str(c) for c in channels]
-        lower_map = {c.lower(): c for c in clean}
-        groups: dict[str, set[str]] = {}
-        for ch in clean:
-            if "." in ch:
-                prefix, suffix = ch.rsplit(".", 1)
-            else:
-                prefix, suffix = "", ch
-            suffix_up = suffix.upper()
-            if suffix_up in ("R", "G", "B", "A"):
-                groups.setdefault(prefix, set()).add(suffix_up)
-        options: list[tuple[str, str]] = []
-        default_value: Optional[str] = None
-
-        def add_option(label: str, value: str) -> None:
-            nonlocal default_value
-            options.append((label, value))
-            if default_value is None:
-                default_value = value
-
-        # Prefer beauty in root group
-        root = groups.get("", set())
-        if {"R", "G", "B"}.issubset(root):
-            add_option("Beauty (RGB)", "RGB")
-            if "A" in root:
-                add_option("Beauty (RGBA)", "RGBA")
-
-        # Other groups
-        for prefix, chans in sorted(groups.items()):
-            if prefix == "":
-                continue
-            if {"R", "G", "B"}.issubset(chans):
-                add_option(f"{prefix} (RGB)", f"{prefix}.RGB")
-                if "A" in chans:
-                    add_option(f"{prefix} (RGBA)", f"{prefix}.RGBA")
-
-        # Raw channels
-        for ch in clean:
-            add_option(ch, ch)
-
-        # Default to beauty if available
-        for label, value in options:
-            if value in ("RGB", "RGBA"):
-                default_value = value
-                break
-        return options, default_value
+        return BoardEditPreviewController.build_exr_channel_options(channels)
 
     @staticmethod
     def _default_color_adjustments() -> tuple[float, float, float]:
@@ -2163,122 +1847,46 @@ class BoardController:
         return 0.0, 0.0, 0.0, 0.0
 
     def _default_edit_tool_stack(self) -> list[dict[str, object]]:
-        self._sync_edit_tool_defs_for_kind(str(self._edit_focus_kind or "image"))
-        tools = default_tool_stack_for_kind(self._edit_focus_kind)
-        return tools or build_bcs_stack(*self._default_color_adjustments())
+        return self._edit_tools.default_stack()
 
     def _ensure_edit_tool_stack(self) -> None:
-        self._sync_edit_tool_defs_for_kind(str(self._edit_focus_kind or "image"))
-        tools = normalize_tool_entries(self._edit_tool_stack)
-        if not tools:
-            tools = self._default_edit_tool_stack()
-        self._edit_tool_stack = [dict(t) for t in tools]
-        if self._edit_selected_tool_index < 0 or self._edit_selected_tool_index >= len(self._edit_tool_stack):
-            self._edit_selected_tool_index = 0
+        self._edit_tools.ensure_stack()
 
     def _tool_label_for_id(self, tool_id: str) -> str:
-        key = str(tool_id or "").strip().lower()
-        for tid, label in self._edit_tool_defs:
-            if tid == key:
-                return label
-        spec = get_edit_tool(key)
-        if spec is not None:
-            return spec.label
-        return key or "Tool"
+        return self._edit_tools.tool_label_for_id(tool_id)
 
     def _tool_entry_from_id(self, tool_id: str) -> dict[str, object]:
-        entry = make_tool_entry(tool_id)
-        if entry:
-            return entry
-        b, c, s = self._default_color_adjustments()
-        return {
-            "id": "bcs",
-            "enabled": True,
-            "settings": {"brightness": b, "contrast": c, "saturation": s},
-        }
+        return self._edit_tools.tool_entry_from_id(tool_id)
 
     def _selected_tool_entry(self) -> Optional[dict[str, object]]:
-        if self._edit_selected_tool_index < 0 or self._edit_selected_tool_index >= len(self._edit_tool_stack):
-            return None
-        entry = self._edit_tool_stack[self._edit_selected_tool_index]
-        return entry if isinstance(entry, dict) else None
+        return self._edit_tools.selected_tool_entry()
 
     def _tool_panel_for_id(self, tool_id: str) -> str:
-        spec = get_edit_tool(tool_id)
-        if spec is None:
-            return ""
-        return str(getattr(spec, "ui_panel", "") or "").strip().lower()
+        return self._edit_tools.tool_panel_for_id(tool_id)
 
     def _selected_tool_panel(self) -> str:
-        selected = self._selected_tool_entry()
-        selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
-        return self._tool_panel_for_id(selected_id)
+        return self._edit_tools.selected_tool_panel()
 
     def _tool_panel_state_for_id(self, tool_id: str) -> dict[str, object]:
-        spec = get_edit_tool(tool_id)
-        if spec is None:
-            return {}
-        panel = str(getattr(spec, "ui_panel", "") or "").strip().lower()
-        if not panel:
-            return {}
-        raw_state = self.w.board_page.current_image_tool_panel_state(panel)
-        return normalize_panel_state(tool_id, raw_state)
+        return self._edit_tools.panel_state_for_id(tool_id)
 
     def _connect_edit_tool_panel_signals(self) -> None:
-        for spec in list_edit_tools():
-            tool_id = str(getattr(spec, "id", "") or "").strip().lower()
-            if not tool_id:
-                continue
-            tool_caps = get_board_tool(tool_id)
-            has_scene = bool(getattr(tool_caps, "has_scene", False))
-            for control in getattr(spec, "ui_controls", ()):
-                slider = self.w.board_page.image_tool_control_slider(getattr(control, "key", ""))
-                if slider is None:
-                    continue
-                if has_scene:
-                    slider.valueChanged.connect(
-                        lambda *_args, current_tool_id=tool_id: self._on_edit_scene_tool_panel_changed(current_tool_id)
-                    )
-                else:
-                    slider.valueChanged.connect(
-                        lambda *_args, current_tool_id=tool_id: self._on_edit_image_tool_panel_changed(
-                            current_tool_id,
-                            insert_at=getattr(get_edit_tool(current_tool_id), "stack_insert_at", None),
-                        )
-                    )
-                slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
-                slider.sliderReleased.connect(self._on_edit_preview_slider_released)
+        self._edit_tools.connect_panel_signals()
 
     def _sync_edit_values_from_tool_stack(self) -> None:
-        EditVisualState.from_tool_stack(self._edit_tool_stack).apply_to_session(self._edit_session)
+        self._edit_tools.sync_values_from_stack()
 
     def _sync_tool_stack_ui(self) -> None:
-        self._ensure_edit_tool_stack()
-        self._sync_edit_values_from_tool_stack()
-        self.w.board_page.set_image_tool_add_options(
-            [(label, tool_id) for tool_id, label in self._edit_tool_defs]
-        )
-        rows = []
-        for entry in self._edit_tool_stack:
-            tool_id = str(entry.get("id", "tool")).strip().lower()
-            enabled = bool(entry.get("enabled", True))
-            rows.append((self._tool_label_for_id(tool_id), enabled))
-        self.w.board_page.set_image_tool_stack_items(rows, self._edit_selected_tool_index)
-        for panel, state in panel_state_map_for_tools((tool_id for tool_id, _label in self._edit_tool_defs), self._edit_tool_stack).items():
-            self.w.board_page.set_image_tool_panel_state(panel, state)
-        selected_panel = self._selected_tool_panel()
-        self.w.board_page.set_active_image_tool_panel(selected_panel)
-        self._refresh_focus_scene_handles()
+        self._edit_tools.sync_stack_ui()
 
     def _current_edit_tool_stack(self) -> list[dict[str, object]]:
-        self._ensure_edit_tool_stack()
-        return normalize_tool_stack(self._edit_tool_stack)
+        return self._edit_tools.current_stack()
 
     def _tool_stack_from_override(self, override: object) -> list[dict[str, object]]:
-        return tool_stack_from_override(override, self._edit_focus_kind)
+        return self._edit_tools.stack_from_override(override)
 
     def _coerce_color_adjustments(self, override: object) -> tuple[float, float, float]:
-        return coerce_color_adjustments(override)
+        return self._edit_tools.coerce_color_adjustments(override)
 
     def _color_adjustments_are_default(self, brightness: float, contrast: float, saturation: float) -> bool:
         b_def, c_def, s_def = self._default_color_adjustments()
@@ -2295,9 +1903,7 @@ class BoardController:
         contrast: float,
         saturation: float,
     ) -> bool:
-        if not normalize_tool_stack(stack):
-            return not self._color_adjustments_are_default(brightness, contrast, saturation)
-        return tool_stack_is_effective(stack)
+        return self._edit_tools.stack_is_effective(stack, brightness, contrast, saturation)
 
     def _set_tool_state_in_stack(
         self,
@@ -2307,116 +1913,43 @@ class BoardController:
         add_if_missing: bool = True,
         insert_at: int | None = None,
     ) -> None:
-        self._ensure_edit_tool_stack()
-        entries, idx = upsert_tool_settings(
-            self._edit_tool_stack,
+        self._edit_tools.set_tool_state(
             tool_id,
             settings,
             add_if_missing=add_if_missing,
             insert_at=insert_at,
         )
-        self._edit_tool_stack = entries
-        if idx >= 0:
-            self._edit_selected_tool_index = idx
 
     def _sync_tool_panel_to_stack(self, tool_id: str, *, add_if_missing: bool = True, insert_at: int | None = None) -> None:
-        settings = self._tool_panel_state_for_id(tool_id)
-        self._set_tool_state_in_stack(
+        self._edit_tools.sync_panel_to_stack(
             tool_id,
-            settings,
             add_if_missing=add_if_missing,
             insert_at=insert_at,
         )
 
     def _on_edit_tool_stack_selection_changed(self, row: int) -> None:
-        self._edit_selected_tool_index = int(row)
-        self._sync_tool_stack_ui()
+        self._edit_tools.on_stack_selection_changed(row)
 
     def _on_edit_tool_stack_add_clicked(self, tool_id: object = None) -> None:
-        if self._edit_image_path is None:
-            return
-        if tool_id is None:
-            tool_id = self.w.board_page.current_image_tool_add_id()
-        tool_id = str(tool_id or "").strip().lower()
-        if not tool_id:
-            return
-        self._ensure_edit_tool_stack()
-        entries, idx = append_tool(self._edit_tool_stack, tool_id)
-        self._edit_tool_stack = entries
-        if idx >= 0:
-            self._edit_selected_tool_index = idx
-        self._sync_tool_stack_ui()
-        self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+        self._edit_tools.on_stack_add_clicked(tool_id)
 
     def _on_edit_tool_stack_remove_index(self, idx: int) -> None:
-        if self._edit_image_path is None:
-            return
-        self._remove_edit_tool_stack_index(int(idx))
+        self._edit_tools.on_stack_remove_index(idx)
 
     def _remove_edit_tool_stack_index(self, idx: int) -> None:
-        if idx < 0 or idx >= len(self._edit_tool_stack):
-            return
-        entries, next_idx = remove_tool_at(self._edit_tool_stack, idx)
-        self._edit_tool_stack = entries
-        if not self._edit_tool_stack:
-            self._edit_tool_stack = self._default_edit_tool_stack()
-            self._edit_selected_tool_index = 0
-        else:
-            self._edit_selected_tool_index = next_idx
-        self._sync_tool_stack_ui()
-        if isinstance(self._focus_item, BoardVideoItem):
-            self._commit_current_focus_video_override()
-            self._apply_crop_to_focus_item()
-            self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
-        else:
-            self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+        self._edit_tools.remove_stack_index(idx)
 
     def _on_edit_tool_stack_up_clicked(self) -> None:
-        idx = self.w.board_page.current_image_tool_stack_index()
-        if idx <= 0 or idx >= len(self._edit_tool_stack):
-            return
-        entries, next_idx = move_tool(self._edit_tool_stack, idx, -1)
-        self._edit_tool_stack = entries
-        self._edit_selected_tool_index = next_idx
-        self._sync_tool_stack_ui()
-        self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+        self._edit_tools.on_stack_up_clicked()
 
     def _on_edit_tool_stack_down_clicked(self) -> None:
-        idx = self.w.board_page.current_image_tool_stack_index()
-        if idx < 0 or idx >= len(self._edit_tool_stack) - 1:
-            return
-        entries, next_idx = move_tool(self._edit_tool_stack, idx, 1)
-        self._edit_tool_stack = entries
-        self._edit_selected_tool_index = next_idx
-        self._sync_tool_stack_ui()
-        self._schedule_edit_preview_update(channel=str(self._edit_exr_channel or ""))
+        self._edit_tools.on_stack_down_clicked()
 
     def _sync_edit_session_from_panel_state(self, tool_id: str, state: dict[str, object]) -> None:
-        key = str(tool_id or "").strip().lower()
-        if key == "bcs":
-            self._edit_image_brightness = float(state.get("brightness", 0.0))
-            self._edit_image_contrast = float(state.get("contrast", 1.0))
-            self._edit_image_saturation = float(state.get("saturation", 1.0))
-            self.w.board_page.set_image_adjust_labels(
-                self._edit_image_brightness,
-                self._edit_image_contrast,
-                self._edit_image_saturation,
-            )
-            return
-        if key == "vibrance":
-            self._edit_image_vibrance = float(state.get("amount", 0.0))
-            self.w.board_page.set_image_tool_panel_state("vibrance", {"amount": self._edit_image_vibrance})
+        self._edit_tools.sync_session_from_panel_state(tool_id, state)
 
     def _schedule_focus_image_preview(self) -> None:
-        if self._edit_image_path is None or not isinstance(self._focus_item, BoardImageItem):
-            return
-        if self._edit_exr_path is not None:
-            channel = self.w.board_page.current_exr_channel_value()
-            if channel:
-                self._edit_exr_channel = str(channel)
-                self._schedule_edit_preview_update(channel=str(channel))
-            return
-        self._schedule_edit_preview_update()
+        self._edit_tools.schedule_focus_image_preview()
 
     def _on_edit_image_tool_panel_changed(
         self,
@@ -2424,11 +1957,7 @@ class BoardController:
         *,
         insert_at: int | None = None,
     ) -> None:
-        panel_state = self._tool_panel_state_for_id(tool_id)
-        self._sync_edit_session_from_panel_state(tool_id, panel_state)
-        self._sync_tool_panel_to_stack(tool_id, insert_at=insert_at)
-        self._commit_current_focus_image_override()
-        self._schedule_focus_image_preview()
+        self._edit_tools.on_image_tool_panel_changed(tool_id, insert_at=insert_at)
 
     def _on_edit_image_adjust_changed(self, *_: object) -> None:
         self._on_edit_image_tool_panel_changed("bcs", insert_at=0)
@@ -2599,38 +2128,16 @@ class BoardController:
         self._on_edit_image_adjust_changed()
 
     def _on_edit_preview_slider_pressed(self) -> None:
-        self._edit_preview_dragging = True
+        self._edit_preview.on_slider_pressed()
 
     def _on_edit_preview_slider_released(self) -> None:
-        self._edit_preview_dragging = False
-        self._schedule_edit_preview_update()
+        self._edit_preview.on_slider_released()
 
     def _schedule_edit_preview_update(self, channel: Optional[str] = None) -> None:
-        if channel:
-            self._edit_preview_pending_channel = str(channel)
-        if self._edit_preview_timer is None:
-            self._edit_preview_timer = QtCore.QTimer(self.w)
-            self._edit_preview_timer.setSingleShot(True)
-            self._edit_preview_timer.timeout.connect(self._flush_edit_preview_update)
-        self._edit_preview_timer.start(60)
+        self._edit_preview.schedule_update(channel)
 
     def _flush_edit_preview_update(self) -> None:
-        self._edit_preview_timer = None
-        max_dim = self._edit_preview_fast_dim if self._edit_preview_dragging else self._edit_preview_full_dim
-        if self._edit_exr_path is not None:
-            channel = str(
-                self._edit_preview_pending_channel
-                or self._edit_exr_channel
-                or self.w.board_page.current_exr_channel_value()
-                or ""
-            ).strip()
-            self._edit_preview_pending_channel = None
-            if channel:
-                self._queue_exr_channel_preview(channel, max_dim=max_dim)
-            return
-        self._edit_preview_pending_channel = None
-        if self._edit_image_path is not None:
-            self._queue_image_adjust_preview(self._edit_image_path, max_dim=max_dim)
+        self._edit_preview.flush_update()
 
     def _on_edit_exr_channel_changed(self, _index: int) -> None:
         channel = self.w.board_page.current_exr_channel_value()
@@ -2709,127 +2216,15 @@ class BoardController:
     def _handle_exr_info_finished(
         self, success: bool, channels_obj: object, size_obj: object, note_obj: object
     ) -> None:
-        if self._edit_exr_path is None:
-            return
-        path = self._edit_exr_path
-        channels = channels_obj if isinstance(channels_obj, list) else []
-        size = size_obj if isinstance(size_obj, QtCore.QSize) else None
-        note = str(note_obj or "")
-        info_lines = [
-            "Type: EXR",
-            f"Name: {path.name}",
-        ]
-        if size is not None:
-            info_lines.append(f"Size: {size.width()} x {size.height()}")
-        info_lines.append(f"Path: {path}")
-        footer = note or "Channels"
-        if success and channels:
-            self._edit_exr_channels = [str(c) for c in channels]
-            options, default_value = self._build_exr_channel_options(self._edit_exr_channels)
-            self.w.board_page.set_exr_channels(options)
-            self.w.board_page.set_edit_panel_content(
-                "Edit Mode: Image",
-                info_lines,
-                list_items=[str(c) for c in channels],
-                footer=footer,
-            )
-            if default_value is None and self._edit_exr_channels:
-                default_value = self._edit_exr_channels[0]
-            preferred_channel = str(self._edit_exr_channel or "").strip()
-            if preferred_channel:
-                available_values = [value for _label, value in options]
-                if preferred_channel in available_values:
-                    default_value = preferred_channel
-                elif preferred_channel in self._edit_exr_channels:
-                    default_value = preferred_channel
-            if default_value:
-                self._edit_exr_channel = str(default_value)
-                # Set combo selection to default
-                combo = self.w.board_page.edit_exr_channel_combo
-                idx = combo.findData(default_value)
-                if idx < 0:
-                    idx = combo.findText(default_value)
-                if idx >= 0:
-                    combo.setCurrentIndex(idx)
-                self._queue_exr_channel_preview(default_value)
-        elif success:
-            self.w.board_page.set_edit_panel_content(
-                "Edit Mode: Image",
-                info_lines,
-                list_items=["No channels found."],
-                footer=footer,
-            )
-        else:
-            self._edit_exr_channels = []
-            self.w.board_page.set_exr_channels([])
-            self.w.board_page.set_edit_panel_content(
-                "Edit Mode: Image",
-                info_lines,
-                list_items=["Failed to read EXR."],
-                footer=str(note_obj or "Failed to read EXR."),
-            )
+        self._edit_preview.handle_exr_info_finished(success, channels_obj, size_obj, note_obj)
 
     def _handle_exr_preview_finished(
         self, success: bool, channel: str, payload: object, error: object
     ) -> None:
-        if success:
-            if isinstance(self._focus_item, BoardImageItem):
-                filename = str(self._focus_item.data(1) or "").strip()
-                if apply_exr_preview_result(
-                    self._image_exr_display_overrides,
-                    self._focus_item,
-                    filename,
-                    payload=payload,
-                    channel=str(self._edit_exr_channel or channel or ""),
-                    gamma=self._edit_exr_gamma,
-                    srgb=self._edit_exr_srgb,
-                    brightness=self._edit_image_brightness,
-                    contrast=self._edit_image_contrast,
-                    saturation=self._edit_image_saturation,
-                    tool_stack=self._current_edit_tool_stack(),
-                ):
-                    self._sync_board_state_overrides()
-                    self._dirty = True
-                    return
-            else:
-                pixmap = preview_payload_to_pixmap(payload)
-                if pixmap is not None:
-                    self.w.board_page.show_edit_preview_image(pixmap, label=f"Channel: {channel}")
-                    return
-        msg = str(error or "Failed to render channel.")
-        self.w.board_page.edit_footer.setText(msg)
+        self._edit_preview.handle_exr_preview_finished(success, channel, payload, error)
 
     def _handle_image_adjust_preview_finished(self, success: bool, payload: object, error: object) -> None:
-        if success:
-            if isinstance(self._focus_item, BoardImageItem):
-                current_stack = self._current_edit_tool_stack()
-                if apply_image_adjust_preview_result(
-                    self._image_exr_display_overrides,
-                    self._focus_item,
-                    str(self._focus_item.data(1) or "").strip(),
-                    payload=payload,
-                    effective=self._tool_stack_is_effective(
-                        current_stack,
-                        self._edit_image_brightness,
-                        self._edit_image_contrast,
-                        self._edit_image_saturation,
-                    ),
-                    current=self._image_exr_display_overrides.get(str(self._focus_item.data(1) or "").strip()),
-                    brightness=self._edit_image_brightness,
-                    contrast=self._edit_image_contrast,
-                    saturation=self._edit_image_saturation,
-                    tool_stack=current_stack,
-                ):
-                    self._sync_board_state_overrides()
-                    self._dirty = True
-                    return
-            else:
-                pixmap = preview_payload_to_pixmap(payload)
-                if pixmap is not None:
-                    self.w.board_page.show_edit_preview_image(pixmap, label="Image adjustments")
-                    return
-        msg = str(error or "Failed to render image adjustments.")
-        self.w.board_page.edit_footer.setText(msg)
+        self._edit_preview.handle_image_adjust_preview_finished(success, payload, error)
 
     def enter_focus_mode(self, item: QtWidgets.QGraphicsItem) -> None:
         if self._focus_item is item:
@@ -2938,46 +2333,10 @@ class BoardController:
         self.w.board_page.set_edit_preview_visible(True)
 
     def _queue_exr_channel_preview(self, channel: str, max_dim: int = 0) -> None:
-        if self._edit_exr_path is None:
-            return
-        if self._edit_exr_preview_busy:
-            self._edit_exr_preview_pending_channel = str(channel)
-            self._edit_exr_preview_pending_max_dim = int(max_dim)
-            return
-        worker = ExrChannelPreviewWorker(
-            self._edit_exr_path,
-            channel,
-            self._edit_exr_gamma,
-            self._edit_exr_srgb,
-            self._edit_image_brightness,
-            self._edit_image_contrast,
-            self._edit_image_saturation,
-            int(max_dim),
-            self._current_edit_tool_stack(),
-        )
-        thread = QtCore.QThread(self.w)
-        worker.moveToThread(thread)
-        self._edit_exr_preview_busy = True
-        self._edit_exr_thread = thread
-        self._edit_exr_worker = worker
-        worker.finished.connect(self._ui_bridge.on_exr_preview_finished)
-        worker.finished.connect(thread.quit)
-        thread.started.connect(worker.run)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_edit_exr_preview_cycle_finished)
-        thread.start()
+        self._edit_preview.queue_exr_channel_preview(channel, max_dim=max_dim)
 
     def _on_edit_exr_preview_cycle_finished(self) -> None:
-        self._edit_exr_preview_busy = False
-        self._edit_exr_thread = None
-        self._edit_exr_worker = None
-        pending_channel = self._edit_exr_preview_pending_channel
-        pending_dim = self._edit_exr_preview_pending_max_dim
-        self._edit_exr_preview_pending_channel = None
-        self._edit_exr_preview_pending_max_dim = 0
-        if self._edit_exr_path is not None and pending_channel:
-            self._queue_exr_channel_preview(pending_channel, max_dim=pending_dim)
+        self._edit_preview.on_exr_preview_cycle_finished()
 
     def _queue_exr_display_for_item(
         self,
@@ -2990,86 +2349,22 @@ class BoardController:
         saturation: float = 1.0,
         tool_stack: object = None,
     ) -> None:
-        if item.scene() is None:
-            return
-        path = item.file_path()
-        if path.suffix.lower() != ".exr":
-            return
-        worker = ExrChannelPreviewWorker(
-            path,
-            str(channel),
-            float(gamma),
-            bool(srgb),
-            float(brightness),
-            float(contrast),
-            float(saturation),
-            1024,
-            tool_stack,
+        self._edit_preview.queue_exr_display_for_item(
+            item,
+            channel,
+            gamma,
+            srgb,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
+            tool_stack=tool_stack,
         )
-        thread = QtCore.QThread(self.w)
-        worker.moveToThread(thread)
-        self._exr_item_preview_threads.append(thread)
-        self._exr_item_preview_workers.append(worker)
-
-        def _on_finished(success: bool, _channel: str, payload: object, _error: object) -> None:
-            if success:
-                apply_preview_payload_to_item(item, payload)
-
-        worker.finished.connect(_on_finished)
-        worker.finished.connect(thread.quit)
-        thread.started.connect(worker.run)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
-        def _cleanup() -> None:
-            try:
-                self._exr_item_preview_threads.remove(thread)
-            except ValueError:
-                pass
-            try:
-                self._exr_item_preview_workers.remove(worker)
-            except ValueError:
-                pass
-
-        thread.finished.connect(_cleanup)
-        thread.start()
 
     def _queue_image_adjust_preview(self, path: Path, max_dim: int = 0) -> None:
-        if self._edit_image_preview_busy:
-            self._edit_image_preview_pending_path = path
-            self._edit_image_preview_pending_max_dim = int(max_dim)
-            return
-        worker = ImageAdjustPreviewWorker(
-            path,
-            self._edit_image_brightness,
-            self._edit_image_contrast,
-            self._edit_image_saturation,
-            int(max_dim),
-            self._current_edit_tool_stack(),
-        )
-        thread = QtCore.QThread(self.w)
-        worker.moveToThread(thread)
-        self._edit_image_preview_busy = True
-        self._edit_image_thread = thread
-        self._edit_image_worker = worker
-        worker.finished.connect(self._handle_image_adjust_preview_finished)
-        worker.finished.connect(thread.quit)
-        thread.started.connect(worker.run)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_edit_image_preview_cycle_finished)
-        thread.start()
+        self._edit_preview.queue_image_adjust_preview(path, max_dim=max_dim)
 
     def _on_edit_image_preview_cycle_finished(self) -> None:
-        self._edit_image_preview_busy = False
-        self._edit_image_thread = None
-        self._edit_image_worker = None
-        pending_path = self._edit_image_preview_pending_path
-        pending_dim = self._edit_image_preview_pending_max_dim
-        self._edit_image_preview_pending_path = None
-        self._edit_image_preview_pending_max_dim = 0
-        if pending_path is not None and self._edit_image_path is not None:
-            self._queue_image_adjust_preview(pending_path, max_dim=pending_dim)
+        self._edit_preview.on_image_preview_cycle_finished()
 
     def _queue_image_adjust_for_item(
         self,
@@ -3079,46 +2374,13 @@ class BoardController:
         saturation: float,
         tool_stack: object = None,
     ) -> None:
-        if item.scene() is None:
-            return
-        path = item.file_path()
-        if path.suffix.lower() == ".exr":
-            return
-        worker = ImageAdjustPreviewWorker(
-            path,
-            float(brightness),
-            float(contrast),
-            float(saturation),
-            1024,
-            tool_stack,
+        self._edit_preview.queue_image_adjust_for_item(
+            item,
+            brightness,
+            contrast,
+            saturation,
+            tool_stack=tool_stack,
         )
-        thread = QtCore.QThread(self.w)
-        worker.moveToThread(thread)
-        self._exr_item_preview_threads.append(thread)
-        self._exr_item_preview_workers.append(worker)
-
-        def _on_finished(success: bool, payload: object, _error: object) -> None:
-            if success:
-                apply_preview_payload_to_item(item, payload)
-
-        worker.finished.connect(_on_finished)
-        worker.finished.connect(thread.quit)
-        thread.started.connect(worker.run)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
-        def _cleanup() -> None:
-            try:
-                self._exr_item_preview_threads.remove(thread)
-            except ValueError:
-                pass
-            try:
-                self._exr_item_preview_workers.remove(worker)
-            except ValueError:
-                pass
-
-        thread.finished.connect(_cleanup)
-        thread.start()
 
     def _on_scene_changed(self) -> None:
         if self._loading:
