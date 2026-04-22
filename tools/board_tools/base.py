@@ -13,3 +13,4 @@ class BoardToolSceneRuntime:
     mouse_move: Callable[[object, object, object], bool]
     mouse_release: Callable[[object, object, object], bool]
     apply_to_focus_item: Callable[[object], bool] | None = None
+    reset_focus_item: Callable[[object], bool] | None = None

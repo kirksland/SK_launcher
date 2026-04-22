@@ -27,6 +27,17 @@ class BoardToolDiscoveryTests(unittest.TestCase):
         assert spec is not None
         self.assertEqual(spec.ui_panel, "vibrance")
 
+    def test_edit_tool_specs_declare_default_media_kinds(self) -> None:
+        discover_edit_tools(force=True)
+        bcs = get_edit_tool("bcs")
+        crop = get_edit_tool("crop")
+        self.assertIsNotNone(bcs)
+        self.assertIsNotNone(crop)
+        assert bcs is not None
+        assert crop is not None
+        self.assertIn("image", bcs.default_for)
+        self.assertIn("video", crop.default_for)
+
     def test_board_tool_scene_runtime_is_typed_and_exposed(self) -> None:
         runtime = get_board_tool_scene_runtime("crop")
         self.assertIsNotNone(runtime)
@@ -34,6 +45,7 @@ class BoardToolDiscoveryTests(unittest.TestCase):
         assert runtime is not None
         self.assertTrue(callable(runtime.mouse_press))
         self.assertTrue(callable(runtime.refresh_handles))
+        self.assertTrue(callable(runtime.reset_focus_item))
 
     def test_image_tool_registry_discovers_board_tool_image_modules(self) -> None:
         rgb = [[[128, 128, 128]]]

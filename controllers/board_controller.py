@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
-from core.board_edit.handles import CropHandleDragState, CropHandleLayout
-from core.board_edit.panels import default_panel_state
 from core.board_edit.media_runtime import SequencePlaybackRuntime, VideoPlaybackRuntime
 from core.board_edit.workers import UiBridge
 from core.board_edit.session import EditSessionState
@@ -48,7 +46,7 @@ from core.board_state import (
 )
 from core.board_scene.groups import build_rename_destination
 from core.board_scene.items import BoardGroupItem, BoardImageItem, BoardNoteItem, BoardSequenceItem, BoardVideoItem
-from tools.board_tools.edit import discover_edit_tools, get_edit_tool
+from tools.board_tools.edit import discover_edit_tools
 from tools.board_tools.image import apply_image_tool_stack
 
 if TYPE_CHECKING:
@@ -163,10 +161,6 @@ class BoardController:
         self.w.board_page.edit_image_tool_down_btn.clicked.connect(self._on_edit_tool_stack_down_clicked)
         self._focus_item: Optional[QtWidgets.QGraphicsItem] = None
         self._focus_overlay: Optional[QtWidgets.QGraphicsRectItem] = None
-        self._focus_handle_frame: Optional[QtWidgets.QGraphicsRectItem] = None
-        self._focus_handle_items: dict[str, QtWidgets.QGraphicsRectItem] = {}
-        self._focus_crop_layout: Optional[CropHandleLayout] = None
-        self._focus_crop_drag: Optional[CropHandleDragState] = None
         self._focus_saved: dict[int, tuple[bool, float]] = {}
         self._focus_video_path: Optional[Path] = None
         self._focus_video_cap = None
@@ -194,7 +188,6 @@ class BoardController:
         self.edit_session.focus_kind = str(media_kind or "").strip().lower() or None
         self.edit_session.tool_stack = []
         self.edit_session.selected_tool_index = -1
-        self.edit_session.reset_visual_adjustments()
 
     def _stop_qthread(self, thread: Optional[QtCore.QThread], timeout_ms: int = 1000) -> None:
         if thread is None:
@@ -236,70 +229,6 @@ class BoardController:
             self._edit_session.selected_tool_index = int(value)
         except Exception:
             self._edit_session.selected_tool_index = -1
-
-    @property
-    def _edit_image_brightness(self) -> float:
-        return float(self._edit_session.image_brightness)
-
-    @_edit_image_brightness.setter
-    def _edit_image_brightness(self, value: float) -> None:
-        self._edit_session.image_brightness = float(value)
-
-    @property
-    def _edit_image_contrast(self) -> float:
-        return float(self._edit_session.image_contrast)
-
-    @_edit_image_contrast.setter
-    def _edit_image_contrast(self, value: float) -> None:
-        self._edit_session.image_contrast = float(value)
-
-    @property
-    def _edit_image_saturation(self) -> float:
-        return float(self._edit_session.image_saturation)
-
-    @_edit_image_saturation.setter
-    def _edit_image_saturation(self, value: float) -> None:
-        self._edit_session.image_saturation = float(value)
-
-    @property
-    def _edit_image_vibrance(self) -> float:
-        return float(self._edit_session.image_vibrance)
-
-    @_edit_image_vibrance.setter
-    def _edit_image_vibrance(self, value: float) -> None:
-        self._edit_session.image_vibrance = float(value)
-
-    @property
-    def _edit_crop_left(self) -> float:
-        return float(self._edit_session.crop_left)
-
-    @_edit_crop_left.setter
-    def _edit_crop_left(self, value: float) -> None:
-        self._edit_session.crop_left = float(value)
-
-    @property
-    def _edit_crop_top(self) -> float:
-        return float(self._edit_session.crop_top)
-
-    @_edit_crop_top.setter
-    def _edit_crop_top(self, value: float) -> None:
-        self._edit_session.crop_top = float(value)
-
-    @property
-    def _edit_crop_right(self) -> float:
-        return float(self._edit_session.crop_right)
-
-    @_edit_crop_right.setter
-    def _edit_crop_right(self, value: float) -> None:
-        self._edit_session.crop_right = float(value)
-
-    @property
-    def _edit_crop_bottom(self) -> float:
-        return float(self._edit_session.crop_bottom)
-
-    @_edit_crop_bottom.setter
-    def _edit_crop_bottom(self, value: float) -> None:
-        self._edit_session.crop_bottom = float(value)
 
     @property
     def _max_display_dim(self) -> int:
@@ -746,7 +675,6 @@ class BoardController:
     def _parse_image_display_overrides(self, payload: dict) -> dict[str, dict[str, object]]:
         return parse_image_display_overrides(
             payload,
-            coerce_color_adjustments=self._coerce_color_adjustments,
             tool_stack_from_override=self._tool_stack_from_override,
         )
 
@@ -834,7 +762,6 @@ class BoardController:
             override,
             coerce_color_adjustments=self._coerce_color_adjustments,
             tool_stack_from_override=self._tool_stack_from_override,
-            default_crop_settings=self._default_crop_settings,
             tool_stack_is_effective=self._tool_stack_is_effective,
             queue_exr_display_for_item=self._queue_exr_display_for_item,
             queue_image_adjust_for_item=self._queue_image_adjust_for_item,
@@ -845,7 +772,6 @@ class BoardController:
             item,
             override,
             tool_stack_from_override=self._tool_stack_from_override,
-            default_crop_settings=self._default_crop_settings,
             get_video_frame_pixmap=self._get_video_frame_pixmap,
         )
 
@@ -964,18 +890,6 @@ class BoardController:
     def _build_exr_channel_options(channels: list[str]) -> tuple[list[tuple[str, str]], Optional[str]]:
         return BoardEditPreviewController.build_exr_channel_options(channels)
 
-    @staticmethod
-    def _default_color_adjustments() -> tuple[float, float, float]:
-        return 0.0, 1.0, 1.0
-
-    @staticmethod
-    def _default_vibrance() -> float:
-        return 0.0
-
-    @staticmethod
-    def _default_crop_settings() -> tuple[float, float, float, float]:
-        return 0.0, 0.0, 0.0, 0.0
-
     def _default_edit_tool_stack(self) -> list[dict[str, object]]:
         return self._edit_tools.default_stack()
 
@@ -1006,6 +920,9 @@ class BoardController:
     def _sync_edit_values_from_tool_stack(self) -> None:
         self._edit_tools.sync_values_from_stack()
 
+    def _edit_visual_state(self):
+        return self._edit_tools.visual_state()
+
     def _sync_tool_stack_ui(self) -> None:
         self._edit_tools.sync_stack_ui()
 
@@ -1017,14 +934,6 @@ class BoardController:
 
     def _coerce_color_adjustments(self, override: object) -> tuple[float, float, float]:
         return self._edit_tools.coerce_color_adjustments(override)
-
-    def _color_adjustments_are_default(self, brightness: float, contrast: float, saturation: float) -> bool:
-        b_def, c_def, s_def = self._default_color_adjustments()
-        return (
-            abs(float(brightness) - b_def) < 1e-6
-            and abs(float(contrast) - c_def) < 1e-6
-            and abs(float(saturation) - s_def) < 1e-6
-        )
 
     def _tool_stack_is_effective(
         self,
@@ -1075,9 +984,6 @@ class BoardController:
     def _on_edit_tool_stack_down_clicked(self) -> None:
         self._edit_tools.on_stack_down_clicked()
 
-    def _sync_edit_session_from_panel_state(self, tool_id: str, state: dict[str, object]) -> None:
-        self._edit_tools.sync_session_from_panel_state(tool_id, state)
-
     def _schedule_focus_image_preview(self) -> None:
         self._edit_tools.schedule_focus_image_preview()
 
@@ -1089,14 +995,8 @@ class BoardController:
     ) -> None:
         self._edit_tools.on_image_tool_panel_changed(tool_id, insert_at=insert_at)
 
-    def _on_edit_image_adjust_changed(self, *_: object) -> None:
-        self._on_edit_image_tool_panel_changed("bcs", insert_at=0)
-
-    def _on_edit_image_vibrance_changed(self, *_: object) -> None:
-        self._on_edit_image_tool_panel_changed("vibrance")
-
-    def _apply_crop_to_focus_item(self) -> None:
-        self._edit_focus.apply_crop_to_focus_item()
+    def _apply_scene_tool_to_focus_item(self) -> None:
+        self._edit_focus.apply_scene_tool_to_focus_item()
 
     def _selected_scene_tool_id(self) -> str:
         return self._edit_focus.selected_scene_tool_id()
@@ -1104,17 +1004,14 @@ class BoardController:
     def _scene_tool_runtime(self, tool_id: str | None = None) -> object | None:
         return self._edit_focus.scene_tool_runtime(tool_id)
 
-    def _clear_focus_crop_handles(self, *, reset_drag: bool = True) -> None:
-        self._edit_focus.clear_crop_handles(reset_drag=reset_drag)
+    def _clear_focus_scene_tool_handles(self, *, reset_drag: bool = True) -> None:
+        self._edit_focus.clear_scene_tool_handles(reset_drag=reset_drag)
 
-    def _crop_handles_active(self) -> bool:
-        return self._edit_focus.crop_handles_active()
+    def _scene_tool_handles_active(self) -> bool:
+        return self._edit_focus.scene_tool_handles_active()
 
     def _refresh_focus_scene_handles(self) -> None:
         self._edit_focus.refresh_scene_handles()
-
-    def _refresh_focus_crop_handles(self) -> None:
-        self._refresh_focus_scene_handles()
 
     def _on_edit_scene_tool_panel_changed(self, tool_id: str) -> None:
         self._edit_focus.on_scene_tool_panel_changed(tool_id)
@@ -1128,51 +1025,8 @@ class BoardController:
     def handle_view_mouse_release(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
         return self._edit_focus.handle_view_mouse_release(scene_pos, event)
 
-    def _set_current_crop(
-        self,
-        left: float,
-        top: float,
-        right: float,
-        bottom: float,
-        *,
-        schedule_preview: bool = True,
-    ) -> None:
-        self._edit_focus.set_current_crop(
-            left,
-            top,
-            right,
-            bottom,
-            schedule_preview=schedule_preview,
-        )
-
-    def _on_edit_crop_changed(self, *_: object) -> None:
-        self._on_edit_scene_tool_panel_changed("crop")
-
     def _reset_edit_image_adjustments(self) -> None:
-        for tool_id, add_if_missing, insert_at in (
-            ("bcs", True, 0),
-            ("vibrance", False, None),
-            ("crop", False, None),
-        ):
-            spec = get_edit_tool(tool_id)
-            if spec is None:
-                continue
-            panel = str(getattr(spec, "ui_panel", "") or "").strip().lower()
-            state = default_panel_state(tool_id)
-            if panel:
-                self.w.board_page.set_image_tool_panel_state(panel, state)
-            self._set_tool_state_in_stack(
-                tool_id,
-                state,
-                add_if_missing=add_if_missing,
-                insert_at=insert_at,
-            )
-        self._apply_crop_to_focus_item()
-        if isinstance(self._focus_item, BoardVideoItem):
-            self._commit_current_focus_video_override()
-            self._schedule_video_focus_preview(self._edit_video_playhead, immediate=True)
-            return
-        self._on_edit_image_adjust_changed()
+        self._edit_tools.reset_settings()
 
     def _on_edit_preview_slider_pressed(self) -> None:
         self._edit_preview.on_slider_pressed()
@@ -1213,24 +1067,18 @@ class BoardController:
         if not filename:
             return
         tool_stack = self._current_edit_tool_stack()
+        visual = self._edit_visual_state()
         effective = self._tool_stack_is_effective(
             tool_stack,
-            self._edit_image_brightness,
-            self._edit_image_contrast,
-            self._edit_image_saturation,
+            visual.brightness,
+            visual.contrast,
+            visual.saturation,
         )
         if commit_image_override(
             self._image_exr_display_overrides,
             filename,
             current=self._image_exr_display_overrides.get(filename),
             effective=effective,
-            brightness=self._edit_image_brightness,
-            contrast=self._edit_image_contrast,
-            saturation=self._edit_image_saturation,
-            crop_left=self._edit_crop_left,
-            crop_top=self._edit_crop_top,
-            crop_right=self._edit_crop_right,
-            crop_bottom=self._edit_crop_bottom,
             tool_stack=tool_stack,
             exr_channel=self._edit_exr_channel if self._edit_exr_path is not None else None,
             exr_gamma=self._edit_exr_gamma if self._edit_exr_path is not None else None,
@@ -1251,10 +1099,6 @@ class BoardController:
             filename,
             current=self._image_exr_display_overrides.get(filename),
             effective=self._tool_stack_is_effective(tool_stack, 0.0, 1.0, 1.0),
-            crop_left=self._edit_crop_left,
-            crop_top=self._edit_crop_top,
-            crop_right=self._edit_crop_right,
-            crop_bottom=self._edit_crop_bottom,
             tool_stack=tool_stack,
         ):
             self._sync_board_state_overrides()

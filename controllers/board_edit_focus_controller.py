@@ -4,12 +4,10 @@ import logging
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.board_edit.crop_scene import apply_crop_to_item, clear_crop_handle_items
 from core.board_edit.media_runtime import play_button_label
-from core.board_edit.handles import sanitize_crop
 from core.board_scene.items import BoardImageItem, BoardSequenceItem, BoardVideoItem
 from tools.board_tools.edit import get_edit_tool
-from tools.board_tools.registry import get_board_tool, get_board_tool_scene_runtime
+from tools.board_tools.registry import get_board_tool, get_board_tool_scene_runtime, list_board_tools
 
 try:
     import cv2  # type: ignore
@@ -26,6 +24,86 @@ class BoardEditFocusController:
     def __init__(self, board_controller: object) -> None:
         self.board = board_controller
         self.w = board_controller.w
+        self._active_scene_tool_id = ""
+        self._scene_tool_states: dict[str, object] = {}
+
+    def scene_tool_state(self, tool_id: str, factory: object) -> object:
+        key = str(tool_id or "").strip().lower()
+        if not key:
+            raise ValueError("tool_id is required")
+        if key not in self._scene_tool_states:
+            if not callable(factory):
+                raise TypeError("factory must be callable")
+            self._scene_tool_states[key] = factory()
+        return self._scene_tool_states[key]
+
+    def focus_item(self) -> QtWidgets.QGraphicsItem | None:
+        item = self.board._focus_item
+        return item if isinstance(item, QtWidgets.QGraphicsItem) else None
+
+    def graphics_scene(self) -> QtWidgets.QGraphicsScene:
+        return self.board._scene
+
+    def selected_tool_panel(self) -> str:
+        return self.board._selected_tool_panel()
+
+    def tool_panel_state(self, tool_id: str) -> dict[str, object]:
+        return self.board._tool_panel_state_for_id(tool_id)
+
+    def set_tool_panel_state(self, tool_id: str, state: dict[str, object]) -> None:
+        spec = get_edit_tool(tool_id)
+        panel = str(getattr(spec, "ui_panel", "") or "").strip().lower() if spec is not None else ""
+        if panel:
+            self.w.board_page.set_image_tool_panel_state(panel, state)
+
+    def set_tool_stack_state(self, tool_id: str, state: dict[str, object], *, add_if_missing: bool = True) -> None:
+        self.board._set_tool_state_in_stack(tool_id, state, add_if_missing=add_if_missing)
+        self.board._sync_edit_values_from_tool_stack()
+
+    def update_scene_tool_settings(
+        self,
+        tool_id: str,
+        settings: dict[str, object],
+        *,
+        schedule_preview: bool = True,
+    ) -> None:
+        spec = get_edit_tool(tool_id)
+        normalized = spec.normalize_state(settings) if spec is not None else dict(settings)
+        self.set_tool_panel_state(tool_id, normalized)
+        self.set_tool_stack_state(tool_id, normalized, add_if_missing=True)
+        self.apply_scene_tool_to_focus_item()
+        self.commit_focus_override()
+        if schedule_preview:
+            self.schedule_focus_preview()
+
+    def find_group_for_item(self, item: QtWidgets.QGraphicsItem | None) -> object | None:
+        if item is None:
+            return None
+        return self.board._find_group_for_item(item)
+
+    def refresh_workspace(self, extra_rect: QtCore.QRectF | None = None) -> None:
+        self.board._refresh_scene_workspace(extra_rect=extra_rect)
+
+    def commit_focus_override(self) -> None:
+        item = self.focus_item()
+        if isinstance(item, BoardImageItem):
+            self.board._commit_current_focus_image_override()
+        elif isinstance(item, BoardVideoItem):
+            self.board._commit_current_focus_video_override()
+
+    def schedule_focus_preview(self) -> None:
+        item = self.focus_item()
+        if isinstance(item, BoardVideoItem):
+            self.board._schedule_video_focus_preview(self.board._edit_video_playhead, immediate=True)
+            return
+        if isinstance(item, BoardImageItem):
+            if self.board._edit_exr_path is not None:
+                channel = self.w.board_page.current_exr_channel_value()
+                if channel:
+                    self.board._edit_exr_channel = str(channel)
+                    self.board._schedule_edit_preview_update(channel=str(channel))
+                return
+            self.board._schedule_edit_preview_update()
 
     def _log_debug(self, message: str, exc: Exception) -> None:
         logger.debug("%s: %s", message, exc, exc_info=True)
@@ -45,28 +123,37 @@ class BoardEditFocusController:
         except Exception as exc:
             self._log_debug(f"Failed to stop {attr_name}", exc)
 
-    def apply_crop_to_focus_item(self) -> None:
-        board = self.board
-        scene_runtime = self.scene_tool_runtime("crop")
-        apply_hook = getattr(scene_runtime, "apply_to_focus_item", None) if scene_runtime is not None else None
-        if callable(apply_hook):
-            apply_hook(board)
-            return
-        if not apply_crop_to_item(
-            board._focus_item,
-            (
-                board._edit_crop_left,
-                board._edit_crop_top,
-                board._edit_crop_right,
-                board._edit_crop_bottom,
-            ),
-        ):
-            return
-        group = board._find_group_for_item(board._focus_item)
-        if group is not None:
-            group.update_bounds()
-        board._refresh_scene_workspace()
-        self.refresh_scene_handles()
+    def apply_scene_tool_to_focus_item(self) -> None:
+        for tool_id in self.scene_tool_stack_ids():
+            scene_runtime = self.scene_tool_runtime(tool_id)
+            apply_hook = getattr(scene_runtime, "apply_to_focus_item", None) if scene_runtime is not None else None
+            if callable(apply_hook):
+                apply_hook(self)
+
+    def reset_scene_tool_state_for_focus_item(self) -> None:
+        for tool in list_board_tools():
+            if not bool(getattr(tool, "has_scene", False)):
+                continue
+            scene_runtime = get_board_tool_scene_runtime(getattr(tool, "tool_id", ""))
+            reset_hook = getattr(scene_runtime, "reset_focus_item", None) if scene_runtime is not None else None
+            if callable(reset_hook):
+                reset_hook(self)
+
+    def scene_tool_stack_ids(self) -> list[str]:
+        result: list[str] = []
+        for entry in self.board._edit_tool_stack:
+            if not isinstance(entry, dict):
+                continue
+            tool_id = str(entry.get("id", "")).strip().lower()
+            if not tool_id or tool_id in result:
+                continue
+            tool_caps = get_board_tool(tool_id)
+            if tool_caps is not None and tool_caps.has_scene:
+                result.append(tool_id)
+        selected = self.selected_scene_tool_id()
+        if selected and selected not in result:
+            result.append(selected)
+        return result
 
     def selected_scene_tool_id(self) -> str:
         selected = self.board._selected_tool_entry()
@@ -82,41 +169,36 @@ class BoardEditFocusController:
             return None
         return get_board_tool_scene_runtime(target_id)
 
-    def clear_crop_handles(self, *, reset_drag: bool = True) -> None:
-        board = self.board
-        scene_runtime = self.scene_tool_runtime()
+    def clear_scene_tool_handles(self, *, reset_drag: bool = True) -> None:
+        tool_id = self.selected_scene_tool_id() or self._active_scene_tool_id
+        scene_runtime = self.scene_tool_runtime(tool_id)
         clear_hook = getattr(scene_runtime, "clear_handles", None) if scene_runtime is not None else None
         if callable(clear_hook):
-            clear_hook(board, reset_drag)
-            return
-        (
-            board._focus_handle_frame,
-            board._focus_handle_items,
-            board._focus_crop_layout,
-        ) = clear_crop_handle_items(
-            board._scene,
-            board._focus_handle_frame,
-            board._focus_handle_items,
-        )
-        if reset_drag:
-            board._focus_crop_drag = None
+            clear_hook(self, reset_drag)
+        if reset_drag or not self.selected_scene_tool_id():
+            self._active_scene_tool_id = ""
 
-    def crop_handles_active(self) -> bool:
+    def scene_tool_handles_active(self) -> bool:
         return self.selected_scene_tool_id() != ""
 
     def refresh_scene_handles(self) -> None:
+        selected_tool_id = self.selected_scene_tool_id()
+        if self._active_scene_tool_id and self._active_scene_tool_id != selected_tool_id:
+            self.clear_scene_tool_handles(reset_drag=True)
+        self._active_scene_tool_id = selected_tool_id
         scene_runtime = self.scene_tool_runtime()
         refresh_hook = getattr(scene_runtime, "refresh_handles", None) if scene_runtime is not None else None
         if callable(refresh_hook):
-            refresh_hook(self.board)
+            refresh_hook(self)
             return
-        self.clear_crop_handles(reset_drag=False)
+        self.clear_scene_tool_handles(reset_drag=False)
 
     def on_scene_tool_panel_changed(self, tool_id: str) -> None:
         scene_runtime = self.scene_tool_runtime(tool_id)
         panel_hook = getattr(scene_runtime, "panel_value_changed", None) if scene_runtime is not None else None
         if callable(panel_hook):
-            panel_hook(self.board)
+            self._active_scene_tool_id = str(tool_id or "").strip().lower()
+            panel_hook(self)
             return
         self.board._on_edit_image_tool_panel_changed(
             tool_id,
@@ -127,56 +209,22 @@ class BoardEditFocusController:
         scene_runtime = self.scene_tool_runtime()
         handler = getattr(scene_runtime, "mouse_press", None) if scene_runtime is not None else None
         if callable(handler):
-            return bool(handler(self.board, scene_pos, event))
+            return bool(handler(self, scene_pos, event))
         return False
 
     def handle_view_mouse_move(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
         scene_runtime = self.scene_tool_runtime()
         handler = getattr(scene_runtime, "mouse_move", None) if scene_runtime is not None else None
         if callable(handler):
-            return bool(handler(self.board, scene_pos, event))
+            return bool(handler(self, scene_pos, event))
         return False
 
     def handle_view_mouse_release(self, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
         scene_runtime = self.scene_tool_runtime()
         handler = getattr(scene_runtime, "mouse_release", None) if scene_runtime is not None else None
         if callable(handler):
-            return bool(handler(self.board, scene_pos, event))
+            return bool(handler(self, scene_pos, event))
         return False
-
-    def set_current_crop(
-        self,
-        left: float,
-        top: float,
-        right: float,
-        bottom: float,
-        *,
-        schedule_preview: bool = True,
-    ) -> None:
-        board = self.board
-        left, top, right, bottom = sanitize_crop(left, top, right, bottom)
-        board._edit_crop_left = left
-        board._edit_crop_top = top
-        board._edit_crop_right = right
-        board._edit_crop_bottom = bottom
-        self.w.board_page.set_image_tool_panel_state(
-            "crop",
-            {"left": left, "top": top, "right": right, "bottom": bottom},
-        )
-        board._set_tool_state_in_stack(
-            "crop",
-            {"left": left, "top": top, "right": right, "bottom": bottom},
-            add_if_missing=True,
-        )
-        self.apply_crop_to_focus_item()
-        if isinstance(board._focus_item, BoardImageItem):
-            board._commit_current_focus_image_override()
-            if schedule_preview:
-                board._schedule_focus_image_preview()
-        elif isinstance(board._focus_item, BoardVideoItem):
-            board._commit_current_focus_video_override()
-            if schedule_preview:
-                board._schedule_video_focus_preview(board._edit_video_playhead, immediate=True)
 
     def enter_focus_mode(self, item: QtWidgets.QGraphicsItem) -> None:
         board = self.board
@@ -211,7 +259,7 @@ class BoardEditFocusController:
         board = self.board
         if board._focus_item is None:
             return
-        self.clear_crop_handles()
+        self.clear_scene_tool_handles()
         for obj in board._scene.items():
             saved = board._focus_saved.pop(id(obj), None)
             if saved is not None:
@@ -226,7 +274,7 @@ class BoardEditFocusController:
                 filename = str(board._focus_item.data(1) or "").strip()
                 if not filename or filename not in board._image_exr_display_overrides:
                     board._focus_item.set_override_pixmap(None)
-                    board._focus_item.set_crop_norm(*board._default_crop_settings())
+                    self.reset_scene_tool_state_for_focus_item()
             if isinstance(board._focus_item, BoardVideoItem):
                 filename = str(board._focus_item.data(1) or "").strip()
                 override = board._image_exr_display_overrides.get(filename)
@@ -234,7 +282,7 @@ class BoardEditFocusController:
                     board._apply_override_to_video_item(board._focus_item, override)
                 else:
                     board._focus_item.set_override_pixmap(None)
-                    board._focus_item.set_crop_norm(*board._default_crop_settings())
+                    self.reset_scene_tool_state_for_focus_item()
             if isinstance(board._focus_item, BoardSequenceItem):
                 board._focus_item.set_override_pixmap(None)
             board._focus_item.setZValue(0)

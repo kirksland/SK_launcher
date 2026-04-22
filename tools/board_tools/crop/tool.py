@@ -39,6 +39,7 @@ register_edit_tool(
         is_effective_fn=_is_effective,
         order=30,
         tags=("image", "video", "spatial"),
+        default_for=("video",),
         ui_panel="crop",
         ui_settings_keys=("left", "top", "right", "bottom"),
         ui_controls=(

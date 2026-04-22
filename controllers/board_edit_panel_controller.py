@@ -5,9 +5,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtWidgets
 
 from core.board_edit.media_runtime import play_button_label
-from core.board_edit.session import EditVisualState
 from core.board_scene.items import BoardImageItem, BoardVideoItem
-from tools.board_tools.image import build_bcs_stack
 from video.player import VideoController
 
 
@@ -104,7 +102,7 @@ class BoardEditPanelController:
         board._edit_image_path = None
         board._reset_edit_session_for_kind("video")
         board._sync_edit_tool_defs_for_kind("video")
-        board._edit_tool_stack = [board._tool_entry_from_id("crop")]
+        board._edit_tool_stack = board._default_edit_tool_stack()
         board._edit_selected_tool_index = 0
         if isinstance(board._focus_item, BoardVideoItem):
             filename = str(board._focus_item.data(1) or "").strip()
@@ -112,7 +110,7 @@ class BoardEditPanelController:
             board._edit_tool_stack = board._tool_stack_from_override(override)
         self.w.board_page.set_image_adjust_controls_visible(True)
         board._sync_tool_stack_ui()
-        board._apply_crop_to_focus_item()
+        board._apply_scene_tool_to_focus_item()
         self.w.board_page.edit_timeline_play_btn.setText(play_button_label(False))
         board._video_playback.stop()
         info = [
@@ -185,17 +183,17 @@ class BoardEditPanelController:
         board._edit_image_path = path
         board._reset_edit_session_for_kind("image")
         board._sync_edit_tool_defs_for_kind("image")
-        board._edit_tool_stack = build_bcs_stack(*board._default_color_adjustments())
+        board._edit_tool_stack = board._default_edit_tool_stack()
         board._edit_selected_tool_index = 0
-        EditVisualState.defaults().apply_to_session(board._edit_session)
+        board._sync_edit_values_from_tool_stack()
         if isinstance(board._focus_item, BoardImageItem):
             filename = str(board._focus_item.data(1) or "").strip()
             override = board._image_exr_display_overrides.get(filename)
             board._edit_tool_stack = board._tool_stack_from_override(override)
-            EditVisualState.from_tool_stack(board._edit_tool_stack).apply_to_session(board._edit_session)
+            board._sync_edit_values_from_tool_stack()
         self.w.board_page.set_image_adjust_controls_visible(True)
         board._sync_tool_stack_ui()
-        board._apply_crop_to_focus_item()
+        board._apply_scene_tool_to_focus_item()
         preview = board._get_display_pixmap(path, max_dim=1024)
         self.w.board_page.show_edit_preview_image(preview)
         if path.suffix.lower() == ".exr":

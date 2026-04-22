@@ -38,15 +38,9 @@ Tous les fichiers ne sont pas obligatoires:
 
 ## Pourquoi on fait ca
 
-Avant, un tool complet pouvait etre disperse entre:
+Un tool complet ne doit pas etre disperse entre plusieurs dossiers techniques globaux.
 
-- `tools/edit_tools/`
-- `tools/image_tools/`
-- parfois `core/board_edit/`
-
-La separation etait saine pour sortir du monolithe, mais pas tres agreable a maintenir.
-
-La vraie organisation a viser est:
+L'organisation active est:
 
 - `tools/board_tools/<tool_id>/...`
 
@@ -61,6 +55,7 @@ Il dit:
 - son `id`
 - son `label`
 - sur quels medias il marche
+- s'il doit etre ajoute par defaut pour certains medias via `default_for`
 - son etat par defaut
 - comment normaliser cet etat
 - comment savoir s'il est actif
@@ -166,8 +161,7 @@ La couche edit est maintenant:
 
 decouvre maintenant:
 
-- les anciens tools `tools/edit_tools/*`
-- les nouveaux tools `tools/board_tools/*/tool.py`
+- les tools `tools/board_tools/*/tool.py`
 
 ### Discovery image
 
@@ -177,10 +171,7 @@ La couche image est maintenant:
 
 decouvre maintenant:
 
-- les anciens modules `tools/image_tools/*.py`
-- les nouveaux modules `tools/board_tools/*/image.py`
-
-Donc on peut migrer progressivement sans casser l'app.
+- les modules `tools/board_tools/*/image.py`
 
 ### Discovery unifiee
 
@@ -214,18 +205,17 @@ Les hooks attendus sont:
 - `mouse_move`
 - `mouse_release`
 - optionnellement `apply_to_focus_item`
+- optionnellement `reset_focus_item`
 
-## Ce qu'il reste en compatibilite
+## Compatibilite retiree
 
-L'ancienne separation `tools/edit_tools` / `tools/image_tools` a maintenant ete retiree du code actif.
+L'ancienne separation par dossiers techniques globaux a ete retiree du code actif.
 
-Pareil pour:
+Les anciens points d'entree de compatibilite internes ont aussi ete retires. Un tool board doit maintenant vivre et etre importe depuis:
 
-- `core/board_edit/crop_scene.py`
-
-qui reste comme point d'entree stable, tout en reexportant maintenant:
-
-- `tools/board_tools/crop/scene.py`
+- `tools/board_tools/<tool_id>/tool.py`
+- `tools/board_tools/<tool_id>/image.py`
+- `tools/board_tools/<tool_id>/scene.py`
 
 ## Recette: creer un nouveau tool image
 
@@ -252,6 +242,7 @@ Tu definis:
 - une normalisation
 - un `ui_panel`
 - des `ui_controls`
+- optionnellement `default_for=("image",)` si le tool doit etre present par defaut
 
 Puis tu fais:
 
@@ -305,6 +296,22 @@ Le `BoardController` ne devrait faire que:
 - appeler ce runtime
 - remettre a jour la `tool_stack`
 - commit preview/override si besoin
+
+En pratique, un `scene.py` parle au host recu par `SCENE_RUNTIME`, pas aux attributs prives du `BoardController`.
+Le host expose les operations stables:
+
+- `focus_item()`
+- `graphics_scene()`
+- `selected_tool_panel()`
+- `tool_panel_state(tool_id)`
+- `set_tool_panel_state(tool_id, state)`
+- `set_tool_stack_state(tool_id, state, add_if_missing=True)`
+- `update_scene_tool_settings(tool_id, settings, schedule_preview=True)`
+- `scene_tool_state(tool_id, factory)`
+- `find_group_for_item(item)`
+- `commit_focus_override()`
+- `schedule_focus_preview()`
+- `refresh_workspace()`
 
 ## Regle mentale utile
 

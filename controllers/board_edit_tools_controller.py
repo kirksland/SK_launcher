@@ -15,7 +15,7 @@ from core.board_edit.tool_stack import (
 )
 from core.board_scene.items import BoardImageItem, BoardVideoItem
 from tools.board_tools.edit import available_tools_for_kind, discover_edit_tools, get_edit_tool, list_edit_tools
-from tools.board_tools.image import build_bcs_stack, normalize_tool_stack
+from tools.board_tools.image import normalize_tool_stack
 from tools.board_tools.registry import get_board_tool
 
 
@@ -87,8 +87,7 @@ class BoardEditToolsController:
 
     def default_stack(self) -> list[dict[str, object]]:
         self.sync_defs_for_kind(str(self.board._edit_focus_kind or "image"))
-        tools = default_tool_stack_for_kind(self.board._edit_focus_kind)
-        return tools or build_bcs_stack(*self.board._default_color_adjustments())
+        return default_tool_stack_for_kind(self.board._edit_focus_kind)
 
     def ensure_stack(self) -> None:
         self.sync_defs_for_kind(str(self.board._edit_focus_kind or "image"))
@@ -113,12 +112,7 @@ class BoardEditToolsController:
         entry = make_tool_entry(tool_id)
         if entry:
             return entry
-        b, c, s = self.board._default_color_adjustments()
-        return {
-            "id": "bcs",
-            "enabled": True,
-            "settings": {"brightness": b, "contrast": c, "saturation": s},
-        }
+        return {}
 
     def selected_tool_entry(self) -> Optional[dict[str, object]]:
         idx = self.board._edit_selected_tool_index
@@ -150,7 +144,15 @@ class BoardEditToolsController:
         return normalize_panel_state(tool_id, raw_state)
 
     def sync_values_from_stack(self) -> None:
-        EditVisualState.from_tool_stack(self.board._edit_tool_stack).apply_to_session(self.board._edit_session)
+        visual = self.visual_state()
+        self.w.board_page.set_image_adjust_labels(
+            visual.brightness,
+            visual.contrast,
+            visual.saturation,
+        )
+
+    def visual_state(self) -> EditVisualState:
+        return EditVisualState.from_tool_stack(self.current_stack())
 
     def sync_stack_ui(self) -> None:
         self.ensure_stack()
@@ -190,8 +192,50 @@ class BoardEditToolsController:
         saturation: float,
     ) -> bool:
         if not normalize_tool_stack(stack):
-            return not self.board._color_adjustments_are_default(brightness, contrast, saturation)
+            return not (
+                abs(float(brightness)) < 1e-6
+                and abs(float(contrast) - 1.0) < 1e-6
+                and abs(float(saturation) - 1.0) < 1e-6
+            )
         return tool_stack_is_effective(stack)
+
+    def reset_settings(self) -> None:
+        self.ensure_stack()
+        media_kind = str(self.board._edit_focus_kind or "image").strip().lower()
+        for spec in available_tools_for_kind(media_kind):
+            tool_id = str(spec.id).strip().lower()
+            state = dict(spec.default_state())
+            panel = str(getattr(spec, "ui_panel", "") or "").strip().lower()
+            if panel:
+                self.w.board_page.set_image_tool_panel_state(panel, state)
+            default_for = tuple(
+                str(value).strip().lower()
+                for value in getattr(spec, "default_for", ())
+                if str(value).strip()
+            )
+            self.set_tool_state(
+                tool_id,
+                state,
+                add_if_missing=media_kind in default_for,
+                insert_at=getattr(spec, "stack_insert_at", None),
+            )
+        self.sync_values_from_stack()
+        self.board._apply_scene_tool_to_focus_item()
+        if isinstance(self.board._focus_item, BoardVideoItem):
+            self.board._commit_current_focus_video_override()
+            self.board._schedule_video_focus_preview(self.board._edit_video_playhead, immediate=True)
+            return
+        selected_tool = self.selected_tool_entry()
+        selected_id = str(selected_tool.get("id", "")).strip().lower() if isinstance(selected_tool, dict) else ""
+        if selected_id:
+            tool_caps = get_board_tool(selected_id)
+            if tool_caps is not None and tool_caps.has_scene:
+                self.board._on_edit_scene_tool_panel_changed(selected_id)
+                return
+            self.board._on_edit_image_tool_panel_changed(
+                selected_id,
+                insert_at=getattr(get_edit_tool(selected_id), "stack_insert_at", None),
+            )
 
     def set_tool_state(
         self,
@@ -260,7 +304,7 @@ class BoardEditToolsController:
         self.sync_stack_ui()
         if isinstance(self.board._focus_item, BoardVideoItem):
             self.board._commit_current_focus_video_override()
-            self.board._apply_crop_to_focus_item()
+            self.board._apply_scene_tool_to_focus_item()
             self.board._schedule_video_focus_preview(self.board._edit_video_playhead, immediate=True)
         else:
             self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
@@ -285,22 +329,6 @@ class BoardEditToolsController:
         self.sync_stack_ui()
         self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
 
-    def sync_session_from_panel_state(self, tool_id: str, state: dict[str, object]) -> None:
-        key = str(tool_id or "").strip().lower()
-        if key == "bcs":
-            self.board._edit_image_brightness = float(state.get("brightness", 0.0))
-            self.board._edit_image_contrast = float(state.get("contrast", 1.0))
-            self.board._edit_image_saturation = float(state.get("saturation", 1.0))
-            self.w.board_page.set_image_adjust_labels(
-                self.board._edit_image_brightness,
-                self.board._edit_image_contrast,
-                self.board._edit_image_saturation,
-            )
-            return
-        if key == "vibrance":
-            self.board._edit_image_vibrance = float(state.get("amount", 0.0))
-            self.w.board_page.set_image_tool_panel_state("vibrance", {"amount": self.board._edit_image_vibrance})
-
     def schedule_focus_image_preview(self) -> None:
         if self.board._edit_image_path is None or not isinstance(self.board._focus_item, BoardImageItem):
             return
@@ -319,7 +347,12 @@ class BoardEditToolsController:
         insert_at: int | None = None,
     ) -> None:
         panel_state = self.panel_state_for_id(tool_id)
-        self.sync_session_from_panel_state(tool_id, panel_state)
         self.sync_panel_to_stack(tool_id, insert_at=insert_at)
+        visual = self.visual_state()
+        self.w.board_page.set_image_adjust_labels(
+            visual.brightness,
+            visual.contrast,
+            visual.saturation,
+        )
         self.board._commit_current_focus_image_override()
         self.schedule_focus_image_preview()

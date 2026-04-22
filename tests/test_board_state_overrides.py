@@ -13,13 +13,6 @@ class BoardStateOverridesTests(unittest.TestCase):
     def test_build_image_override_merges_existing_values(self) -> None:
         result = build_image_override(
             {"channel": "rgba"},
-            brightness=0.2,
-            contrast=1.1,
-            saturation=0.8,
-            crop_left=0.1,
-            crop_top=0.2,
-            crop_right=0.9,
-            crop_bottom=0.95,
             tool_stack=[{"id": "crop"}],
             exr_channel="beauty",
             exr_gamma=2.4,
@@ -28,7 +21,9 @@ class BoardStateOverridesTests(unittest.TestCase):
         self.assertEqual(result["channel"], "beauty")
         self.assertEqual(result["gamma"], 2.4)
         self.assertFalse(result["srgb"])
-        self.assertEqual(result["crop_left"], 0.1)
+        self.assertEqual(result["tool_stack"], [{"id": "crop"}])
+        self.assertNotIn("crop_left", result)
+        self.assertNotIn("brightness", result)
 
     def test_commit_image_override_removes_entry_when_not_effective(self) -> None:
         overrides = {"plate.exr": {"brightness": 0.2}}
@@ -37,13 +32,6 @@ class BoardStateOverridesTests(unittest.TestCase):
             "plate.exr",
             current=overrides["plate.exr"],
             effective=False,
-            brightness=0.0,
-            contrast=1.0,
-            saturation=1.0,
-            crop_left=0.0,
-            crop_top=0.0,
-            crop_right=0.0,
-            crop_bottom=0.0,
             tool_stack=[],
         )
         self.assertTrue(changed)
@@ -56,14 +44,10 @@ class BoardStateOverridesTests(unittest.TestCase):
             "clip.mov",
             current=None,
             effective=True,
-            crop_left=0.1,
-            crop_top=0.2,
-            crop_right=0.8,
-            crop_bottom=0.9,
-            tool_stack=[{"id": "crop"}],
+            tool_stack=[{"id": "crop", "settings": {"right": 0.8}}],
         )
         self.assertTrue(changed)
-        self.assertEqual(overrides["clip.mov"]["crop_right"], 0.8)
+        self.assertEqual(overrides["clip.mov"], {"tool_stack": [{"id": "crop", "settings": {"right": 0.8}}]})
 
     def test_rename_override_key_moves_entry(self) -> None:
         overrides = {"old.png": {"brightness": 0.1}}

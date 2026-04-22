@@ -47,6 +47,7 @@ register_edit_tool(
         is_effective_fn=_is_effective,
         order=10,
         tags=("image", "color"),
+        default_for=("image",),
         stack_insert_at=0,
         ui_panel="bcs",
         ui_settings_keys=("brightness", "contrast", "saturation"),

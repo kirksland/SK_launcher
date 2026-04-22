@@ -126,6 +126,7 @@ class BoardEditPreviewController:
     ) -> None:
         board = self.board
         if success:
+            visual = board._edit_visual_state()
             if isinstance(board._focus_item, BoardImageItem):
                 filename = str(board._focus_item.data(1) or "").strip()
                 if apply_exr_preview_result(
@@ -136,9 +137,9 @@ class BoardEditPreviewController:
                     channel=str(board._edit_exr_channel or channel or ""),
                     gamma=board._edit_exr_gamma,
                     srgb=board._edit_exr_srgb,
-                    brightness=board._edit_image_brightness,
-                    contrast=board._edit_image_contrast,
-                    saturation=board._edit_image_saturation,
+                    brightness=visual.brightness,
+                    contrast=visual.contrast,
+                    saturation=visual.saturation,
                     tool_stack=board._current_edit_tool_stack(),
                 ):
                     board._sync_board_state_overrides()
@@ -155,6 +156,7 @@ class BoardEditPreviewController:
     def handle_image_adjust_preview_finished(self, success: bool, payload: object, error: object) -> None:
         board = self.board
         if success:
+            visual = board._edit_visual_state()
             if isinstance(board._focus_item, BoardImageItem):
                 current_stack = board._current_edit_tool_stack()
                 if apply_image_adjust_preview_result(
@@ -164,14 +166,14 @@ class BoardEditPreviewController:
                     payload=payload,
                     effective=board._tool_stack_is_effective(
                         current_stack,
-                        board._edit_image_brightness,
-                        board._edit_image_contrast,
-                        board._edit_image_saturation,
+                        visual.brightness,
+                        visual.contrast,
+                        visual.saturation,
                     ),
                     current=board._image_exr_display_overrides.get(str(board._focus_item.data(1) or "").strip()),
-                    brightness=board._edit_image_brightness,
-                    contrast=board._edit_image_contrast,
-                    saturation=board._edit_image_saturation,
+                    brightness=visual.brightness,
+                    contrast=visual.contrast,
+                    saturation=visual.saturation,
                     tool_stack=current_stack,
                 ):
                     board._sync_board_state_overrides()
@@ -255,9 +257,6 @@ class BoardEditPreviewController:
             channel,
             board._edit_exr_gamma,
             board._edit_exr_srgb,
-            board._edit_image_brightness,
-            board._edit_image_contrast,
-            board._edit_image_saturation,
             int(max_dim),
             board._current_edit_tool_stack(),
         )
@@ -307,9 +306,6 @@ class BoardEditPreviewController:
             str(channel),
             float(gamma),
             bool(srgb),
-            float(brightness),
-            float(contrast),
-            float(saturation),
             1024,
             tool_stack,
         )
@@ -337,9 +333,6 @@ class BoardEditPreviewController:
             return
         worker = ImageAdjustPreviewWorker(
             path,
-            board._edit_image_brightness,
-            board._edit_image_contrast,
-            board._edit_image_saturation,
             int(max_dim),
             board._current_edit_tool_stack(),
         )
@@ -383,9 +376,6 @@ class BoardEditPreviewController:
             return
         worker = ImageAdjustPreviewWorker(
             path,
-            float(brightness),
-            float(contrast),
-            float(saturation),
             1024,
             tool_stack,
         )

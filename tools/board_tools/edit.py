@@ -33,6 +33,7 @@ class EditToolSpec:
     is_effective_fn: ToolEffectiveFn
     order: int = 100
     tags: tuple[str, ...] = field(default_factory=tuple)
+    default_for: tuple[str, ...] = field(default_factory=tuple)
     stack_insert_at: int | None = None
     ui_panel: str = ""
     ui_settings_keys: tuple[str, ...] = field(default_factory=tuple)

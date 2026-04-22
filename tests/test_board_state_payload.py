@@ -8,15 +8,6 @@ from core.board_state.payload import (
 )
 
 
-def _coerce_color_adjustments(value: object) -> tuple[float, float, float]:
-    data = value if isinstance(value, dict) else {}
-    return (
-        float(data.get("brightness", 0.0)),
-        float(data.get("contrast", 1.0)),
-        float(data.get("saturation", 1.0)),
-    )
-
-
 def _tool_stack_from_override(value: object) -> list[dict[str, object]]:
     data = value if isinstance(value, dict) else {}
     stack = data.get("tool_stack", [])
@@ -64,13 +55,13 @@ class BoardStatePayloadTests(unittest.TestCase):
         }
         parsed = parse_image_display_overrides(
             payload,
-            coerce_color_adjustments=_coerce_color_adjustments,
             tool_stack_from_override=_tool_stack_from_override,
         )
         self.assertEqual(parsed["plate.exr"]["channel"], "rgba")
         self.assertEqual(parsed["plate.exr"]["gamma"], 0.1)
         self.assertFalse(parsed["plate.exr"]["srgb"])
-        self.assertEqual(parsed["plate.exr"]["brightness"], 0.1)
+        self.assertEqual(parsed["plate.exr"]["tool_stack"], [{"id": "crop", "settings": {"left": 0.1}}])
+        self.assertNotIn("brightness", parsed["plate.exr"])
 
 
 if __name__ == "__main__":
