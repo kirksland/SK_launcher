@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.board_edit.crop_scene import apply_crop_to_item, clear_crop_handle_items
@@ -15,12 +17,33 @@ except Exception:  # pragma: no cover - optional video backend
     cv2 = None  # type: ignore
 
 
+logger = logging.getLogger(__name__)
+
+
 class BoardEditFocusController:
     """Owns Board edit focus mode and scene-tool interactions."""
 
     def __init__(self, board_controller: object) -> None:
         self.board = board_controller
         self.w = board_controller.w
+
+    def _log_debug(self, message: str, exc: Exception) -> None:
+        logger.debug("%s: %s", message, exc, exc_info=True)
+
+    def _stop_edit_thread(self, attr_name: str) -> None:
+        thread = getattr(self.board, attr_name, None)
+        if thread is None:
+            return
+        stop_thread = getattr(self.board, "_stop_qthread", None)
+        if callable(stop_thread):
+            stop_thread(thread, timeout_ms=1000)
+            return
+        try:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(1000)
+        except Exception as exc:
+            self._log_debug(f"Failed to stop {attr_name}", exc)
 
     def apply_crop_to_focus_item(self) -> None:
         board = self.board
@@ -163,8 +186,8 @@ class BoardEditFocusController:
         board._focus_item = item
         try:
             self.w.board_page.view.setFocus()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log_debug("Failed to focus board view", exc)
         scene = board._scene
         for obj in scene.items():
             if obj is item:
@@ -234,21 +257,11 @@ class BoardEditFocusController:
         board._edit_exr_preview_pending_max_dim = 0
         board._edit_image_preview_pending_path = None
         board._edit_image_preview_pending_max_dim = 0
-        if board._edit_exr_thread is not None:
-            try:
-                board._edit_exr_thread.quit()
-                board._edit_exr_thread.wait(1000)
-            except Exception:
-                pass
+        self._stop_edit_thread("_edit_exr_thread")
         board._edit_exr_preview_busy = False
         board._edit_exr_thread = None
         board._edit_exr_worker = None
-        if board._edit_image_thread is not None:
-            try:
-                board._edit_image_thread.quit()
-                board._edit_image_thread.wait(1000)
-            except Exception:
-                pass
+        self._stop_edit_thread("_edit_image_thread")
         board._edit_image_preview_busy = False
         board._edit_image_thread = None
         board._edit_image_worker = None
@@ -275,14 +288,15 @@ class BoardEditFocusController:
         except Exception:
             board._focus_video_cap = None
             board._focus_video_cap_frame_index = -1
+            logger.debug("Failed to open focus video capture", exc_info=True)
 
     def release_video_cap(self) -> None:
         board = self.board
         try:
             if board._focus_video_cap is not None:
                 board._focus_video_cap.release()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log_debug("Failed to release focus video capture", exc)
         board._focus_video_cap = None
         board._focus_video_cap_frame_index = -1
 
@@ -363,5 +377,6 @@ class BoardEditFocusController:
                     QtCore.Qt.TransformationMode.SmoothTransformation,
                 )
             return pixmap
-        except Exception:
+        except Exception as exc:
+            self._log_debug("Failed to read focus video frame", exc)
             return None
