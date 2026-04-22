@@ -126,7 +126,6 @@ class BoardEditPreviewController:
     ) -> None:
         board = self.board
         if success:
-            visual = board._edit_visual_state()
             if isinstance(board._focus_item, BoardImageItem):
                 filename = str(board._focus_item.data(1) or "").strip()
                 if apply_exr_preview_result(
@@ -137,9 +136,6 @@ class BoardEditPreviewController:
                     channel=str(board._edit_exr_channel or channel or ""),
                     gamma=board._edit_exr_gamma,
                     srgb=board._edit_exr_srgb,
-                    brightness=visual.brightness,
-                    contrast=visual.contrast,
-                    saturation=visual.saturation,
                     tool_stack=board._current_edit_tool_stack(),
                 ):
                     board._sync_board_state_overrides()
@@ -171,9 +167,6 @@ class BoardEditPreviewController:
                         visual.saturation,
                     ),
                     current=board._image_exr_display_overrides.get(str(board._focus_item.data(1) or "").strip()),
-                    brightness=visual.brightness,
-                    contrast=visual.contrast,
-                    saturation=visual.saturation,
                     tool_stack=current_stack,
                 ):
                     board._sync_board_state_overrides()
@@ -291,9 +284,6 @@ class BoardEditPreviewController:
         channel: str,
         gamma: float,
         srgb: bool,
-        brightness: float = 0.0,
-        contrast: float = 1.0,
-        saturation: float = 1.0,
         tool_stack: object = None,
     ) -> None:
         if item.scene() is None:
@@ -364,9 +354,6 @@ class BoardEditPreviewController:
     def queue_image_adjust_for_item(
         self,
         item: BoardImageItem,
-        brightness: float,
-        contrast: float,
-        saturation: float,
         tool_stack: object = None,
     ) -> None:
         if item.scene() is None:

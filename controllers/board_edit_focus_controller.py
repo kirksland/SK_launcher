@@ -23,6 +23,7 @@ class BoardEditFocusController:
 
     def __init__(self, board_controller: object) -> None:
         self.board = board_controller
+        self.edit = board_controller.edit_context
         self.w = board_controller.w
         self._active_scene_tool_id = ""
         self._scene_tool_states: dict[str, object] = {}
@@ -141,7 +142,7 @@ class BoardEditFocusController:
 
     def scene_tool_stack_ids(self) -> list[str]:
         result: list[str] = []
-        for entry in self.board._edit_tool_stack:
+        for entry in self.edit.stack:
             if not isinstance(entry, dict):
                 continue
             tool_id = str(entry.get("id", "")).strip().lower()
@@ -156,7 +157,7 @@ class BoardEditFocusController:
         return result
 
     def selected_scene_tool_id(self) -> str:
-        selected = self.board._selected_tool_entry()
+        selected = self.edit.selected_tool_entry()
         selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
         tool_caps = get_board_tool(selected_id)
         if tool_caps is None or not tool_caps.has_scene:
@@ -252,7 +253,7 @@ class BoardEditFocusController:
         board._focus_overlay = overlay
         item.setZValue(10_000)
         self.w.board_page.set_edit_panel_visible(True)
-        board._edit_focus_kind = str(item.data(0) or "")
+        self.edit.focus_kind = str(item.data(0) or "")
         self.refresh_scene_handles()
 
     def exit_focus_mode(self) -> None:

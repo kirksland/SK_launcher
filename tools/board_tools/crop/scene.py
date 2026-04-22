@@ -12,7 +12,7 @@ from core.board_edit.handles import (
     build_crop_handle_layout,
     hit_test_crop_handle,
 )
-from tools.board_tools.base import BoardToolSceneRuntime
+from tools.board_tools.base import BoardToolSceneHost, BoardToolSceneRuntime
 
 
 TOOL_ID = "crop"
@@ -26,7 +26,7 @@ class CropSceneState:
     drag: CropHandleDragState | None = None
 
 
-def crop_state(host: object) -> CropSceneState:
+def crop_state(host: BoardToolSceneHost) -> CropSceneState:
     state_factory = getattr(host, "scene_tool_state", None)
     if not callable(state_factory):
         raise TypeError("scene tool host does not expose scene_tool_state")
@@ -152,7 +152,7 @@ def crop_values_from_drag(
     )
 
 
-def clear_controller_handles(host: object, *, reset_drag: bool = True) -> None:
+def clear_controller_handles(host: BoardToolSceneHost, *, reset_drag: bool = True) -> None:
     state = crop_state(host)
     (
         state.frame_item,
@@ -167,7 +167,7 @@ def clear_controller_handles(host: object, *, reset_drag: bool = True) -> None:
         state.drag = None
 
 
-def refresh_controller_handles(host: object) -> None:
+def refresh_controller_handles(host: BoardToolSceneHost) -> None:
     state = crop_state(host)
     clear_controller_handles(host, reset_drag=False)
     item = host.focus_item()
@@ -184,7 +184,7 @@ def refresh_controller_handles(host: object) -> None:
     )
 
 
-def handle_panel_value_changed(host: object) -> None:
+def handle_panel_value_changed(host: BoardToolSceneHost) -> None:
     panel_state = host.tool_panel_state(TOOL_ID)
     left = float(panel_state.get("left", 0.0))
     top = float(panel_state.get("top", 0.0))
@@ -197,7 +197,7 @@ def handle_panel_value_changed(host: object) -> None:
     )
 
 
-def handle_mouse_press(host: object, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+def handle_mouse_press(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
     state = crop_state(host)
     item = host.focus_item()
     if event.button() != QtCore.Qt.MouseButton.LeftButton:
@@ -220,7 +220,7 @@ def handle_mouse_press(host: object, scene_pos: QtCore.QPointF, event: QtGui.QMo
     return state.drag is not None
 
 
-def handle_mouse_move(host: object, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+def handle_mouse_move(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
     state = crop_state(host)
     crop = crop_values_from_drag(state.drag, scene_pos)
     if crop is None:
@@ -234,7 +234,7 @@ def handle_mouse_move(host: object, scene_pos: QtCore.QPointF, event: QtGui.QMou
     return True
 
 
-def handle_mouse_release(host: object, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+def handle_mouse_release(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
     state = crop_state(host)
     if state.drag is None:
         return False
@@ -244,7 +244,7 @@ def handle_mouse_release(host: object, scene_pos: QtCore.QPointF, event: QtGui.Q
     return True
 
 
-def apply_to_focus_item(host: object) -> bool:
+def apply_to_focus_item(host: BoardToolSceneHost) -> bool:
     item = host.focus_item()
     if not apply_crop_to_item(
         item,
@@ -259,7 +259,7 @@ def apply_to_focus_item(host: object) -> bool:
     return True
 
 
-def reset_focus_item(host: object) -> bool:
+def reset_focus_item(host: BoardToolSceneHost) -> bool:
     item = host.focus_item()
     if not apply_crop_to_item(item, (0.0, 0.0, 0.0, 0.0)):
         return False
@@ -271,7 +271,7 @@ def reset_focus_item(host: object) -> bool:
 
 SCENE_RUNTIME = BoardToolSceneRuntime(
     refresh_handles=refresh_controller_handles,
-    clear_handles=lambda controller, reset_drag: clear_controller_handles(controller, reset_drag=reset_drag),
+    clear_handles=lambda host, reset_drag: clear_controller_handles(host, reset_drag=reset_drag),
     panel_value_changed=handle_panel_value_changed,
     mouse_press=handle_mouse_press,
     mouse_move=handle_mouse_move,

@@ -194,6 +194,7 @@ Pour les tools interactifs, la couche `scene.py` peut maintenant exposer un runt
 Ce runtime suit un contrat explicite via:
 
 - `tools/board_tools/base.py`
+- `BoardToolSceneHost`
 - `BoardToolSceneRuntime`
 
 Les hooks attendus sont:
@@ -298,7 +299,7 @@ Le `BoardController` ne devrait faire que:
 - commit preview/override si besoin
 
 En pratique, un `scene.py` parle au host recu par `SCENE_RUNTIME`, pas aux attributs prives du `BoardController`.
-Le host expose les operations stables:
+Le host est type par `BoardToolSceneHost` et expose les operations stables:
 
 - `focus_item()`
 - `graphics_scene()`

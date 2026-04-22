@@ -325,3 +325,6 @@ Premier pas deja pose:
 - les tools peuvent declarer `default_for` pour construire les stacks par defaut sans hardcode central
 - les tools de scene peuvent maintenant exposer `reset_focus_item`, ce qui evite au focus controller de connaitre les details internes d'un tool comme le crop
 - les nouveaux overrides sauvegardes ne recopient plus les anciens champs scalaires `brightness` / `crop_left`; la `tool_stack` est maintenant la source de verite
+- `BoardEditContext` porte maintenant l'etat edit partage (`focus_kind`, stack, selection, defs UI), ce qui reduit les acces directs aux champs prives du `BoardController`
+- le contrat host des tools de scene est formalise par `BoardToolSceneHost`
+- `EditVisualState` a ete reduit a son vrai role courant: resume couleur pour labels/preview, sans dupliquer l'etat crop

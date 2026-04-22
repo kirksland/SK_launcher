@@ -169,9 +169,6 @@ def apply_exr_preview_result(
     channel: str,
     gamma: float,
     srgb: bool,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     if not apply_preview_payload_to_item(item, payload):
@@ -182,9 +179,6 @@ def apply_exr_preview_result(
         channel=channel,
         gamma=gamma,
         srgb=srgb,
-        brightness=brightness,
-        contrast=contrast,
-        saturation=saturation,
         tool_stack=tool_stack,
     )
 
@@ -197,9 +191,6 @@ def apply_image_adjust_preview_result(
     payload: object,
     effective: bool,
     current: object,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     pixmap = preview_payload_to_pixmap(payload)
@@ -224,9 +215,6 @@ def apply_image_adjust_preview_result(
         overrides,
         key,
         current=current,
-        brightness=brightness,
-        contrast=contrast,
-        saturation=saturation,
         tool_stack=tool_stack,
     )
     return True
@@ -239,9 +227,6 @@ def update_exr_preview_override(
     channel: str,
     gamma: float,
     srgb: bool,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     key = str(filename or "").strip()
@@ -262,9 +247,6 @@ def update_image_adjust_preview_override(
     filename: str,
     *,
     current: object,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     key = str(filename or "").strip()
@@ -284,8 +266,8 @@ def apply_image_override_to_item(
     coerce_color_adjustments: Callable[[object], tuple[float, float, float]],
     tool_stack_from_override: Callable[[object], list[dict[str, object]]],
     tool_stack_is_effective: Callable[[object, float, float, float], bool],
-    queue_exr_display_for_item: Callable[[Any, str, float, bool, float, float, float, object], None],
-    queue_image_adjust_for_item: Callable[[Any, float, float, float, object], None],
+    queue_exr_display_for_item: Callable[[Any, str, float, bool, object], None],
+    queue_image_adjust_for_item: Callable[[Any, object], None],
 ) -> None:
     if item.scene() is None:
         return
@@ -306,18 +288,12 @@ def apply_image_override_to_item(
             channel,
             gamma,
             srgb,
-            brightness,
-            contrast,
-            saturation,
             tool_stack,
         )
         return
     if tool_stack_is_effective(tool_stack, brightness, contrast, saturation):
         queue_image_adjust_for_item(
             item,
-            brightness,
-            contrast,
-            saturation,
             tool_stack,
         )
 

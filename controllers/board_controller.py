@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from core.board_edit.context import BoardEditContext
 from core.board_edit.media_runtime import SequencePlaybackRuntime, VideoPlaybackRuntime
 from core.board_edit.workers import UiBridge
 from core.board_edit.session import EditSessionState
@@ -98,9 +99,9 @@ class BoardController:
         self._edit_exr_srgb: bool = True
         self._edit_exr_channel: Optional[str] = None
         self._edit_session = EditSessionState()
+        self._edit_context = BoardEditContext(self._edit_session)
         self._edit_image_path: Optional[Path] = None
         self._edit_tool_specs = discover_edit_tools()
-        self._edit_tool_defs: list[tuple[str, str]] = []
         self._edit_tools = BoardEditToolsController(self)
         self._edit_timeline = BoardEditTimelineController(self)
         self._edit_preview = BoardEditPreviewController(self)
@@ -185,9 +186,7 @@ class BoardController:
         self._edit_tools.sync_defs_for_kind(media_kind)
 
     def _reset_edit_session_for_kind(self, media_kind: str) -> None:
-        self.edit_session.focus_kind = str(media_kind or "").strip().lower() or None
-        self.edit_session.tool_stack = []
-        self.edit_session.selected_tool_index = -1
+        self.edit_context.reset_for_kind(media_kind)
 
     def _stop_qthread(self, thread: Optional[QtCore.QThread], timeout_ms: int = 1000) -> None:
         if thread is None:
@@ -204,31 +203,40 @@ class BoardController:
         return self._edit_session
 
     @property
+    def edit_context(self) -> BoardEditContext:
+        return self._edit_context
+
+    @property
     def _edit_focus_kind(self) -> Optional[str]:
-        return self._edit_session.focus_kind
+        return self._edit_context.focus_kind
 
     @_edit_focus_kind.setter
     def _edit_focus_kind(self, value: Optional[str]) -> None:
-        self._edit_session.focus_kind = str(value) if value is not None else None
+        self._edit_context.focus_kind = value
 
     @property
     def _edit_tool_stack(self) -> list[dict[str, object]]:
-        return self._edit_session.tool_stack
+        return self._edit_context.stack
 
     @_edit_tool_stack.setter
     def _edit_tool_stack(self, value: list[dict[str, object]]) -> None:
-        self._edit_session.tool_stack = list(value) if isinstance(value, list) else []
+        self._edit_context.stack = value
 
     @property
     def _edit_selected_tool_index(self) -> int:
-        return int(self._edit_session.selected_tool_index)
+        return self._edit_context.selected_index
 
     @_edit_selected_tool_index.setter
     def _edit_selected_tool_index(self, value: int) -> None:
-        try:
-            self._edit_session.selected_tool_index = int(value)
-        except Exception:
-            self._edit_session.selected_tool_index = -1
+        self._edit_context.selected_index = value
+
+    @property
+    def _edit_tool_defs(self) -> list[tuple[str, str]]:
+        return self._edit_context.tool_defs
+
+    @_edit_tool_defs.setter
+    def _edit_tool_defs(self, value: list[tuple[str, str]]) -> None:
+        self._edit_context.set_tool_defs(value)
 
     @property
     def _max_display_dim(self) -> int:
@@ -1135,9 +1143,6 @@ class BoardController:
         channel: str,
         gamma: float,
         srgb: bool,
-        brightness: float = 0.0,
-        contrast: float = 1.0,
-        saturation: float = 1.0,
         tool_stack: object = None,
     ) -> None:
         self._edit_preview.queue_exr_display_for_item(
@@ -1145,9 +1150,6 @@ class BoardController:
             channel,
             gamma,
             srgb,
-            brightness=brightness,
-            contrast=contrast,
-            saturation=saturation,
             tool_stack=tool_stack,
         )
 
@@ -1160,16 +1162,10 @@ class BoardController:
     def _queue_image_adjust_for_item(
         self,
         item: BoardImageItem,
-        brightness: float,
-        contrast: float,
-        saturation: float,
         tool_stack: object = None,
     ) -> None:
         self._edit_preview.queue_image_adjust_for_item(
             item,
-            brightness,
-            contrast,
-            saturation,
             tool_stack=tool_stack,
         )
 

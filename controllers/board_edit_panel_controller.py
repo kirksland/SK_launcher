@@ -99,15 +99,16 @@ class BoardEditPanelController:
 
     def show_panel_for_video(self, path: Path) -> None:
         board = self.board
+        edit = board.edit_context
         board._edit_image_path = None
         board._reset_edit_session_for_kind("video")
         board._sync_edit_tool_defs_for_kind("video")
-        board._edit_tool_stack = board._default_edit_tool_stack()
-        board._edit_selected_tool_index = 0
+        edit.stack = board._default_edit_tool_stack()
+        edit.selected_index = 0
         if isinstance(board._focus_item, BoardVideoItem):
             filename = str(board._focus_item.data(1) or "").strip()
             override = board._image_exr_display_overrides.get(filename)
-            board._edit_tool_stack = board._tool_stack_from_override(override)
+            edit.stack = board._tool_stack_from_override(override)
         self.w.board_page.set_image_adjust_controls_visible(True)
         board._sync_tool_stack_ui()
         board._apply_scene_tool_to_focus_item()
@@ -135,10 +136,11 @@ class BoardEditPanelController:
         board._init_edit_video_timeline(path)
         self.w.board_page.set_timeline_bar_visible(True)
         self.w.board_page.set_edit_preview_visible(False)
-        board._edit_focus_kind = "video"
+        edit.focus_kind = "video"
 
     def show_panel_for_sequence(self, dir_path: Path) -> None:
         board = self.board
+        edit = board.edit_context
         board._edit_image_path = None
         self.w.board_page.set_image_adjust_controls_visible(False)
         self.w.board_page.edit_timeline_play_btn.setText(play_button_label(False))
@@ -169,12 +171,13 @@ class BoardEditPanelController:
             self.w.board_page.edit_sequence_frame_label.setText("Frame: 0")
         self.w.board_page.edit_timeline.set_data(len(frames), [(0, max(0, len(frames) - 1))], 0)
         self.w.board_page.set_timeline_bar_visible(True)
-        board._edit_focus_kind = "sequence"
+        edit.focus_kind = "sequence"
         self.w.board_page.set_edit_preview_visible(False)
         board._on_edit_sequence_timeline_playhead(0)
 
     def show_panel_for_image(self, path: Path) -> None:
         board = self.board
+        edit = board.edit_context
         size = board._get_image_size(path)
         info = [
             f"{path.name}",
@@ -183,13 +186,13 @@ class BoardEditPanelController:
         board._edit_image_path = path
         board._reset_edit_session_for_kind("image")
         board._sync_edit_tool_defs_for_kind("image")
-        board._edit_tool_stack = board._default_edit_tool_stack()
-        board._edit_selected_tool_index = 0
+        edit.stack = board._default_edit_tool_stack()
+        edit.selected_index = 0
         board._sync_edit_values_from_tool_stack()
         if isinstance(board._focus_item, BoardImageItem):
             filename = str(board._focus_item.data(1) or "").strip()
             override = board._image_exr_display_overrides.get(filename)
-            board._edit_tool_stack = board._tool_stack_from_override(override)
+            edit.stack = board._tool_stack_from_override(override)
             board._sync_edit_values_from_tool_stack()
         self.w.board_page.set_image_adjust_controls_visible(True)
         board._sync_tool_stack_ui()
@@ -236,7 +239,7 @@ class BoardEditPanelController:
             )
         self.w.board_page.set_timeline_bar_visible(False)
         self.w.board_page.set_edit_preview_visible(False)
-        board._edit_focus_kind = "image"
+        edit.focus_kind = "image"
 
     def ensure_video_controller(self) -> None:
         board = self.board

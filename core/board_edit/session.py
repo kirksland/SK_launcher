@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from .tool_stack import (
     extract_bcs_settings,
     extract_crop_settings,
-    get_tool_settings,
     make_tool_entry,
     normalize_tool_entries,
 )
@@ -14,14 +13,6 @@ from tools.board_tools.edit import list_edit_tools
 
 def _default_color_adjustments() -> tuple[float, float, float]:
     return 0.0, 1.0, 1.0
-
-
-def _default_vibrance() -> float:
-    return 0.0
-
-
-def _default_crop_settings() -> tuple[float, float, float, float]:
-    return 0.0, 0.0, 0.0, 0.0
 
 
 def coerce_color_adjustments(override: object) -> tuple[float, float, float]:
@@ -119,11 +110,6 @@ class EditVisualState:
     brightness: float = 0.0
     contrast: float = 1.0
     saturation: float = 1.0
-    vibrance: float = 0.0
-    crop_left: float = 0.0
-    crop_top: float = 0.0
-    crop_right: float = 0.0
-    crop_bottom: float = 0.0
 
     @classmethod
     def defaults(cls) -> "EditVisualState":
@@ -132,30 +118,15 @@ class EditVisualState:
     @classmethod
     def from_tool_stack(cls, stack: object) -> "EditVisualState":
         brightness, contrast, saturation = _default_color_adjustments()
-        vibrance = _default_vibrance()
-        crop_left, crop_top, crop_right, crop_bottom = _default_crop_settings()
         bcs = extract_bcs_settings(stack)
         if bcs is not None:
             brightness, contrast, saturation = bcs
-        crop = extract_crop_settings(stack)
-        if crop is not None:
-            crop_left, crop_top, crop_right, crop_bottom = crop
-        vibrance_settings = get_tool_settings(stack, "vibrance")
-        if isinstance(vibrance_settings, dict):
-            try:
-                vibrance = float(vibrance_settings.get("amount", vibrance))
-            except Exception:
-                vibrance = _default_vibrance()
         return cls(
             brightness=max(-1.0, min(1.0, float(brightness))),
             contrast=max(0.0, min(2.0, float(contrast))),
             saturation=max(0.0, min(2.0, float(saturation))),
-            vibrance=max(-1.0, min(1.0, float(vibrance))),
-            crop_left=float(crop_left),
-            crop_top=float(crop_top),
-            crop_right=float(crop_right),
-            crop_bottom=float(crop_bottom),
         )
+
 
 @dataclass(slots=True)
 class EditSessionState:

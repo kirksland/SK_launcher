@@ -24,11 +24,12 @@ class BoardEditToolsController:
 
     def __init__(self, board_controller: object) -> None:
         self.board = board_controller
+        self.edit = board_controller.edit_context
         self.w = board_controller.w
 
     def refresh_registry(self) -> dict[str, object]:
         self.board._edit_tool_specs = discover_edit_tools(force=True)
-        self.sync_defs_for_kind(str(self.board._edit_focus_kind or "image"))
+        self.sync_defs_for_kind(self.edit.media_kind())
         return dict(self.board._edit_tool_specs)
 
     def available_tools(self, media_kind: str) -> list[dict[str, object]]:
@@ -58,7 +59,7 @@ class BoardEditToolsController:
 
     def sync_defs_for_kind(self, media_kind: str) -> None:
         tools = available_tools_for_kind(media_kind)
-        self.board._edit_tool_defs = [(spec.id, spec.label) for spec in tools]
+        self.edit.set_tool_defs((spec.id, spec.label) for spec in tools)
 
     def connect_panel_signals(self) -> None:
         for spec in list_edit_tools():
@@ -86,21 +87,16 @@ class BoardEditToolsController:
                 slider.sliderReleased.connect(self.board._on_edit_preview_slider_released)
 
     def default_stack(self) -> list[dict[str, object]]:
-        self.sync_defs_for_kind(str(self.board._edit_focus_kind or "image"))
-        return default_tool_stack_for_kind(self.board._edit_focus_kind)
+        self.sync_defs_for_kind(self.edit.media_kind())
+        return default_tool_stack_for_kind(self.edit.focus_kind)
 
     def ensure_stack(self) -> None:
-        self.sync_defs_for_kind(str(self.board._edit_focus_kind or "image"))
-        tools = normalize_tool_entries(self.board._edit_tool_stack)
-        if not tools:
-            tools = self.default_stack()
-        self.board._edit_tool_stack = [dict(t) for t in tools]
-        if self.board._edit_selected_tool_index < 0 or self.board._edit_selected_tool_index >= len(self.board._edit_tool_stack):
-            self.board._edit_selected_tool_index = 0
+        self.sync_defs_for_kind(self.edit.media_kind())
+        self.edit.ensure_stack(lambda media_kind: default_tool_stack_for_kind(media_kind))
 
     def tool_label_for_id(self, tool_id: str) -> str:
         key = str(tool_id or "").strip().lower()
-        for tid, label in self.board._edit_tool_defs:
+        for tid, label in self.edit.tool_defs:
             if tid == key:
                 return label
         spec = get_edit_tool(key)
@@ -115,12 +111,7 @@ class BoardEditToolsController:
         return {}
 
     def selected_tool_entry(self) -> Optional[dict[str, object]]:
-        idx = self.board._edit_selected_tool_index
-        stack = self.board._edit_tool_stack
-        if idx < 0 or idx >= len(stack):
-            return None
-        entry = stack[idx]
-        return entry if isinstance(entry, dict) else None
+        return self.edit.selected_tool_entry()
 
     def tool_panel_for_id(self, tool_id: str) -> str:
         spec = get_edit_tool(tool_id)
@@ -158,17 +149,17 @@ class BoardEditToolsController:
         self.ensure_stack()
         self.sync_values_from_stack()
         self.w.board_page.set_image_tool_add_options(
-            [(label, tool_id) for tool_id, label in self.board._edit_tool_defs]
+            [(label, tool_id) for tool_id, label in self.edit.tool_defs]
         )
         rows = []
-        for entry in self.board._edit_tool_stack:
+        for entry in self.edit.stack:
             tool_id = str(entry.get("id", "tool")).strip().lower()
             enabled = bool(entry.get("enabled", True))
             rows.append((self.tool_label_for_id(tool_id), enabled))
-        self.w.board_page.set_image_tool_stack_items(rows, self.board._edit_selected_tool_index)
+        self.w.board_page.set_image_tool_stack_items(rows, self.edit.selected_index)
         for panel, state in panel_state_map_for_tools(
-            (tool_id for tool_id, _label in self.board._edit_tool_defs),
-            self.board._edit_tool_stack,
+            (tool_id for tool_id, _label in self.edit.tool_defs),
+            self.edit.stack,
         ).items():
             self.w.board_page.set_image_tool_panel_state(panel, state)
         self.w.board_page.set_active_image_tool_panel(self.selected_tool_panel())
@@ -176,10 +167,10 @@ class BoardEditToolsController:
 
     def current_stack(self) -> list[dict[str, object]]:
         self.ensure_stack()
-        return normalize_tool_stack(self.board._edit_tool_stack)
+        return normalize_tool_stack(self.edit.stack)
 
     def stack_from_override(self, override: object) -> list[dict[str, object]]:
-        return tool_stack_from_override(override, self.board._edit_focus_kind)
+        return tool_stack_from_override(override, self.edit.focus_kind)
 
     def coerce_color_adjustments(self, override: object) -> tuple[float, float, float]:
         return coerce_color_adjustments(override)
@@ -201,7 +192,7 @@ class BoardEditToolsController:
 
     def reset_settings(self) -> None:
         self.ensure_stack()
-        media_kind = str(self.board._edit_focus_kind or "image").strip().lower()
+        media_kind = self.edit.media_kind()
         for spec in available_tools_for_kind(media_kind):
             tool_id = str(spec.id).strip().lower()
             state = dict(spec.default_state())
@@ -247,15 +238,15 @@ class BoardEditToolsController:
     ) -> None:
         self.ensure_stack()
         entries, idx = upsert_tool_settings(
-            self.board._edit_tool_stack,
+            self.edit.stack,
             tool_id,
             settings,
             add_if_missing=add_if_missing,
             insert_at=insert_at,
         )
-        self.board._edit_tool_stack = entries
+        self.edit.stack = entries
         if idx >= 0:
-            self.board._edit_selected_tool_index = idx
+            self.edit.selected_index = idx
 
     def sync_panel_to_stack(self, tool_id: str, *, add_if_missing: bool = True, insert_at: int | None = None) -> None:
         settings = self.panel_state_for_id(tool_id)
@@ -267,7 +258,7 @@ class BoardEditToolsController:
         )
 
     def on_stack_selection_changed(self, row: int) -> None:
-        self.board._edit_selected_tool_index = int(row)
+        self.edit.selected_index = int(row)
         self.sync_stack_ui()
 
     def on_stack_add_clicked(self, tool_id: object = None) -> None:
@@ -279,10 +270,10 @@ class BoardEditToolsController:
         if not tool_id:
             return
         self.ensure_stack()
-        entries, idx = append_tool(self.board._edit_tool_stack, tool_id)
-        self.board._edit_tool_stack = entries
+        entries, idx = append_tool(self.edit.stack, tool_id)
+        self.edit.stack = entries
         if idx >= 0:
-            self.board._edit_selected_tool_index = idx
+            self.edit.selected_index = idx
         self.sync_stack_ui()
         self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
 
@@ -292,15 +283,15 @@ class BoardEditToolsController:
         self.remove_stack_index(int(idx))
 
     def remove_stack_index(self, idx: int) -> None:
-        if idx < 0 or idx >= len(self.board._edit_tool_stack):
+        if idx < 0 or idx >= len(self.edit.stack):
             return
-        entries, next_idx = remove_tool_at(self.board._edit_tool_stack, idx)
-        self.board._edit_tool_stack = entries
-        if not self.board._edit_tool_stack:
-            self.board._edit_tool_stack = self.default_stack()
-            self.board._edit_selected_tool_index = 0
+        entries, next_idx = remove_tool_at(self.edit.stack, idx)
+        self.edit.stack = entries
+        if not self.edit.stack:
+            self.edit.stack = self.default_stack()
+            self.edit.selected_index = 0 if self.edit.stack else -1
         else:
-            self.board._edit_selected_tool_index = next_idx
+            self.edit.selected_index = next_idx
         self.sync_stack_ui()
         if isinstance(self.board._focus_item, BoardVideoItem):
             self.board._commit_current_focus_video_override()
@@ -311,21 +302,21 @@ class BoardEditToolsController:
 
     def on_stack_up_clicked(self) -> None:
         idx = self.w.board_page.current_image_tool_stack_index()
-        if idx <= 0 or idx >= len(self.board._edit_tool_stack):
+        if idx <= 0 or idx >= len(self.edit.stack):
             return
-        entries, next_idx = move_tool(self.board._edit_tool_stack, idx, -1)
-        self.board._edit_tool_stack = entries
-        self.board._edit_selected_tool_index = next_idx
+        entries, next_idx = move_tool(self.edit.stack, idx, -1)
+        self.edit.stack = entries
+        self.edit.selected_index = next_idx
         self.sync_stack_ui()
         self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
 
     def on_stack_down_clicked(self) -> None:
         idx = self.w.board_page.current_image_tool_stack_index()
-        if idx < 0 or idx >= len(self.board._edit_tool_stack) - 1:
+        if idx < 0 or idx >= len(self.edit.stack) - 1:
             return
-        entries, next_idx = move_tool(self.board._edit_tool_stack, idx, 1)
-        self.board._edit_tool_stack = entries
-        self.board._edit_selected_tool_index = next_idx
+        entries, next_idx = move_tool(self.edit.stack, idx, 1)
+        self.edit.stack = entries
+        self.edit.selected_index = next_idx
         self.sync_stack_ui()
         self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
 
