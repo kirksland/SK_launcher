@@ -154,6 +154,7 @@ class LauncherLogPanel(QtWidgets.QFrame):
         self._entries: list[tuple[str, str, str]] = []
         self._log_path = log_path
         self._expanded_height = 220
+        self._expanded = False
         self.setStyleSheet(
             "QFrame {"
             "background: #171b21;"
@@ -161,11 +162,12 @@ class LauncherLogPanel(QtWidgets.QFrame):
             "}"
         )
         self.setMinimumHeight(0)
-        self.setMaximumHeight(0)
+        self.setMaximumHeight(self._expanded_height)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        self.hide()
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -263,12 +265,18 @@ class LauncherLogPanel(QtWidgets.QFrame):
                 self._append_html(entry)
 
     def set_expanded(self, expanded: bool) -> None:
-        self.setVisible(expanded)
-        self.setMaximumHeight(self._expanded_height if expanded else 0)
-        if expanded:
-            self.setMinimumHeight(140)
-        else:
-            self.setMinimumHeight(0)
+        self._expanded = bool(expanded)
+        self.setVisible(self._expanded)
+
+    def expanded_height(self) -> int:
+        return self._expanded_height if self._expanded else 0
+
+    def sizeHint(self) -> QtCore.QSize:
+        hint = super().sizeHint()
+        return QtCore.QSize(hint.width(), self.expanded_height())
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        return QtCore.QSize(0, 0)
 
 
 def _create_startup_splash() -> QtWidgets.QSplashScreen:
@@ -400,6 +408,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         outer.setSpacing(0)
 
         main_panel = QtWidgets.QWidget()
+        self._main_panel = main_panel
         layout = QtWidgets.QVBoxLayout(main_panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -449,11 +458,10 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.pages.addWidget(self.dev_page)
         self._startup_status("Connecting controllers...")
 
-        self.log_panel = LauncherLogPanel(APP_LOG_PATH, parent=self)
+        self.log_panel = LauncherLogPanel(APP_LOG_PATH, parent=main_panel)
         self.log_panel.set_expanded(False)
         self.log_panel.load_entries(APP_LOG_BUS.entries)
         APP_LOG_BUS.entry_added.connect(self.log_panel.append_entry)
-        layout.addWidget(self.log_panel, 0)
 
         # Global media controls (bottom-right)
         self.media_group = QtWidgets.QFrame()
@@ -558,7 +566,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
             nav_buttons[4].clicked.connect(lambda: self.pages.setCurrentIndex(4))
         if len(nav_buttons) > 5:
             nav_buttons[5].clicked.connect(lambda: self.pages.setCurrentIndex(5))
-        self.log_toggle_btn.toggled.connect(self.log_panel.set_expanded)
+        self.log_toggle_btn.toggled.connect(self._set_log_panel_expanded)
 
         self._nav_clients_btn = nav_buttons[3] if len(nav_buttons) > 3 else None
         self._nav_clients_label = "Clients"
@@ -678,6 +686,26 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.board_load_btn = self.board_page.load_btn
         self.board_page.set_controller(self.board_controller)
         self.board_controller.set_project(None)
+        self._layout_overlay_panels()
+
+    def _set_log_panel_expanded(self, expanded: bool) -> None:
+        self.log_panel.set_expanded(expanded)
+        self._layout_overlay_panels()
+
+    def _layout_overlay_panels(self) -> None:
+        main_rect = self._main_panel.rect()
+        panel_height = self.log_panel.expanded_height()
+        if panel_height <= 0:
+            self.log_panel.setGeometry(0, main_rect.height(), main_rect.width(), 0)
+            return
+        bottom_height = self.log_toggle_btn.parentWidget().height()
+        y = max(0, main_rect.height() - bottom_height - panel_height)
+        self.log_panel.setGeometry(0, y, main_rect.width(), panel_height)
+        self.log_panel.raise_()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._layout_overlay_panels()
         self.command_controller.register_dispatcher("board", BoardCommandDispatcher(self.board_controller))
         self.shortcuts_controller = AppShortcutsController(self, self.command_controller, self.settings)
         self.shortcuts_controller.install()
@@ -832,6 +860,22 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._startup_status("Finishing startup...")
         QtCore.QTimer.singleShot(0, self._handle_startup_configuration)
 
+    def apply_initial_window_geometry(self) -> None:
+        screen = QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
+        if screen is None:
+            screen = self.screen()
+        if screen is None:
+            screen = QtGui.QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        margin = 40
+        target_width = min(self.width(), max(640, available.width() - margin))
+        target_height = min(self.height(), max(480, available.height() - margin))
+        self.resize(target_width, target_height)
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
 
     @staticmethod
     def _to_houdini_path(text: str) -> str:
@@ -1274,6 +1318,7 @@ def main() -> None:
 
         window = LauncherWindow(startup_status=update_splash)
         window.show()
+        window.apply_initial_window_geometry()
         if splash is not None:
             splash.finish(window)
         app.exec()
