@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections import deque
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from core.board_actions import BoardAction, BoardMutationResult
 from core.board_edit.context import BoardEditContext
 from core.board_edit.media_runtime import SequencePlaybackRuntime, VideoPlaybackRuntime
 from core.board_edit.workers import UiBridge
@@ -49,6 +51,14 @@ from core.board_scene.groups import build_rename_destination
 from core.board_scene.items import BoardGroupItem, BoardImageItem, BoardNoteItem, BoardSequenceItem, BoardVideoItem
 from tools.board_tools.edit import discover_edit_tools
 from tools.board_tools.image import apply_image_tool_stack
+from tools.board_tools.validation import (
+    BoardToolContractIssue,
+    format_board_tool_contract_issues,
+    validate_board_tool_contracts,
+)
+
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from core.board_edit.workers import ExrChannelPreviewWorker, ImageAdjustPreviewWorker, VideoSegmentWorker, VideoToSequenceWorker
@@ -101,8 +111,10 @@ class BoardController:
         self._edit_session = EditSessionState()
         self._edit_context = BoardEditContext(self._edit_session)
         self._edit_image_path: Optional[Path] = None
+        self._board_tool_contract_issues: list[BoardToolContractIssue] = []
         self._edit_tool_specs = discover_edit_tools()
         self._edit_tools = BoardEditToolsController(self)
+        self.validate_board_tool_contracts(notify=False)
         self._edit_timeline = BoardEditTimelineController(self)
         self._edit_preview = BoardEditPreviewController(self)
         self._edit_focus = BoardEditFocusController(self)
@@ -171,7 +183,20 @@ class BoardController:
         self._shutting_down: bool = False
 
     def refresh_edit_tool_registry(self) -> dict[str, object]:
-        return self._edit_tools.refresh_registry()
+        specs = self._edit_tools.refresh_registry()
+        self.validate_board_tool_contracts(force=False, notify=True)
+        return specs
+
+    def validate_board_tool_contracts(self, *, force: bool = False, notify: bool = True) -> list[BoardToolContractIssue]:
+        issues = validate_board_tool_contracts(force=force)
+        self._board_tool_contract_issues = list(issues)
+        if not issues:
+            return []
+        for line in format_board_tool_contract_issues(issues):
+            logger.warning("Board tool contract issue: %s", line)
+        if notify:
+            self._notify(f"Board tools: {len(issues)} contract issue(s). Check logs.")
+        return list(issues)
 
     def available_edit_tools(self, media_kind: str) -> list[dict[str, object]]:
         return self._edit_tools.available_tools(media_kind)
@@ -184,6 +209,24 @@ class BoardController:
 
     def _sync_edit_tool_defs_for_kind(self, media_kind: str) -> None:
         self._edit_tools.sync_defs_for_kind(media_kind)
+
+    def prepare_edit_tools_for_kind(self, media_kind: str, override: object = None) -> None:
+        self._edit_tools.prepare_stack_for_kind(media_kind, override=override)
+
+    def current_edit_tool_stack(self) -> list[dict[str, object]]:
+        return self._edit_tools.current_stack()
+
+    def edit_visual_state(self):
+        return self._edit_tools.visual_state()
+
+    def edit_tool_stack_is_effective(
+        self,
+        stack: object,
+        brightness: float,
+        contrast: float,
+        saturation: float,
+    ) -> bool:
+        return self._edit_tools.stack_is_effective(stack, brightness, contrast, saturation)
 
     def _reset_edit_session_for_kind(self, media_kind: str) -> None:
         self.edit_context.reset_for_kind(media_kind)
@@ -301,18 +344,43 @@ class BoardController:
         reveal_items: Optional[list[QtWidgets.QGraphicsItem]] = None,
         update_groups: bool = True,
     ) -> dict:
-        if update_groups:
+        action = BoardAction(
+            kind="scene_mutation",
+            affects_history=history,
+            should_save=save,
+            update_groups=update_groups,
+        )
+        result = self.commit_board_action(action, reveal_items=reveal_items)
+        return dict(result.state)
+
+    def commit_board_action(
+        self,
+        action: BoardAction,
+        *,
+        reveal_items: Optional[list[QtWidgets.QGraphicsItem]] = None,
+    ) -> BoardMutationResult:
+        if action.update_groups:
             self._schedule_group_tree_update()
         state = self._sync_board_state_from_scene()
         self._refresh_scene_workspace()
         self._dirty = True
-        if history:
+        history_scheduled = False
+        if action.affects_history:
             self._schedule_history_snapshot()
+            history_scheduled = True
         if reveal_items:
             self._reveal_scene_items(reveal_items)
-        if save:
+        saved = False
+        if action.should_save:
             self.save_board()
-        return state
+            saved = True
+        return BoardMutationResult(
+            action=action,
+            state=state,
+            dirty=True,
+            history_scheduled=history_scheduled,
+            saved=saved,
+        )
 
     def begin_scene_interaction(self) -> None:
         self._scene_interaction_depth += 1
@@ -929,13 +997,13 @@ class BoardController:
         self._edit_tools.sync_values_from_stack()
 
     def _edit_visual_state(self):
-        return self._edit_tools.visual_state()
+        return self.edit_visual_state()
 
     def _sync_tool_stack_ui(self) -> None:
         self._edit_tools.sync_stack_ui()
 
     def _current_edit_tool_stack(self) -> list[dict[str, object]]:
-        return self._edit_tools.current_stack()
+        return self.current_edit_tool_stack()
 
     def _tool_stack_from_override(self, override: object) -> list[dict[str, object]]:
         return self._edit_tools.stack_from_override(override)
@@ -950,7 +1018,7 @@ class BoardController:
         contrast: float,
         saturation: float,
     ) -> bool:
-        return self._edit_tools.stack_is_effective(stack, brightness, contrast, saturation)
+        return self.edit_tool_stack_is_effective(stack, brightness, contrast, saturation)
 
     def _set_tool_state_in_stack(
         self,

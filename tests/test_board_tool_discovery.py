@@ -1,9 +1,14 @@
 import unittest
 
 from tools.board_tools.base import BoardToolSceneRuntime
-from tools.board_tools.edit import discover_edit_tools, get_edit_tool
+from tools.board_tools.edit import EditToolSpec, ToolUiControlSpec, discover_edit_tools, get_edit_tool
 from tools.board_tools.image import apply_image_tool_stack
 from tools.board_tools.registry import discover_board_tools, get_board_tool, get_board_tool_scene_runtime
+from tools.board_tools.validation import (
+    format_board_tool_contract_issues,
+    validate_board_tool_contracts,
+    validate_edit_tool_spec,
+)
 
 
 class BoardToolDiscoveryTests(unittest.TestCase):
@@ -54,6 +59,40 @@ class BoardToolDiscoveryTests(unittest.TestCase):
             [{"id": "vibrance", "enabled": True, "settings": {"amount": 0.5}}],
         )
         self.assertIsNotNone(output)
+
+    def test_current_board_tools_pass_contract_validation(self) -> None:
+        issues = validate_board_tool_contracts(force=True)
+        self.assertEqual([], issues)
+
+    def test_edit_tool_contract_validation_reports_actionable_issues(self) -> None:
+        spec = EditToolSpec(
+            id="Bad Tool",
+            label="",
+            supports=("image",),
+            default_state_factory=lambda: {"amount": 0.0},
+            normalize_state_fn=lambda _state: {"amount": 0.0},
+            is_effective_fn=lambda _state: False,
+            default_for=("video",),
+            stack_insert_at=-1,
+            ui_panel="bad",
+            ui_settings_keys=("other", "other"),
+            ui_controls=(
+                ToolUiControlSpec("missing", "Missing", 1.0, 0.0),
+                ToolUiControlSpec("missing", "Missing Again", 0.0, 1.0),
+            ),
+        )
+        codes = {issue.code for issue in validate_edit_tool_spec(spec)}
+        self.assertIn("unnormalized_id", codes)
+        self.assertIn("missing_label", codes)
+        self.assertIn("default_for_not_supported", codes)
+        self.assertIn("invalid_stack_insert_at", codes)
+        self.assertIn("duplicate_value", codes)
+        self.assertIn("ui_key_missing_from_state", codes)
+        self.assertIn("control_key_missing_from_ui_settings", codes)
+        self.assertIn("invalid_ui_control_range", codes)
+        lines = format_board_tool_contract_issues(validate_edit_tool_spec(spec))
+        self.assertTrue(any("[bad tool]" in line.lower() for line in lines))
+        self.assertTrue(any("default_for_not_supported" in line for line in lines))
 
 
 if __name__ == "__main__":

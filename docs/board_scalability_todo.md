@@ -1,0 +1,55 @@
+# Board Scalability Todo
+
+Date: 2026-04-22
+
+Cette todo suit la transition du board vers une architecture vraiment scalable. Elle complete `board_scalability_target.md` avec des taches executables.
+
+## Phase 1. Contrats De Tools
+
+- [x] Ajouter une validation explicite des specs de tools.
+- [x] Verifier unicite et normalisation des ids.
+- [x] Verifier que `supports` et `default_for` utilisent des media kinds connus.
+- [x] Verifier que les `ui_controls` sont coherents avec les settings declares.
+- [x] Verifier que les tools avec `scene.py` exposent un `SCENE_RUNTIME` valide.
+- [x] Ajouter des tests de contrat pour les tools actuels.
+- [x] Rendre les erreurs de tool lisibles et non bloquantes dans l'UI ou les logs de demarrage.
+
+## Phase 2. Pipeline De Mutations
+
+- [x] Ajouter un objet `BoardAction`.
+- [x] Ajouter un premier service de commit de mutation board.
+- [ ] Faire passer les mutations simples par ce service: move, delete, group, rename.
+- [ ] Brancher history, dirty state, group refresh et save via le pipeline commun.
+- [ ] Grouper les interactions longues en une seule mutation historique.
+
+## Phase 3. Preview Runtime
+
+- [ ] Ajouter un objet `PreviewRequest`.
+- [ ] Donner un id/hash aux previews.
+- [ ] Ignorer les resultats de previews obsoletes.
+- [ ] Centraliser debounce/cancel/replace.
+- [ ] Ajouter un busy/pending state fiable.
+
+## Phase 4. Board State Et Migrations
+
+- [ ] Ajouter une version de schema au payload board.
+- [ ] Creer `core/board_state/migrations.py`.
+- [ ] Tester les migrations d'anciens payloads vers le format courant.
+- [ ] Documenter le contrat save/load.
+- [ ] Verifier que les nouveaux saves restent centres sur `tool_stack`.
+
+## Phase 5. UI Edit Panel
+
+- [ ] Extraire la construction du panneau edit de `BoardPage`.
+- [ ] Creer un widget ou builder pour les panels de tools.
+- [ ] Generer davantage de controls depuis `ToolUiControlSpec`.
+- [ ] Eviter toute nouvelle logique tool-specific dans `BoardPage`.
+
+## Definition De Done
+
+Une phase est consideree terminee quand:
+
+- elle a une implementation bornee
+- elle a des tests ou une validation claire
+- elle ne reintroduit pas d'acces prives aux zones extensibles
+- elle est documentee dans les docs board si elle change le modele mental

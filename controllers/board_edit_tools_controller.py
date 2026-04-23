@@ -90,6 +90,13 @@ class BoardEditToolsController:
         self.sync_defs_for_kind(self.edit.media_kind())
         return default_tool_stack_for_kind(self.edit.focus_kind)
 
+    def prepare_stack_for_kind(self, media_kind: str, override: object = None) -> None:
+        self.edit.reset_for_kind(media_kind)
+        self.sync_defs_for_kind(self.edit.media_kind())
+        stack = self.stack_from_override(override) if override is not None else self.default_stack()
+        self.edit.stack = stack
+        self.edit.selected_index = 0 if self.edit.stack else -1
+
     def ensure_stack(self) -> None:
         self.sync_defs_for_kind(self.edit.media_kind())
         self.edit.ensure_stack(lambda media_kind: default_tool_stack_for_kind(media_kind))

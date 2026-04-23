@@ -136,7 +136,7 @@ class BoardEditPreviewController:
                     channel=str(board._edit_exr_channel or channel or ""),
                     gamma=board._edit_exr_gamma,
                     srgb=board._edit_exr_srgb,
-                    tool_stack=board._current_edit_tool_stack(),
+                    tool_stack=board.current_edit_tool_stack(),
                 ):
                     board._sync_board_state_overrides()
                     board._dirty = True
@@ -152,15 +152,15 @@ class BoardEditPreviewController:
     def handle_image_adjust_preview_finished(self, success: bool, payload: object, error: object) -> None:
         board = self.board
         if success:
-            visual = board._edit_visual_state()
+            visual = board.edit_visual_state()
             if isinstance(board._focus_item, BoardImageItem):
-                current_stack = board._current_edit_tool_stack()
+                current_stack = board.current_edit_tool_stack()
                 if apply_image_adjust_preview_result(
                     board._image_exr_display_overrides,
                     board._focus_item,
                     str(board._focus_item.data(1) or "").strip(),
                     payload=payload,
-                    effective=board._tool_stack_is_effective(
+                    effective=board.edit_tool_stack_is_effective(
                         current_stack,
                         visual.brightness,
                         visual.contrast,
@@ -251,7 +251,7 @@ class BoardEditPreviewController:
             board._edit_exr_gamma,
             board._edit_exr_srgb,
             int(max_dim),
-            board._current_edit_tool_stack(),
+            board.current_edit_tool_stack(),
         )
         thread = QtCore.QThread(self.w)
         worker.moveToThread(thread)
@@ -324,7 +324,7 @@ class BoardEditPreviewController:
         worker = ImageAdjustPreviewWorker(
             path,
             int(max_dim),
-            board._current_edit_tool_stack(),
+            board.current_edit_tool_stack(),
         )
         thread = QtCore.QThread(self.w)
         worker.moveToThread(thread)

@@ -288,7 +288,7 @@ class BoardEditFocusController:
                 board._focus_item.set_override_pixmap(None)
             board._focus_item.setZValue(0)
         board._focus_item = None
-        board._reset_edit_session_for_kind("")
+        self.edit.reset_for_kind("")
         board._edit_timeline_scrubbing = False
         board._sequence_playback.stop()
         board._video_playback.stop()

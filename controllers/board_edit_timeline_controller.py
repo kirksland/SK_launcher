@@ -20,6 +20,7 @@ class BoardEditTimelineController:
 
     def __init__(self, board_controller: object) -> None:
         self.board = board_controller
+        self.edit = board_controller.edit_context
         self.w = board_controller.w
 
     def init_video_timeline(self, path: Path) -> None:
@@ -88,7 +89,7 @@ class BoardEditTimelineController:
 
     def on_timeline_playhead(self, frame: int) -> None:
         board = self.board
-        if board._edit_focus_kind == "sequence":
+        if self.edit.focus_kind == "sequence":
             self.on_sequence_timeline_playhead(int(frame))
             return
         board._edit_video_playhead = clamp_playhead(int(frame), board._edit_video_total)
@@ -104,7 +105,7 @@ class BoardEditTimelineController:
     def on_timeline_scrub_state(self, active: bool) -> None:
         board = self.board
         board._edit_timeline_scrubbing = bool(active)
-        if not active and board._edit_focus_kind == "video":
+        if not active and self.edit.focus_kind == "video":
             if board._edit_video_controller is not None:
                 board._edit_video_controller.seek_frame(board._edit_video_playhead)
             if isinstance(board._focus_item, BoardVideoItem):
@@ -277,19 +278,19 @@ class BoardEditTimelineController:
         board._sequence_playback.toggle()
 
     def on_sequence_play_state_changed(self, playing: bool) -> None:
-        if self.board._edit_focus_kind == "sequence":
+        if self.edit.focus_kind == "sequence":
             self.w.board_page.edit_timeline_play_btn.setText(play_button_label(playing))
 
     def on_video_play_state_changed(self, playing: bool) -> None:
-        if self.board._edit_focus_kind == "video":
+        if self.edit.focus_kind == "video":
             self.w.board_page.edit_timeline_play_btn.setText(play_button_label(playing))
 
     def toggle_play(self) -> None:
         board = self.board
-        if board._edit_focus_kind == "sequence":
+        if self.edit.focus_kind == "sequence":
             self.toggle_sequence_play()
             return
-        if board._edit_focus_kind == "video":
+        if self.edit.focus_kind == "video":
             if board._edit_video_total <= 0:
                 return
             board._video_playback.set_fps(board._edit_video_fps)
