@@ -35,8 +35,8 @@ from controllers.app_command_controller import AppCommandController
 from controllers.app_shortcuts_controller import AppShortcutsController
 from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
-from controllers.board_command_dispatcher import BoardCommandDispatcher
-from controllers.board_controller import BoardController
+from controllers.board.command_dispatcher import BoardCommandDispatcher
+from controllers.board.controller import BoardController
 from ui.widgets.project_card import ProjectCard
 from ui.utils.styles import PALETTE, app_stylesheet, combo_dark_style, tool_button_dark_style
 

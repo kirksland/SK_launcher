@@ -10,7 +10,7 @@ from core.commands import (
     find_shortcut_conflicts,
 )
 from controllers.app_command_controller import AppCommandController
-from controllers.board_command_dispatcher import BoardCommandDispatcher
+from controllers.board.command_dispatcher import BoardCommandDispatcher
 from controllers.app_shortcuts_controller import should_block_shortcut_for_text_input
 from core.commands.registry import validate_command
 from core.commands.shortcuts import normalize_shortcut_sequence
