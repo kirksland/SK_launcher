@@ -31,8 +31,11 @@ from core.settings import (
 )
 from core.houdini_env import build_houdini_env
 from controllers.asset_manager_controller import AssetManagerController
+from controllers.app_command_controller import AppCommandController
+from controllers.app_shortcuts_controller import AppShortcutsController
 from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
+from controllers.board_command_dispatcher import BoardCommandDispatcher
 from controllers.board_controller import BoardController
 from ui.widgets.project_card import ProjectCard
 from ui.utils.styles import PALETTE, app_stylesheet, combo_dark_style, tool_button_dark_style
@@ -411,6 +414,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         from ui.pages.settings_page import SettingsPage
         from ui.pages.board_page import BoardPage
         from ui.pages.dev_page import DevPage
+        self.command_controller = AppCommandController()
 
         self._startup_status("Loading project pages...")
         self.projects_page = ProjectsPage(self.projects_dir)
@@ -436,6 +440,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self._use_file_association,
             self._show_splash_screen,
             self._houdini_exe,
+            shortcut_commands=self.command_controller.registry.list(),
+            shortcut_overrides=self.settings.get("shortcuts", {}),
         )
         self.pages.addWidget(self.settings_page)
 
@@ -672,6 +678,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.board_load_btn = self.board_page.load_btn
         self.board_page.set_controller(self.board_controller)
         self.board_controller.set_project(None)
+        self.command_controller.register_dispatcher("board", BoardCommandDispatcher(self.board_controller))
+        self.shortcuts_controller = AppShortcutsController(self, self.command_controller, self.settings)
+        self.shortcuts_controller.install()
 
         self.settings_projects_dir = self.settings_page.settings_projects_dir
         self.settings_server_dir = self.settings_page.settings_server_dir
@@ -911,9 +920,11 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 "houdini_exe": houdini_exe,
                 "video_backend": video_backend,
                 "asset_manager_projects": list(self._asset_manager_projects),
+                "shortcuts": self.settings_page.shortcut_overrides(),
             }
         )
         save_settings(self.settings)
+        self.shortcuts_controller.reload_settings(self.settings)
 
         self.server_repo_dir = Path(server_repo_dir) if server_repo_dir else Path(DEFAULT_SETTINGS["server_repo_dir"])
         self._template_hip = Path(template_hip) if template_hip else DEFAULT_TEMPLATE_HIP

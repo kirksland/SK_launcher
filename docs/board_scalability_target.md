@@ -156,6 +156,22 @@ Prochaine frontiere UI:
 - extraire la construction du panneau edit en composants ou builder dedie
 - eviter d'ajouter de nouvelles sections massives dans `BoardPage`
 
+### 6. Commandes Et Raccourcis Globaux
+
+Les raccourcis ne doivent pas etre un systeme board-only. Ils doivent passer par un systeme global de commandes d'application:
+
+```text
+shortcut
+  -> command id
+  -> app dispatcher
+  -> domain dispatcher
+  -> action metier
+```
+
+Le board declarera des commandes comme `board.layout.auto`, mais le meme systeme doit pouvoir gerer les projets, l'asset manager, le client sync, les settings et les futurs outils.
+
+La cible detaillee vit dans `docs/app_commands_shortcuts_plan.md`.
+
 ## Ce Qui Ne Doit Pas Etre Trop Generique
 
 Tout n'a pas besoin d'etre plugin-ready.
@@ -193,6 +209,12 @@ core/
   board_preview/
     request.py                     PreviewRequest, hash, stale checks
     runtime.py                     Queue/debounce/cancel
+
+  commands/
+    command.py                     AppCommand, CommandContext, CommandResult
+    registry.py                    CommandRegistry globale
+    shortcuts.py                   Bindings, overrides, conflits
+    scopes.py                      Scopes connus et chevauchements
 
   board_edit/
     context.py

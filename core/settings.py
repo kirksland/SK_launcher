@@ -38,6 +38,7 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "asset_manager_projects": [],
     "asset_schema": default_asset_schema(),
     "asset_project_schemas": {},
+    "shortcuts": {},
 }
 
 
@@ -103,6 +104,7 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
         merged["asset_schema"] = normalize_asset_schema_config(data["asset_schema"])
     if isinstance(data.get("asset_project_schemas"), dict):
         merged["asset_project_schemas"] = normalize_asset_project_schemas(data["asset_project_schemas"])
+    merged["shortcuts"] = normalize_shortcuts(data.get("shortcuts"))
     # If settings predate houdini_exe storage, default to latest install.
     if "houdini_exe" not in data:
         installs = discover_houdini_installations()
@@ -124,6 +126,7 @@ def save_settings(settings: Dict[str, object], settings_path: Optional[Path] = N
     serializable["asset_project_schemas"] = normalize_asset_project_schemas(
         serializable.get("asset_project_schemas")
     )
+    serializable["shortcuts"] = normalize_shortcuts(serializable.get("shortcuts"))
     resolved_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
 
 
@@ -177,6 +180,24 @@ def normalize_asset_project_schemas(raw: object) -> Dict[str, Dict[str, Any]]:
         if not isinstance(project_key, str) or not project_key.strip():
             continue
         cleaned[project_key.strip()] = normalize_asset_schema_config(value)
+    return cleaned
+
+
+def normalize_shortcuts(raw: object) -> Dict[str, List[str]]:
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: Dict[str, List[str]] = {}
+    for command_id, sequences in raw.items():
+        if not isinstance(command_id, str) or not command_id.strip():
+            continue
+        if isinstance(sequences, str):
+            sequence_list = [sequences]
+        elif isinstance(sequences, list):
+            sequence_list = sequences
+        else:
+            continue
+        normalized = [sequence.strip() for sequence in sequence_list if isinstance(sequence, str) and sequence.strip()]
+        cleaned[command_id.strip()] = normalized
     return cleaned
 
 def normalize_houdini_exe(path_text: str) -> str:

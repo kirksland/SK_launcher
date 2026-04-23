@@ -5,11 +5,13 @@ from uuid import uuid4
 
 from core.settings import (
     DEFAULT_PROJECTS_DIR,
+    DEFAULT_SETTINGS,
     DEFAULT_SERVER_REPO_DIR,
     DEFAULT_TEMPLATE_HIP,
     active_settings_path,
     is_first_run,
     load_settings,
+    normalize_shortcuts,
     save_settings,
     settings_startup_issues,
 )
@@ -37,6 +39,7 @@ class SettingsDistributionTests(unittest.TestCase):
         self.assertTrue(DEFAULT_PROJECTS_DIR.is_absolute())
         self.assertTrue(DEFAULT_SERVER_REPO_DIR.is_absolute())
         self.assertTrue(str(DEFAULT_TEMPLATE_HIP).lower().endswith("untitled.hipnc"))
+        self.assertIsInstance(DEFAULT_SETTINGS["shortcuts"], dict)
 
     def test_active_settings_path_prefers_existing_legacy_file(self) -> None:
         root = self._make_case_dir("settings_legacy")
@@ -56,6 +59,29 @@ class SettingsDistributionTests(unittest.TestCase):
         settings = load_settings(settings_path)
         self.assertEqual(settings["projects_dir"], "D:/Projects")
         self.assertEqual(settings["server_repo_dir"], "D:/Server")
+
+    def test_load_settings_normalizes_shortcut_overrides(self) -> None:
+        root = self._make_case_dir("settings_shortcuts")
+        settings_path = root / "settings.json"
+        settings_path.write_text(
+            (
+                '{"shortcuts": {'
+                '"board.layout.auto": "Ctrl+L", '
+                '"board.focus.exit": ["Escape", ""], '
+                '"bad.value": 12'
+                "}}"
+            ),
+            encoding="utf-8",
+        )
+        settings = load_settings(settings_path)
+        self.assertEqual(
+            settings["shortcuts"],
+            {"board.layout.auto": ["Ctrl+L"], "board.focus.exit": ["Escape"]},
+        )
+
+    def test_normalize_shortcuts_keeps_empty_lists_as_disabled_commands(self) -> None:
+        shortcuts = normalize_shortcuts({"board.layout.auto": [], "board.view.fit": ["F", None]})
+        self.assertEqual(shortcuts, {"board.layout.auto": [], "board.view.fit": ["F"]})
 
     def test_load_settings_upgrades_legacy_asset_schema(self) -> None:
         root = self._make_case_dir("settings_asset_schema")
@@ -87,6 +113,14 @@ class SettingsDistributionTests(unittest.TestCase):
         self.assertIn('"schema_version": 1', payload)
         self.assertIn('"usd_search": [', payload)
         self.assertIn('"publish"', payload)
+
+    def test_save_settings_normalizes_shortcuts_before_writing(self) -> None:
+        root = self._make_case_dir("settings_save_shortcuts")
+        settings_path = root / "User" / "settings.json"
+        save_settings({"shortcuts": {"board.layout.auto": "L", "bad": 5}}, settings_path)
+        payload = settings_path.read_text(encoding="utf-8")
+        self.assertIn('"board.layout.auto": [', payload)
+        self.assertNotIn('"bad": 5', payload)
 
     def test_load_settings_normalizes_project_asset_overrides(self) -> None:
         root = self._make_case_dir("settings_project_schema")

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping, Sequence
 
 from PySide6 import QtCore, QtWidgets
 
+from core.commands import AppCommand
 from core.settings import discover_houdini_installations, normalize_houdini_exe
 from ui.utils.styles import PALETTE, title_style
 
@@ -52,9 +54,14 @@ class SettingsPage(QtWidgets.QWidget):
         use_file_association: bool,
         show_splash_screen: bool,
         houdini_exe: str,
+        shortcut_commands: Sequence[AppCommand] = (),
+        shortcut_overrides: Mapping[str, object] | None = None,
         parent: QtWidgets.QWidget | None = None,
         ) -> None:
         super().__init__(parent)
+        self._shortcut_commands = tuple(shortcut_commands)
+        self._shortcut_overrides = shortcut_overrides or {}
+        self.shortcut_fields: dict[str, QtWidgets.QLineEdit] = {}
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -94,8 +101,9 @@ class SettingsPage(QtWidgets.QWidget):
         self.nav_workspace_btn = _SettingsNavButton("Workspace")
         self.nav_launch_btn = _SettingsNavButton("Launch")
         self.nav_houdini_btn = _SettingsNavButton("Houdini")
+        self.nav_shortcuts_btn = _SettingsNavButton("Shortcuts")
         for index, button in enumerate(
-            (self.nav_workspace_btn, self.nav_launch_btn, self.nav_houdini_btn)
+            (self.nav_workspace_btn, self.nav_launch_btn, self.nav_houdini_btn, self.nav_shortcuts_btn)
         ):
             self._nav_group.addButton(button, index)
             nav_layout.addWidget(button)
@@ -161,13 +169,19 @@ class SettingsPage(QtWidgets.QWidget):
             "Houdini Integration",
             "Executable selection and version targeting for Houdini-specific startup behavior.",
         )
+        self.shortcuts_page = self._build_section_page(
+            "Keyboard Shortcuts",
+            "Action bindings shared by the app domains. Settings only persist changes from defaults.",
+        )
         self.settings_stack.addWidget(self.workspace_page)
         self.settings_stack.addWidget(self.launch_page)
         self.settings_stack.addWidget(self.houdini_page)
+        self.settings_stack.addWidget(self.shortcuts_page)
 
         self._build_workspace_fields(projects_dir, server_repo_dir, template_hip, new_hip_pattern)
         self._build_launch_fields(video_backend_pref, use_file_association, show_splash_screen)
         self._build_houdini_fields(houdini_exe)
+        self._build_shortcut_fields()
 
         self.settings_status = QtWidgets.QLabel("")
         self.settings_status.setWordWrap(True)
@@ -373,6 +387,50 @@ class SettingsPage(QtWidgets.QWidget):
         )
         self.settings_houdini_browse_btn = QtWidgets.QPushButton("Browse...")
         houdini_form.addRow("Houdini Executable", self._with_browse(self.settings_houdini_exe, self.settings_houdini_browse_btn))
+
+    def _build_shortcut_fields(self) -> None:
+        shortcuts_form = self._build_card(
+            self.shortcuts_page,
+            "Command Bindings",
+            "Use comma-separated shortcuts for multiple bindings. Leave a field empty to disable that command.",
+        )
+        for command in self._shortcut_commands:
+            field = QtWidgets.QLineEdit(self._effective_shortcut_text(command))
+            field.setPlaceholderText(", ".join(command.default_shortcuts))
+            field.setToolTip(f"{command.id} | scope: {command.scope}")
+            label = f"{command.label} ({command.domain})"
+            shortcuts_form.addRow(label, field)
+            self.shortcut_fields[command.id] = field
+
+    def shortcut_overrides(self) -> dict[str, list[str]]:
+        overrides: dict[str, list[str]] = {}
+        for command in self._shortcut_commands:
+            field = self.shortcut_fields.get(command.id)
+            if field is None:
+                continue
+            sequences = self._parse_shortcut_text(field.text())
+            defaults = list(command.default_shortcuts)
+            if sequences != defaults:
+                overrides[command.id] = sequences
+        return overrides
+
+    def _effective_shortcut_text(self, command: AppCommand) -> str:
+        override = self._shortcut_overrides.get(command.id)
+        if override is None:
+            return ", ".join(command.default_shortcuts)
+        return ", ".join(self._coerce_shortcut_sequences(override))
+
+    @staticmethod
+    def _parse_shortcut_text(text: str) -> list[str]:
+        return [part.strip() for part in str(text or "").split(",") if part.strip()]
+
+    @staticmethod
+    def _coerce_shortcut_sequences(value: object) -> list[str]:
+        if isinstance(value, str):
+            return [value.strip()] if value.strip() else []
+        if isinstance(value, list):
+            return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        return []
 
     def _sync_houdini_version_selection(self) -> None:
         current = normalize_houdini_exe(self.settings_houdini_exe.text())

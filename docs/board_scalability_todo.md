@@ -45,6 +45,21 @@ Cette todo suit la transition du board vers une architecture vraiment scalable. 
 - [ ] Generer davantage de controls depuis `ToolUiControlSpec`.
 - [ ] Eviter toute nouvelle logique tool-specific dans `BoardPage`.
 
+## Phase 6. Commandes Et Raccourcis Globaux
+
+- [x] Documenter la cible globale commandes/raccourcis.
+- [x] Creer `core/commands` sans dependance Qt.
+- [x] Ajouter `AppCommand`, `CommandContext` et `CommandResult`.
+- [x] Ajouter `CommandRegistry` avec validation des ids/scopes.
+- [x] Ajouter `ShortcutBinding` et resolution defaults + overrides.
+- [x] Ajouter detection de conflits de raccourcis par scope.
+- [x] Ajouter tests purs de registry, bindings et conflits.
+- [x] Declarer les premieres commandes globales/board.
+- [x] Brancher un dispatcher global puis un dispatcher board.
+- [x] Brancher les raccourcis Qt au niveau fenetre.
+- [x] Lire les overrides depuis les settings.
+- [x] Ajouter une premiere UI Settings pour editer les overrides.
+
 ## Definition De Done
 
 Une phase est consideree terminee quand:
