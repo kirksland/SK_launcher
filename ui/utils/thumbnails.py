@@ -7,6 +7,11 @@ from typing import Optional
 from PySide6 import QtCore, QtGui
 
 try:
+    import cv2  # type: ignore
+except Exception:  # pragma: no cover - optional image backend
+    cv2 = None  # type: ignore
+
+try:
     import OpenEXR  # type: ignore
     import Imath  # type: ignore
 except Exception:  # pragma: no cover - optional exr backend
@@ -226,6 +231,73 @@ def _render_dim_for_size(size: Optional[QtCore.QSize]) -> int:
 
 
 def _render_exr_qimage(path: Path, max_dim: int = 0) -> QtGui.QImage:
+    cv_image = _render_exr_qimage_with_cv2(path, max_dim)
+    if not cv_image.isNull():
+        return cv_image
+    return _render_exr_qimage_with_openexr(path, max_dim)
+
+
+def _render_exr_qimage_with_cv2(path: Path, max_dim: int = 0) -> QtGui.QImage:
+    if cv2 is None:
+        return QtGui.QImage()
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        return QtGui.QImage()
+    try:
+        img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    except Exception:
+        img = None
+    if img is None:
+        return QtGui.QImage()
+    if img.ndim == 2:
+        img = np.stack([img, img, img], axis=-1)
+    if img.ndim == 3 and img.shape[2] == 1:
+        img = np.repeat(img, 3, axis=2)
+    if img.ndim == 3 and img.shape[2] >= 3:
+        img = img[:, :, :3]
+    if img.dtype != np.uint8:
+        img_f = img.astype(np.float32)
+        valid = np.isfinite(img_f)
+        if not valid.any():
+            return QtGui.QImage()
+        min_v = float(np.min(img_f[valid]))
+        max_v = float(np.max(img_f[valid]))
+        if max_v - min_v < 1e-8:
+            img_f = np.zeros_like(img_f, dtype=np.float32)
+        else:
+            img_f = (img_f - min_v) / (max_v - min_v)
+        img_f = np.clip(img_f, 0.0, 1.0)
+        img_f = np.power(img_f, 1.0 / 2.2, where=img_f > 0)
+        img = (img_f * 255.0).astype(np.uint8)
+    try:
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    except Exception:
+        rgb = img
+    if max_dim > 0:
+        current_h = int(rgb.shape[0])
+        current_w = int(rgb.shape[1])
+        if current_w > max_dim or current_h > max_dim:
+            scale = float(max_dim) / float(max(current_w, current_h))
+            scaled_w = max(1, int(round(current_w * scale)))
+            scaled_h = max(1, int(round(current_h * scale)))
+            try:
+                rgb = cv2.resize(rgb, (scaled_w, scaled_h), interpolation=cv2.INTER_AREA)
+            except Exception:
+                ys = np.linspace(0, current_h - 1, scaled_h).astype(np.int32)
+                xs = np.linspace(0, current_w - 1, scaled_w).astype(np.int32)
+                rgb = rgb[ys][:, xs]
+    rgb = rgb.copy()
+    return QtGui.QImage(
+        rgb.data,
+        int(rgb.shape[1]),
+        int(rgb.shape[0]),
+        int(rgb.shape[1] * 3),
+        QtGui.QImage.Format.Format_RGB888,
+    ).copy()
+
+
+def _render_exr_qimage_with_openexr(path: Path, max_dim: int = 0) -> QtGui.QImage:
     if OpenEXR is None or Imath is None:
         return QtGui.QImage()
     try:

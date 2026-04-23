@@ -7,7 +7,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.asset_inventory import AssetInventoryFile
 from ui.utils.styles import PALETTE
-from ui.utils.thumbnails import AsyncExrThumbnailLoader, is_exr_path, load_media_pixmap, make_placeholder_pixmap
+from ui.utils.thumbnails import load_media_pixmap, make_placeholder_pixmap
 
 
 class AssetFileRow(QtWidgets.QWidget):
@@ -16,13 +16,11 @@ class AssetFileRow(QtWidgets.QWidget):
         entry: AssetInventoryFile,
         parent: Optional[QtWidgets.QWidget] = None,
         *,
-        preview_loader: Optional[AsyncExrThumbnailLoader] = None,
         cache_root: Optional[Path] = None,
     ) -> None:
         super().__init__(parent)
         self.entry = entry
         self._thumb_size = QtCore.QSize(48, 30)
-        self._preview_loader = preview_loader
         self._cache_root = cache_root
 
         layout = QtWidgets.QHBoxLayout(self)
@@ -57,21 +55,22 @@ class AssetFileRow(QtWidgets.QWidget):
         self.type_label.setStyleSheet(f"color: {PALETTE['muted']};")
         layout.addWidget(self.type_label, 0)
 
-        if self._preview_loader is not None:
-            self._preview_loader.previewReady.connect(self._on_preview_ready)
-        self._update_thumbnail()
+        self.show_placeholder_thumbnail()
 
     def selected_path(self) -> tuple[Path, str]:
         return self.entry.path, self.entry.kind
 
-    def _update_thumbnail(self) -> None:
+    def show_placeholder_thumbnail(self) -> None:
+        self.thumb_label.setPixmap(make_placeholder_pixmap(self.entry.path.suffix.upper(), self._thumb_size))
+
+    def refresh_thumbnail(self) -> None:
         thumbnail_path = self.entry.thumbnail_path
         if thumbnail_path and thumbnail_path.exists():
             pixmap = load_media_pixmap(
                 thumbnail_path,
                 self._thumb_size,
                 cache_root=self._cache_root,
-                allow_sync_exr=False,
+                allow_sync_exr=True,
             )
             if not pixmap.isNull():
                 scaled = pixmap
@@ -81,20 +80,7 @@ class AssetFileRow(QtWidgets.QWidget):
                     scaled.copy(x, y, self._thumb_size.width(), self._thumb_size.height())
                 )
                 return
-            if is_exr_path(thumbnail_path) and self._preview_loader is not None:
-                self._preview_loader.request(thumbnail_path, self._thumb_size, self._cache_root)
-        self.thumb_label.setPixmap(make_placeholder_pixmap(self.entry.path.suffix.upper(), self._thumb_size))
-
-    @QtCore.Slot(str, int, int, bool)
-    def _on_preview_ready(self, path_str: str, width: int, height: int, success: bool) -> None:
-        thumbnail_path = self.entry.thumbnail_path
-        if not success or thumbnail_path is None:
-            return
-        if str(thumbnail_path) != path_str:
-            return
-        if width != self._thumb_size.width() or height != self._thumb_size.height():
-            return
-        self._update_thumbnail()
+        self.show_placeholder_thumbnail()
 
     @staticmethod
     def _type_label(path: Path) -> str:

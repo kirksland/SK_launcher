@@ -6,7 +6,6 @@ from typing import Callable, Optional
 from PySide6 import QtCore, QtWidgets
 
 from core.asset_inventory import AssetInventory
-from ui.utils.thumbnails import AsyncExrThumbnailLoader
 from ui.widgets.asset_file_row import AssetFileRow
 from ui.widgets.asset_version_row import AssetVersionRow
 
@@ -17,13 +16,13 @@ class AssetInventoryRenderer:
         list_widget: QtWidgets.QListWidget,
         hint_label: Optional[QtWidgets.QLabel] = None,
         *,
-        preview_loader: Optional[AsyncExrThumbnailLoader] = None,
         cache_root: Optional[Path] = None,
     ) -> None:
         self.list_widget = list_widget
         self.hint_label = hint_label
-        self.preview_loader = preview_loader
         self.cache_root = cache_root
+        self._pending_rows: list[object] = []
+        self._hydrate_index = 0
 
     def render(
         self,
@@ -32,6 +31,8 @@ class AssetInventoryRenderer:
         on_selected_path: Callable[[Path, str], None],
     ) -> Optional[Path]:
         self.list_widget.clear()
+        self._pending_rows = []
+        self._hydrate_index = 0
         if self.hint_label is not None:
             self.hint_label.setText(inventory.hint)
 
@@ -42,6 +43,7 @@ class AssetInventoryRenderer:
             self._render_files(inventory)
         else:
             self.list_widget.addItem(inventory.empty_message)
+        self._schedule_thumbnail_hydration()
         return first_video
 
     def _render_bundles(
@@ -55,13 +57,13 @@ class AssetInventoryRenderer:
                 bundle.name,
                 bundle.entries,
                 parent=self.list_widget,
-                preview_loader=self.preview_loader,
                 cache_root=self.cache_root,
             )
             item = QtWidgets.QListWidgetItem()
             item.setSizeHint(QtCore.QSize(280, 40))
             self.list_widget.addItem(item)
             self.list_widget.setItemWidget(item, row)
+            self._pending_rows.append(row)
 
             def sync_item_data(
                 _row: AssetVersionRow = row,
@@ -95,7 +97,6 @@ class AssetInventoryRenderer:
             row = AssetFileRow(
                 file_entry,
                 parent=self.list_widget,
-                preview_loader=self.preview_loader,
                 cache_root=self.cache_root,
             )
             item = QtWidgets.QListWidgetItem()
@@ -105,6 +106,25 @@ class AssetInventoryRenderer:
             item.setToolTip(str(file_entry.path))
             self.list_widget.addItem(item)
             self.list_widget.setItemWidget(item, row)
+            self._pending_rows.append(row)
+
+    def _schedule_thumbnail_hydration(self) -> None:
+        if not self._pending_rows:
+            return
+        QtCore.QTimer.singleShot(0, self._hydrate_thumbnail_batch)
+
+    def _hydrate_thumbnail_batch(self) -> None:
+        if not self._pending_rows:
+            return
+        batch_size = 8
+        end = min(self._hydrate_index + batch_size, len(self._pending_rows))
+        for row in self._pending_rows[self._hydrate_index:end]:
+            refresh = getattr(row, "refresh_thumbnail", None)
+            if callable(refresh):
+                refresh()
+        self._hydrate_index = end
+        if self._hydrate_index < len(self._pending_rows):
+            QtCore.QTimer.singleShot(0, self._hydrate_thumbnail_batch)
 
 
 def _first_video_path(entries: list[dict[str, object]]) -> Optional[Path]:
