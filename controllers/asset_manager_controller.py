@@ -26,7 +26,7 @@ from core.fs import find_projects
 from core.metadata import load_metadata
 from core.settings import normalize_asset_schema, save_settings
 from core.watchers import update_watcher_paths
-from ui.utils.thumbnails import build_thumbnail_pixmap
+from ui.utils.thumbnails import AsyncExrThumbnailLoader, build_thumbnail_pixmap, is_exr_path, load_media_pixmap
 from ui.dialogs.asset_layout_mapper_dialog import AssetLayoutMapperDialog
 from ui.widgets.asset_inventory_renderer import AssetInventoryRenderer
 from ui.widgets.asset_version_row import AssetVersionRow
@@ -36,6 +36,8 @@ class AssetManagerController:
     def __init__(self, window: QtWidgets.QMainWindow) -> None:
         self.w = window
         self._thumb_cache: dict[tuple, tuple[float, QtGui.QPixmap]] = {}
+        self._async_exr_loader = AsyncExrThumbnailLoader(self.w)
+        self._async_exr_loader.previewReady.connect(self._on_async_exr_preview_ready)
         self._pending_project_context: Optional[Path] = None
         self._context_refresh_timer = QtCore.QTimer(self.w)
         self._context_refresh_timer.setSingleShot(True)
@@ -325,6 +327,7 @@ class AssetManagerController:
                 shot_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(shot_dir))
                 shot_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "shot")
                 preview = layout.preview_path(self._entity_record_for_path(shot_dir)) if layout else None
+                shot_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
                 if preview:
                     pix = self._get_scaled_preview_pixmap(preview, shot_dir, shot_icon_size)
                 else:
@@ -355,6 +358,7 @@ class AssetManagerController:
                 asset_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(asset_dir))
                 asset_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "asset")
                 preview = layout.preview_path(self._entity_record_for_path(asset_dir)) if layout else None
+                asset_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
                 if preview:
                     pix = self._get_scaled_preview_pixmap(preview, asset_dir, asset_icon_size)
                 else:
@@ -385,6 +389,7 @@ class AssetManagerController:
                 library_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(library_dir))
                 library_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "asset")
                 preview = layout.preview_path(self._entity_record_for_path(library_dir)) if layout else None
+                library_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
                 if preview:
                     pix = self._get_scaled_preview_pixmap(preview, library_dir, asset_icon_size)
                 else:
@@ -429,16 +434,19 @@ class AssetManagerController:
         cached = self._thumb_cache.get(key)
         if cached and cached[0] == mtime:
             return cached[1]
-        pix = QtGui.QPixmap(str(preview_path))
+        pix = load_media_pixmap(
+            preview_path,
+            size,
+            cache_root=self._asset_preview_cache_root(),
+            allow_sync_exr=False,
+        )
         if pix.isNull():
+            if is_exr_path(preview_path):
+                self._async_exr_loader.request(preview_path, size, self._asset_preview_cache_root())
             pix = build_thumbnail_pixmap(entity_dir, size)
             self._thumb_cache[key] = (mtime, pix)
             return pix
-        scaled = pix.scaled(
-            size,
-            QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            QtCore.Qt.TransformationMode.SmoothTransformation,
-        )
+        scaled = pix
         self._thumb_cache[key] = (mtime, scaled)
         return scaled
 
@@ -516,18 +524,24 @@ class AssetManagerController:
             layout.representation_paths(record, "preview_image") if layout and record is not None else []
         )
         self.w._preview_index = 0
+        self.w._asset_inventory_preview_path = None
         if self.w._preview_images:
             preview = self.w._preview_images[self.w._preview_index]
-            pixmap = QtGui.QPixmap(str(preview))
+            preview_size = self._asset_preview_target_size()
+            pixmap = load_media_pixmap(
+                preview,
+                preview_size,
+                cache_root=self._asset_preview_cache_root(),
+                allow_sync_exr=False,
+            )
             if not pixmap.isNull():
                 self.w.asset_preview.setPixmap(
-                    pixmap.scaled(
-                        self.w.asset_preview.size(),
-                        QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                        QtCore.Qt.TransformationMode.SmoothTransformation,
-                    )
+                    pixmap
                 )
                 self.w.asset_video_controller.show_image(pixmap)
+            elif is_exr_path(preview):
+                self._async_exr_loader.request(preview, preview_size, self._asset_preview_cache_root())
+                self.w.asset_preview.setPixmap(build_thumbnail_pixmap(entity_dir, preview_size))
             self._update_preview_label()
         else:
             self.w.asset_preview.setPixmap(build_thumbnail_pixmap(entity_dir, QtCore.QSize(420, 200)))
@@ -554,6 +568,8 @@ class AssetManagerController:
         inventory_renderer = AssetInventoryRenderer(
             self.w.asset_inventory_list,
             self.w.asset_page.asset_inventory_hint if hasattr(self.w.asset_page, "asset_inventory_hint") else None,
+            preview_loader=self._async_exr_loader,
+            cache_root=self._asset_preview_cache_root(),
         )
         first_video = inventory_renderer.render(
             inventory,
@@ -579,16 +595,24 @@ class AssetManagerController:
         total = len(self.w._preview_images)
         self.w._preview_index = index % total
         preview = self.w._preview_images[self.w._preview_index]
-        pixmap = QtGui.QPixmap(str(preview))
+        self.w._asset_inventory_preview_path = None
+        preview_size = self._asset_preview_target_size()
+        pixmap = load_media_pixmap(
+            preview,
+            preview_size,
+            cache_root=self._asset_preview_cache_root(),
+            allow_sync_exr=False,
+        )
         if not pixmap.isNull():
             self.w.asset_preview.setPixmap(
-                pixmap.scaled(
-                    self.w.asset_preview.size(),
-                    QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    QtCore.Qt.TransformationMode.SmoothTransformation,
-                )
+                pixmap
             )
             self.w.asset_video_controller.show_image(pixmap)
+        elif is_exr_path(preview):
+            entity = getattr(self.w, "_asset_current_entity", None)
+            if entity:
+                self.w.asset_preview.setPixmap(build_thumbnail_pixmap(Path(entity), preview_size))
+            self._async_exr_loader.request(preview, preview_size, self._asset_preview_cache_root())
         self._update_preview_label()
 
     def prev_preview_image(self) -> None:
@@ -691,9 +715,82 @@ class AssetManagerController:
             if images and path in images:
                 self._show_preview_at(images.index(path))
                 return
-            pixmap = QtGui.QPixmap(str(path))
+            self.w._asset_inventory_preview_path = path
+            preview_size = self._asset_preview_target_size()
+            pixmap = load_media_pixmap(
+                path,
+                preview_size,
+                cache_root=self._asset_preview_cache_root(),
+                allow_sync_exr=False,
+            )
             if not pixmap.isNull():
                 self.w.asset_video_controller.show_image(pixmap)
+            elif is_exr_path(path):
+                self._async_exr_loader.request(path, preview_size, self._asset_preview_cache_root())
+
+    def _asset_preview_cache_root(self) -> Optional[Path]:
+        project_root = getattr(self.w, "_asset_current_project_root", None)
+        return Path(project_root) if project_root else None
+
+    def _asset_preview_target_size(self) -> QtCore.QSize:
+        size = self.w.asset_preview.size()
+        if size.width() <= 0 or size.height() <= 0:
+            return QtCore.QSize(420, 200)
+        return size
+
+    @QtCore.Slot(str, int, int, bool)
+    def _on_async_exr_preview_ready(self, path_str: str, width: int, height: int, success: bool) -> None:
+        if not success:
+            return
+        preview_size = self._asset_preview_target_size()
+        current_preview = None
+        images = getattr(self.w, "_preview_images", [])
+        if images:
+            index = getattr(self.w, "_preview_index", 0)
+            if 0 <= index < len(images):
+                current_preview = images[index]
+        if current_preview is not None and str(current_preview) == path_str:
+            if width == preview_size.width() and height == preview_size.height():
+                self._show_preview_at(getattr(self.w, "_preview_index", 0))
+        inventory_preview = getattr(self.w, "_asset_inventory_preview_path", None)
+        if inventory_preview is not None and str(inventory_preview) == path_str:
+            if width == preview_size.width() and height == preview_size.height():
+                pixmap = load_media_pixmap(
+                    Path(path_str),
+                    preview_size,
+                    cache_root=self._asset_preview_cache_root(),
+                    allow_sync_exr=False,
+                )
+                if not pixmap.isNull():
+                    self.w.asset_video_controller.show_image(pixmap)
+        self._update_entity_list_icons_for_preview(path_str, width, height)
+
+    def _update_entity_list_icons_for_preview(self, path_str: str, width: int, height: int) -> None:
+        for list_widget in (
+            self.w.asset_shots_list,
+            self.w.asset_assets_list,
+            self.w.asset_library_list,
+        ):
+            icon_size = list_widget.iconSize()
+            if width != icon_size.width() or height != icon_size.height():
+                continue
+            for row in range(list_widget.count()):
+                item = list_widget.item(row)
+                if item is None:
+                    continue
+                preview_path = item.data(QtCore.Qt.ItemDataRole.UserRole + 2)
+                entity_path = item.data(QtCore.Qt.ItemDataRole.UserRole)
+                if preview_path != path_str or not entity_path:
+                    continue
+                pixmap = load_media_pixmap(
+                    Path(path_str),
+                    icon_size,
+                    cache_root=self._asset_preview_cache_root(),
+                    allow_sync_exr=False,
+                )
+                if pixmap.isNull():
+                    continue
+                item.setIcon(QtGui.QIcon(pixmap))
 
     def asset_placeholder_action(self) -> None:
         self.set_asset_status("Git actions are intentionally disabled for now. We should redesign this flow before wiring commit, push and fetch.")

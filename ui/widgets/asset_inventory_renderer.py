@@ -6,6 +6,7 @@ from typing import Callable, Optional
 from PySide6 import QtCore, QtWidgets
 
 from core.asset_inventory import AssetInventory
+from ui.utils.thumbnails import AsyncExrThumbnailLoader
 from ui.widgets.asset_file_row import AssetFileRow
 from ui.widgets.asset_version_row import AssetVersionRow
 
@@ -15,9 +16,14 @@ class AssetInventoryRenderer:
         self,
         list_widget: QtWidgets.QListWidget,
         hint_label: Optional[QtWidgets.QLabel] = None,
+        *,
+        preview_loader: Optional[AsyncExrThumbnailLoader] = None,
+        cache_root: Optional[Path] = None,
     ) -> None:
         self.list_widget = list_widget
         self.hint_label = hint_label
+        self.preview_loader = preview_loader
+        self.cache_root = cache_root
 
     def render(
         self,
@@ -45,7 +51,13 @@ class AssetInventoryRenderer:
     ) -> Optional[Path]:
         first_video: Optional[Path] = None
         for bundle in inventory.bundles:
-            row = AssetVersionRow(bundle.name, bundle.entries, parent=self.list_widget)
+            row = AssetVersionRow(
+                bundle.name,
+                bundle.entries,
+                parent=self.list_widget,
+                preview_loader=self.preview_loader,
+                cache_root=self.cache_root,
+            )
             item = QtWidgets.QListWidgetItem()
             item.setSizeHint(QtCore.QSize(280, 40))
             self.list_widget.addItem(item)
@@ -80,7 +92,12 @@ class AssetInventoryRenderer:
 
     def _render_files(self, inventory: AssetInventory) -> None:
         for file_entry in inventory.files:
-            row = AssetFileRow(file_entry, parent=self.list_widget)
+            row = AssetFileRow(
+                file_entry,
+                parent=self.list_widget,
+                preview_loader=self.preview_loader,
+                cache_root=self.cache_root,
+            )
             item = QtWidgets.QListWidgetItem()
             item.setSizeHint(QtCore.QSize(280, 44))
             item.setData(QtCore.Qt.ItemDataRole.UserRole, str(file_entry.path))

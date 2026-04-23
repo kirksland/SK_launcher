@@ -27,6 +27,14 @@ TEXT_INPUT_TYPES = (
 )
 
 
+def should_block_shortcut_for_text_input(binding: ShortcutBinding, text_input_has_focus: bool) -> bool:
+    if not text_input_has_focus:
+        return False
+    if binding.scope == GLOBAL_SCOPE:
+        return False
+    return binding.command_id != "board.focus.exit"
+
+
 class AppShortcutsController:
     """Installs global Qt shortcuts and routes them through app commands."""
 
@@ -91,7 +99,7 @@ class AppShortcutsController:
         active_scope = self.active_scope()
         if not scopes_overlap(active_scope, binding.scope):
             return
-        if binding.scope != GLOBAL_SCOPE and self._text_input_has_focus():
+        if should_block_shortcut_for_text_input(binding, self._text_input_has_focus()):
             return
         context = CommandContext(
             active_scope=active_scope,

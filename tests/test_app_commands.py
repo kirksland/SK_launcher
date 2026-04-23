@@ -11,6 +11,7 @@ from core.commands import (
 )
 from controllers.app_command_controller import AppCommandController
 from controllers.board_command_dispatcher import BoardCommandDispatcher
+from controllers.app_shortcuts_controller import should_block_shortcut_for_text_input
 from core.commands.registry import validate_command
 from core.commands.shortcuts import normalize_shortcut_sequence
 from core.commands.scopes import scopes_overlap
@@ -99,6 +100,17 @@ class AppCommandTests(unittest.TestCase):
         self.assertIn(("app.palette", "board.search"), conflict_ids)
         self.assertIn(("board.edit.local", "board.layout.auto"), conflict_ids)
         self.assertNotIn(("board.layout.auto", "projects.filter"), conflict_ids)
+
+    def test_text_input_filter_allows_board_focus_exit_escape(self) -> None:
+        layout_binding = build_shortcut_bindings([
+            _command("board.layout.auto", "board", ("L",)),
+        ])[0]
+        exit_binding = build_shortcut_bindings([
+            _command("board.focus.exit", "board.focus", ("Escape",)),
+        ])[0]
+
+        self.assertTrue(should_block_shortcut_for_text_input(layout_binding, True))
+        self.assertFalse(should_block_shortcut_for_text_input(exit_binding, True))
 
     def test_scope_overlap_and_sequence_normalization(self) -> None:
         self.assertTrue(scopes_overlap("global", "board"))
