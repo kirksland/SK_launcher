@@ -4,7 +4,13 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+from core.asset_schema import (
+    DEFAULT_ASSET_SCHEMA,
+    default_asset_schema,
+    normalize_asset_schema as normalize_asset_schema_config,
+)
 
 LAUNCHER_ROOT = Path(__file__).resolve().parent.parent
 LEGACY_SETTINGS_PATH = LAUNCHER_ROOT / "settings.json"
@@ -20,10 +26,6 @@ DEFAULT_PROJECTS_DIR = _documents_dir() / "HoudiniProjects"
 DEFAULT_TEMPLATE_HIP = LAUNCHER_ROOT / "untitled.hipnc"
 DEFAULT_SERVER_REPO_DIR = _documents_dir() / "StudioProject"
 
-DEFAULT_ASSET_SCHEMA = {
-    "usd_search": ["publish", "root"],
-}
-
 DEFAULT_SETTINGS: Dict[str, object] = {
     "projects_dir": str(DEFAULT_PROJECTS_DIR),
     "template_hip": str(DEFAULT_TEMPLATE_HIP),
@@ -34,7 +36,9 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "server_repo_dir": str(DEFAULT_SERVER_REPO_DIR),
     "video_backend": "auto",
     "asset_manager_projects": [],
-    "asset_schema": DEFAULT_ASSET_SCHEMA,
+    "asset_schema": default_asset_schema(),
+    "asset_project_schemas": {},
+    "shortcuts": {},
 }
 
 
@@ -71,6 +75,7 @@ def is_first_run(settings_path: Optional[Path] = None) -> bool:
 
 def _default_settings_with_latest_houdini() -> Dict[str, object]:
     defaults = DEFAULT_SETTINGS.copy()
+    defaults["asset_schema"] = default_asset_schema()
     installs = discover_houdini_installations()
     if installs:
         defaults["houdini_exe"] = installs[0]["path"]
@@ -87,6 +92,7 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
     except Exception:
         return _default_settings_with_latest_houdini()
     merged = DEFAULT_SETTINGS.copy()
+    merged["asset_schema"] = default_asset_schema()
     merged.update({
         k: v
         for k, v in data.items()
@@ -95,7 +101,10 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
     if isinstance(data.get("asset_manager_projects"), list):
         merged["asset_manager_projects"] = data["asset_manager_projects"]
     if isinstance(data.get("asset_schema"), dict):
-        merged["asset_schema"] = data["asset_schema"]
+        merged["asset_schema"] = normalize_asset_schema_config(data["asset_schema"])
+    if isinstance(data.get("asset_project_schemas"), dict):
+        merged["asset_project_schemas"] = normalize_asset_project_schemas(data["asset_project_schemas"])
+    merged["shortcuts"] = normalize_shortcuts(data.get("shortcuts"))
     # If settings predate houdini_exe storage, default to latest install.
     if "houdini_exe" not in data:
         installs = discover_houdini_installations()
@@ -112,7 +121,13 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
 def save_settings(settings: Dict[str, object], settings_path: Optional[Path] = None) -> None:
     resolved_path = active_settings_path(explicit_path=settings_path)
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
-    resolved_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    serializable = dict(settings)
+    serializable["asset_schema"] = normalize_asset_schema_config(serializable.get("asset_schema"))
+    serializable["asset_project_schemas"] = normalize_asset_project_schemas(
+        serializable.get("asset_project_schemas")
+    )
+    serializable["shortcuts"] = normalize_shortcuts(serializable.get("shortcuts"))
+    resolved_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
 
 
 def settings_startup_issues(settings: Dict[str, object]) -> List[str]:
@@ -153,22 +168,37 @@ def normalize_asset_manager_projects(raw: object) -> List[Dict[str, Optional[str
     return cleaned
 
 
-def normalize_asset_schema(raw: object) -> Dict[str, List[str]]:
+def normalize_asset_schema(raw: object) -> Dict[str, Any]:
+    return normalize_asset_schema_config(raw)
+
+
+def normalize_asset_project_schemas(raw: object) -> Dict[str, Dict[str, Any]]:
     if not isinstance(raw, dict):
-        return DEFAULT_ASSET_SCHEMA.copy()
-    usd_search = raw.get("usd_search")
-    if not isinstance(usd_search, list):
-        return DEFAULT_ASSET_SCHEMA.copy()
-    cleaned = []
-    for value in usd_search:
-        if not isinstance(value, str):
+        return {}
+    cleaned: Dict[str, Dict[str, Any]] = {}
+    for project_key, value in raw.items():
+        if not isinstance(project_key, str) or not project_key.strip():
             continue
-        key = value.strip().lower()
-        if key in ("publish", "root") and key not in cleaned:
-            cleaned.append(key)
-    if not cleaned:
-        cleaned = DEFAULT_ASSET_SCHEMA["usd_search"][:]
-    return {"usd_search": cleaned}
+        cleaned[project_key.strip()] = normalize_asset_schema_config(value)
+    return cleaned
+
+
+def normalize_shortcuts(raw: object) -> Dict[str, List[str]]:
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: Dict[str, List[str]] = {}
+    for command_id, sequences in raw.items():
+        if not isinstance(command_id, str) or not command_id.strip():
+            continue
+        if isinstance(sequences, str):
+            sequence_list = [sequences]
+        elif isinstance(sequences, list):
+            sequence_list = sequences
+        else:
+            continue
+        normalized = [sequence.strip() for sequence in sequence_list if isinstance(sequence, str) and sequence.strip()]
+        cleaned[command_id.strip()] = normalized
+    return cleaned
 
 def normalize_houdini_exe(path_text: str) -> str:
     path_text = path_text.strip().strip('"')

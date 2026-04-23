@@ -171,6 +171,9 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Local asset layout sandbox projects
+asset_layout_sandbox/
+
 # PyPI configuration file
 .pypirc
 

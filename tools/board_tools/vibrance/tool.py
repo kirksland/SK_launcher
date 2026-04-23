@@ -34,7 +34,7 @@ register_edit_tool(
         ui_panel="vibrance",
         ui_settings_keys=("amount",),
         ui_controls=(
-            ToolUiControlSpec("amount", "Vibrance", -1.0, 1.0, display_signed=True),
+            ToolUiControlSpec("amount", "Vibrance", -1.0, 1.0, display_scale=100.0, display_signed=True),
         ),
     )
 )

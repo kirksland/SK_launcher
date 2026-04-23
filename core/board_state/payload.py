@@ -1,25 +1,12 @@
 from __future__ import annotations
 
-import json
-from typing import Callable, Optional
+from typing import Optional
+
+from .migrations import migrate_board_payload
 
 
 def clone_payload(payload: Optional[dict]) -> dict:
-    if not isinstance(payload, dict):
-        return {"items": [], "image_display_overrides": {}}
-    try:
-        cloned = json.loads(json.dumps(payload))
-    except Exception:
-        cloned = {"items": [], "image_display_overrides": {}}
-    if not isinstance(cloned, dict):
-        return {"items": [], "image_display_overrides": {}}
-    items = cloned.get("items", [])
-    if not isinstance(items, list):
-        cloned["items"] = []
-    overrides = cloned.get("image_display_overrides", {})
-    if not isinstance(overrides, dict):
-        cloned["image_display_overrides"] = {}
-    return cloned
+    return migrate_board_payload(payload)
 
 
 def payload_item_count(payload: object) -> int:
@@ -50,7 +37,6 @@ def sync_board_state_overrides(board_state: dict, image_overrides: dict[str, dic
 def parse_image_display_overrides(
     payload: dict,
     *,
-    coerce_color_adjustments: Callable[[object], tuple[float, float, float]],
     tool_stack_from_override: Callable[[object], list[dict[str, object]]],
 ) -> dict[str, dict[str, object]]:
     raw = payload.get("image_display_overrides")
@@ -69,15 +55,11 @@ def parse_image_display_overrides(
             gamma = float(gamma_val)
         except Exception:
             gamma = 2.2
-        brightness, contrast, saturation = coerce_color_adjustments(value)
         tool_stack = tool_stack_from_override(value)
         parsed[key] = {
             "channel": channel,
             "gamma": max(0.1, gamma),
             "srgb": bool(srgb_val),
-            "brightness": brightness,
-            "contrast": contrast,
-            "saturation": saturation,
             "tool_stack": tool_stack,
         }
     return parsed

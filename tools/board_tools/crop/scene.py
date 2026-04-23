@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -11,8 +12,28 @@ from core.board_edit.handles import (
     build_crop_handle_layout,
     hit_test_crop_handle,
 )
-from core.board_scene.items import BoardImageItem, BoardVideoItem
-from tools.board_tools.base import BoardToolSceneRuntime
+from tools.board_tools.base import BoardToolSceneHost, BoardToolSceneRuntime
+
+
+TOOL_ID = "crop"
+
+
+@dataclass(slots=True)
+class CropSceneState:
+    frame_item: QtWidgets.QGraphicsRectItem | None = None
+    handle_items: dict[str, QtWidgets.QGraphicsRectItem] = field(default_factory=dict)
+    layout: CropHandleLayout | None = None
+    drag: CropHandleDragState | None = None
+
+
+def crop_state(host: BoardToolSceneHost) -> CropSceneState:
+    state_factory = getattr(host, "scene_tool_state", None)
+    if not callable(state_factory):
+        raise TypeError("scene tool host does not expose scene_tool_state")
+    state = state_factory(TOOL_ID, CropSceneState)
+    if not isinstance(state, CropSceneState):
+        raise TypeError("crop scene state has invalid type")
+    return state
 
 
 def is_crop_scene_target(item: object) -> bool:
@@ -21,6 +42,16 @@ def is_crop_scene_target(item: object) -> bool:
 
 def crop_handles_active(item: object, selected_panel: str) -> bool:
     return str(selected_panel or "").strip().lower() == "crop" and is_crop_scene_target(item)
+
+
+def crop_settings_tuple(settings: object) -> tuple[float, float, float, float]:
+    values = dict(settings) if isinstance(settings, dict) else {}
+    return (
+        float(values.get("left", 0.0)),
+        float(values.get("top", 0.0)),
+        float(values.get("right", 0.0)),
+        float(values.get("bottom", 0.0)),
+    )
 
 
 def focus_item_base_size(item: object) -> Optional[QtCore.QSizeF]:
@@ -121,123 +152,130 @@ def crop_values_from_drag(
     )
 
 
-def clear_controller_handles(controller: object, *, reset_drag: bool = True) -> None:
+def clear_controller_handles(host: BoardToolSceneHost, *, reset_drag: bool = True) -> None:
+    state = crop_state(host)
     (
-        controller._focus_handle_frame,
-        controller._focus_handle_items,
-        controller._focus_crop_layout,
+        state.frame_item,
+        state.handle_items,
+        state.layout,
     ) = clear_crop_handle_items(
-        controller._scene,
-        controller._focus_handle_frame,
-        controller._focus_handle_items,
+        host.graphics_scene(),
+        state.frame_item,
+        state.handle_items,
     )
     if reset_drag:
-        controller._focus_crop_drag = None
+        state.drag = None
 
 
-def refresh_controller_handles(controller: object) -> None:
-    clear_controller_handles(controller, reset_drag=False)
-    if not crop_handles_active(controller._focus_item, controller._selected_tool_panel()):
-        return
-    if controller._focus_item is None:
+def refresh_controller_handles(host: BoardToolSceneHost) -> None:
+    state = crop_state(host)
+    clear_controller_handles(host, reset_drag=False)
+    item = host.focus_item()
+    if not crop_handles_active(item, host.selected_tool_panel()):
         return
     (
-        controller._focus_handle_frame,
-        controller._focus_handle_items,
-        controller._focus_crop_layout,
+        state.frame_item,
+        state.handle_items,
+        state.layout,
     ) = create_crop_handle_items(
-        controller._scene,
-        controller._focus_item.sceneBoundingRect(),
+        host.graphics_scene(),
+        item.sceneBoundingRect(),
         handle_size=12.0,
     )
 
 
-def handle_panel_value_changed(controller: object) -> None:
-    panel_state = controller._tool_panel_state_for_id("crop")
+def handle_panel_value_changed(host: BoardToolSceneHost) -> None:
+    panel_state = host.tool_panel_state(TOOL_ID)
     left = float(panel_state.get("left", 0.0))
     top = float(panel_state.get("top", 0.0))
     right = float(panel_state.get("right", 0.0))
     bottom = float(panel_state.get("bottom", 0.0))
-    controller._set_current_crop(left, top, right, bottom, schedule_preview=True)
+    host.update_scene_tool_settings(
+        TOOL_ID,
+        {"left": left, "top": top, "right": right, "bottom": bottom},
+        schedule_preview=True,
+    )
 
 
-def handle_mouse_press(controller: object, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+def handle_mouse_press(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+    state = crop_state(host)
+    item = host.focus_item()
     if event.button() != QtCore.Qt.MouseButton.LeftButton:
         return False
-    if not crop_handles_active(controller._focus_item, controller._selected_tool_panel()):
+    if not crop_handles_active(item, host.selected_tool_panel()):
         return False
-    layout = controller._focus_crop_layout
+    layout = state.layout
     if layout is None:
-        refresh_controller_handles(controller)
-        layout = controller._focus_crop_layout
+        refresh_controller_handles(host)
+        layout = state.layout
     if layout is None:
         return False
-    controller._focus_crop_drag = begin_crop_handle_drag(
-        controller._focus_item,
+    crop = crop_settings_tuple(host.tool_panel_state(TOOL_ID))
+    state.drag = begin_crop_handle_drag(
+        item,
         layout,
         scene_pos,
-        (
-            controller._edit_crop_left,
-            controller._edit_crop_top,
-            controller._edit_crop_right,
-            controller._edit_crop_bottom,
-        ),
+        crop,
     )
-    return controller._focus_crop_drag is not None
+    return state.drag is not None
 
 
-def handle_mouse_move(controller: object, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
-    crop = crop_values_from_drag(controller._focus_crop_drag, scene_pos)
+def handle_mouse_move(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+    state = crop_state(host)
+    crop = crop_values_from_drag(state.drag, scene_pos)
     if crop is None:
         return False
     left, top, right, bottom = crop
-    controller._set_current_crop(left, top, right, bottom, schedule_preview=False)
+    host.update_scene_tool_settings(
+        TOOL_ID,
+        {"left": left, "top": top, "right": right, "bottom": bottom},
+        schedule_preview=False,
+    )
     return True
 
 
-def handle_mouse_release(controller: object, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
-    if controller._focus_crop_drag is None:
+def handle_mouse_release(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, event: QtGui.QMouseEvent) -> bool:
+    state = crop_state(host)
+    if state.drag is None:
         return False
-    controller._focus_crop_drag = None
-    refresh_controller_handles(controller)
-    if isinstance(controller._focus_item, BoardVideoItem):
-        controller._schedule_video_focus_preview(controller._edit_video_playhead, immediate=True)
-    elif isinstance(controller._focus_item, BoardImageItem):
-        if controller._edit_exr_path is not None:
-            channel = controller.w.board_page.current_exr_channel_value()
-            if channel:
-                controller._edit_exr_channel = str(channel)
-                controller._schedule_edit_preview_update(channel=str(channel))
-        else:
-            controller._schedule_edit_preview_update()
+    state.drag = None
+    refresh_controller_handles(host)
+    host.schedule_focus_preview()
     return True
 
 
-def apply_to_focus_item(controller: object) -> bool:
+def apply_to_focus_item(host: BoardToolSceneHost) -> bool:
+    item = host.focus_item()
     if not apply_crop_to_item(
-        controller._focus_item,
-        (
-            controller._edit_crop_left,
-            controller._edit_crop_top,
-            controller._edit_crop_right,
-            controller._edit_crop_bottom,
-        ),
+        item,
+        crop_settings_tuple(host.tool_panel_state(TOOL_ID)),
     ):
         return False
-    group = controller._find_group_for_item(controller._focus_item)
+    group = host.find_group_for_item(item)
     if group is not None:
         group.update_bounds()
-    controller._refresh_scene_workspace()
-    refresh_controller_handles(controller)
+    host.refresh_workspace()
+    refresh_controller_handles(host)
+    return True
+
+
+def reset_focus_item(host: BoardToolSceneHost) -> bool:
+    item = host.focus_item()
+    if not apply_crop_to_item(item, (0.0, 0.0, 0.0, 0.0)):
+        return False
+    group = host.find_group_for_item(item)
+    if group is not None:
+        group.update_bounds()
     return True
 
 
 SCENE_RUNTIME = BoardToolSceneRuntime(
     refresh_handles=refresh_controller_handles,
-    clear_handles=lambda controller, reset_drag: clear_controller_handles(controller, reset_drag=reset_drag),
+    clear_handles=lambda host, reset_drag: clear_controller_handles(host, reset_drag=reset_drag),
     panel_value_changed=handle_panel_value_changed,
     mouse_press=handle_mouse_press,
     mouse_move=handle_mouse_move,
     mouse_release=handle_mouse_release,
     apply_to_focus_item=apply_to_focus_item,
+    reset_focus_item=reset_focus_item,
 )

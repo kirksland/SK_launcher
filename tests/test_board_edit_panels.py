@@ -49,6 +49,7 @@ class BoardEditPanelsTests(unittest.TestCase):
         assert spec is not None
         self.assertEqual(spec.ui_controls[0].key, "brightness")
         self.assertEqual(spec.ui_controls[0].label, "Brightness")
+        self.assertEqual(spec.ui_controls[0].display_scale, 100.0)
 
 
 if __name__ == "__main__":

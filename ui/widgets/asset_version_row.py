@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ui.utils.thumbnails import make_placeholder_pixmap
+from ui.utils.thumbnails import load_media_pixmap, make_placeholder_pixmap
 from ui.utils.styles import PALETTE, combo_dark_style
 
 
@@ -17,11 +17,14 @@ class AssetVersionRow(QtWidgets.QWidget):
         base_name: str,
         entries: List[Dict[str, object]],
         parent: Optional[QtWidgets.QWidget] = None,
+        *,
+        cache_root: Optional[Path] = None,
     ) -> None:
         super().__init__(parent)
         self._entries = entries
         self._entry_by_label = {str(e.get("label")): e for e in entries}
         self._thumb_size = QtCore.QSize(48, 30)
+        self._cache_root = cache_root
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 6, 2)
@@ -55,7 +58,7 @@ class AssetVersionRow(QtWidgets.QWidget):
 
         self.version_combo.currentTextChanged.connect(self._on_combo_changed)
         self._update_types_label()
-        self._update_thumbnail()
+        self.show_placeholder_thumbnail()
 
     def _current_entry(self) -> Optional[Dict[str, object]]:
         label = self.version_combo.currentText()
@@ -75,20 +78,24 @@ class AssetVersionRow(QtWidgets.QWidget):
             parts.append("IMG")
         self.types_label.setText(" / ".join(parts))
 
-    def _update_thumbnail(self) -> None:
+    def show_placeholder_thumbnail(self) -> None:
+        self.thumb_label.setPixmap(make_placeholder_pixmap("", self._thumb_size))
+
+    def refresh_thumbnail(self) -> None:
         entry = self._current_entry()
         if not entry:
             self.thumb_label.clear()
             return
         image = entry.get("image")
         if isinstance(image, Path) and image.exists():
-            pixmap = QtGui.QPixmap(str(image))
+            pixmap = load_media_pixmap(
+                image,
+                self._thumb_size,
+                cache_root=self._cache_root,
+                allow_sync_exr=True,
+            )
             if not pixmap.isNull():
-                scaled = pixmap.scaled(
-                    self._thumb_size,
-                    QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    QtCore.Qt.TransformationMode.SmoothTransformation,
-                )
+                scaled = pixmap
                 # Center-crop to exact size
                 x = max(0, (scaled.width() - self._thumb_size.width()) // 2)
                 y = max(0, (scaled.height() - self._thumb_size.height()) // 2)
@@ -96,11 +103,11 @@ class AssetVersionRow(QtWidgets.QWidget):
                     scaled.copy(x, y, self._thumb_size.width(), self._thumb_size.height())
                 )
                 return
-        self.thumb_label.setPixmap(make_placeholder_pixmap("", self._thumb_size))
+        self.show_placeholder_thumbnail()
 
     def _on_combo_changed(self) -> None:
         self._update_types_label()
-        self._update_thumbnail()
+        QtCore.QTimer.singleShot(0, self.refresh_thumbnail)
         self.selection_changed.emit()
 
     def selected_path(self) -> Tuple[Optional[Path], Optional[str]]:

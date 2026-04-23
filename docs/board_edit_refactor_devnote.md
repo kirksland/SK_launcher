@@ -22,9 +22,9 @@ Le dernier gros refacto a pose les bonnes briques:
   - logique des handles de crop
 - `core/board_edit/media_runtime.py`
   - runtime de playback image sequence / video
-- `tools/edit_tools/*`
+- `tools/board_tools/<tool_id>/tool.py`
   - declaration des outils editables via `EditToolSpec`
-- `tools/image_tools/*`
+- `tools/board_tools/<tool_id>/image.py`
   - application concrete de certains effets sur les previews raster
 
 Conclusion: on n'est plus dans un board monolithique pur. On est dans une architecture de transition deja modularisee, mais pas encore totalement decouplee.
@@ -60,7 +60,7 @@ La confusion vient de la difference entre:
 - "les tools sont declares independamment"
 - et "le mode edit est entierement pilote par ces tools"
 
-Aujourd'hui, les tools sont bien declares independamment dans `tools/edit_tools/*`.
+Aujourd'hui, les tools sont declares independamment dans `tools/board_tools/<tool_id>/`.
 Mais le mode edit n'est pas encore 100% pilote par metadata. Le controller sait encore:
 
 - quel tool affiche quels widgets
@@ -124,10 +124,12 @@ La cible propre serait:
   - items de scene, selection, groupes, interactions de scene
 - `core/board_edit/*`
   - session edit, mapping stack <-> UI state, preview policies, crop handles
-- `tools/edit_tools/*`
+- `tools/board_tools/<tool_id>/tool.py`
   - spec des outils editables
-- `tools/image_tools/*`
+- `tools/board_tools/<tool_id>/image.py`
   - application raster des outils qui ont un rendu preview
+- `tools/board_tools/<tool_id>/scene.py`
+  - interaction de scene pour les tools interactifs
 
 Le point important est que `BoardController` devrait devenir un chef d'orchestre, pas le depot central de toute la logique.
 
@@ -174,10 +176,10 @@ Premier pas deja pose:
 - le mode crop handle ne depend plus directement d'un test en dur sur l'id `crop`
 - `BoardPage` expose maintenant des panneaux nommes (`bcs`, `vibrance`, `crop`) au lieu d'une simple serie de toggles specialises
 - `BoardController` lit/ecrit deja une partie des valeurs d'edition via des etats de panel, pas directement widget par widget
-- les mises a jour de la stack passent desormais par une voie generique avant les wrappers de compatibilite (`bcs`, `vibrance`, `crop`)
+- les mises a jour de la stack passent desormais par une voie generique pilotee par les specs des tools
 - les specs d'outils declarent aussi leurs `ui_settings_keys`, ce qui permet au controller de relire un panel avec moins de connaissance metier codee en dur
 - le pont `tool spec <-> panel state` commence maintenant a vivre dans `core/board_edit/panels.py`
-- la synchro UI de `BoardController` et une partie du reset des outils s'appuient maintenant sur `core/board_edit/panels.py` plutot que sur des etats de panel hardcodes un par un
+- la synchro UI et le reset des outils passent maintenant par les specs des tools, plutot que par des etats de panel hardcodes un par un dans `BoardController`
 - les specs d'outils commencent aussi a decrire leurs controles UI (`ui_controls`), et `BoardPage` relit/ecrit maintenant une partie des panels a partir de cette metadata
 - une partie des callbacks de panel image passe maintenant par une voie plus generique cote controller, au lieu de multiplier les handlers presque identiques par tool
 
@@ -296,8 +298,8 @@ Statut: en cours le 2026-04-18
 
 Constat:
 
-- la separation `tools/edit_tools` et `tools/image_tools` etait saine pour sortir du monolithe
-- mais elle reste peu agreable pour l'auteur d'un tool complet
+- l'ancienne separation par dossier technique global a aide a sortir du monolithe
+- mais elle etait peu agreable pour l'auteur d'un tool complet
 - `crop` montrait aussi qu'un tool interactif a besoin de vivre avec sa logique de scene, pas a cote dans un namespace trop generique
 
 Direction retenue:
@@ -307,16 +309,22 @@ Direction retenue:
   - `tool.py`
   - `image.py`
   - `scene.py`
-- garder `tools/edit_tools/*` et `tools/image_tools/*` comme couches de compatibilite/discovery pendant la migration
+- ne plus ajouter de couche de compatibilite interne; le code actif passe par `tools/board_tools/<tool_id>/`
 
 Premier pas deja pose:
 
 - `bcs`, `vibrance` et `crop` vivent maintenant aussi dans `tools/board_tools/*`
 - les registries edit/image savent maintenant decouvrir ces nouveaux dossiers
-- `core/board_edit/crop_scene.py` devient une couche de compatibilite vers `tools/board_tools/crop/scene.py`
+- les anciens points d'entree de compatibilite internes ont ete supprimes; le runtime scene du crop vit uniquement dans `tools/board_tools/crop/scene.py`
 - une registry unifiee `tools/board_tools/registry.py` expose maintenant explicitement les capacites `tool/image/scene` de chaque tool
-- `BoardController` commence maintenant a brancher l'interaction de scene via ces capacites, au lieu de dependre seulement d'un test nominal sur `crop`
+- `BoardController` branche maintenant l'interaction de scene via ces capacites, au lieu de dependre d'un test nominal sur `crop`
 - le runtime de scene d'un tool n'est plus seulement un module implicite: `crop` expose maintenant un `SCENE_RUNTIME` formel via `BoardToolSceneRuntime`
-- les anciens wrappers `tools/edit_tools/{bcs,crop,vibrance}` et `tools/image_tools/{bcs,vibrance}` ont ete supprimes
+- les anciens wrappers techniques globaux ont ete supprimes
 - la vraie logique edit/image residuelle a ete remontee dans `tools/board_tools/edit.py` et `tools/board_tools/image.py`
-- apres audit des imports internes, la couche historique `tools/edit_tools/*` et `tools/image_tools/*` a pu etre retiree completement
+- apres audit des imports internes, la couche historique a pu etre retiree completement
+- les tools peuvent declarer `default_for` pour construire les stacks par defaut sans hardcode central
+- les tools de scene peuvent maintenant exposer `reset_focus_item`, ce qui evite au focus controller de connaitre les details internes d'un tool comme le crop
+- les nouveaux overrides sauvegardes ne recopient plus les anciens champs scalaires `brightness` / `crop_left`; la `tool_stack` est maintenant la source de verite
+- `BoardEditContext` porte maintenant l'etat edit partage (`focus_kind`, stack, selection, defs UI), ce qui reduit les acces directs aux champs prives du `BoardController`
+- le contrat host des tools de scene est formalise par `BoardToolSceneHost`
+- `EditVisualState` a ete reduit a son vrai role courant: resume couleur pour labels/preview, sans dupliquer l'etat crop

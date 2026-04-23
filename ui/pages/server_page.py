@@ -16,7 +16,7 @@ from ui.utils.styles import (
 from video.player import VideoController
 
 
-class _AssetVersionsList(QtWidgets.QListWidget):
+class _AssetInventoryList(QtWidgets.QListWidget):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.setDragEnabled(True)
@@ -92,6 +92,12 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_search_input.setClearButtonEnabled(True)
         self.asset_search_input.setVisible(False)
         top_controls.addWidget(self.asset_search_input, 1)
+        self.asset_layout_btn = QtWidgets.QToolButton()
+        self.asset_layout_btn.setText("Layout")
+        self.asset_layout_btn.setAutoRaise(True)
+        self.asset_layout_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
+        self.asset_layout_btn.setToolTip("Review or replace the current project asset layout.")
+        top_controls.addWidget(self.asset_layout_btn, 0)
         self.asset_refresh_btn = QtWidgets.QPushButton("Refresh")
         top_controls.addWidget(self.asset_refresh_btn, 0)
         self.asset_auto_refresh = QtWidgets.QCheckBox("Auto")
@@ -120,6 +126,60 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_layout_toolbar.addWidget(self.asset_layout_hint, 0)
         self.asset_layout_toolbar.addStretch(1)
         browser_layout.addLayout(self.asset_layout_toolbar)
+
+        self.asset_onboarding_card = QtWidgets.QFrame()
+        self.asset_onboarding_card.setStyleSheet(
+            "QFrame {"
+            "background: rgba(255, 214, 102, 0.08);"
+            "border: 1px solid rgba(255, 214, 102, 0.24);"
+            "border-radius: 10px;"
+            "}"
+        )
+        onboarding_layout = QtWidgets.QVBoxLayout(self.asset_onboarding_card)
+        onboarding_layout.setContentsMargins(14, 12, 14, 12)
+        onboarding_layout.setSpacing(8)
+        onboarding_title = QtWidgets.QLabel("Project Layout Setup")
+        onboarding_title.setStyleSheet("font-weight: 600; color: #d8dde5;")
+        onboarding_layout.addWidget(onboarding_title, 0)
+        self.asset_onboarding_summary = QtWidgets.QLabel("")
+        self.asset_onboarding_summary.setWordWrap(True)
+        self.asset_onboarding_summary.setStyleSheet("color: #d8dde5;")
+        onboarding_layout.addWidget(self.asset_onboarding_summary, 0)
+        self.asset_onboarding_details = QtWidgets.QLabel("")
+        self.asset_onboarding_details.setWordWrap(True)
+        self.asset_onboarding_details.setStyleSheet(muted_text_style(size_px=11))
+        onboarding_layout.addWidget(self.asset_onboarding_details, 0)
+        onboarding_actions = QtWidgets.QHBoxLayout()
+        onboarding_actions.setSpacing(8)
+        self.asset_onboarding_detect_btn = QtWidgets.QPushButton("Use Detected Layout")
+        onboarding_actions.addWidget(self.asset_onboarding_detect_btn, 0)
+        self.asset_onboarding_default_btn = QtWidgets.QPushButton("Use Default Layout")
+        onboarding_actions.addWidget(self.asset_onboarding_default_btn, 0)
+        self.asset_onboarding_merge_library_btn = QtWidgets.QToolButton()
+        self.asset_onboarding_merge_library_btn.setText("Merge Library into Assets")
+        self.asset_onboarding_merge_library_btn.setAutoRaise(True)
+        self.asset_onboarding_merge_library_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
+        self.asset_onboarding_merge_library_btn.setToolTip(
+            "Use this when source files are part of your working asset list, not a separate library."
+        )
+        onboarding_actions.addWidget(self.asset_onboarding_merge_library_btn, 0)
+        self.asset_onboarding_manual_btn = QtWidgets.QToolButton()
+        self.asset_onboarding_manual_btn.setText("Manual Map")
+        self.asset_onboarding_manual_btn.setAutoRaise(True)
+        self.asset_onboarding_manual_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
+        self.asset_onboarding_manual_btn.setToolTip(
+            "Manually assign project folders to Shots, Assets or Library."
+        )
+        onboarding_actions.addWidget(self.asset_onboarding_manual_btn, 0)
+        self.asset_onboarding_rescan_btn = QtWidgets.QToolButton()
+        self.asset_onboarding_rescan_btn.setText("Re-scan")
+        self.asset_onboarding_rescan_btn.setAutoRaise(True)
+        self.asset_onboarding_rescan_btn.setStyleSheet(tool_button_dark_style(padding="3px 8px"))
+        onboarding_actions.addWidget(self.asset_onboarding_rescan_btn, 0)
+        onboarding_actions.addStretch(1)
+        onboarding_layout.addLayout(onboarding_actions)
+        self.asset_onboarding_card.setVisible(False)
+        browser_layout.addWidget(self.asset_onboarding_card, 0)
 
         self.asset_main_split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.asset_main_split.setChildrenCollapsible(False)
@@ -244,6 +304,31 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_assets_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         assets_layout.addWidget(self.asset_assets_list, 1)
         self.asset_work_tabs.addTab(assets_tab, "Assets")
+
+        library_tab = QtWidgets.QWidget()
+        library_layout = QtWidgets.QVBoxLayout(library_tab)
+        library_layout.setContentsMargins(0, 10, 0, 0)
+        library_layout.setSpacing(10)
+        library_filter_row = QtWidgets.QHBoxLayout()
+        library_filter_row.setSpacing(8)
+        library_filter_label = QtWidgets.QLabel("Group")
+        library_filter_label.setStyleSheet(muted_text_style())
+        library_filter_row.addWidget(library_filter_label, 0)
+        self.asset_library_filter = QtWidgets.QComboBox()
+        library_filter_row.addWidget(self.asset_library_filter, 0)
+        library_filter_row.addStretch(1)
+        library_layout.addLayout(library_filter_row)
+        self.asset_library_list = QtWidgets.QListWidget()
+        self.asset_library_list.setViewMode(QtWidgets.QListView.ViewMode.IconMode)
+        self.asset_library_list.setResizeMode(QtWidgets.QListView.ResizeMode.Adjust)
+        self.asset_library_list.setMovement(QtWidgets.QListView.Movement.Static)
+        self.asset_library_list.setSpacing(12)
+        self.asset_library_list.setIconSize(QtCore.QSize(180, 110))
+        self.asset_library_list.setGridSize(QtCore.QSize(200, 150))
+        self.asset_library_list.setWordWrap(True)
+        self.asset_library_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        library_layout.addWidget(self.asset_library_list, 1)
+        self.asset_work_tabs.addTab(library_tab, "Library")
         self.asset_main_split.addWidget(entity_panel)
 
         inspector_panel = self._make_panel("Inspector", "")
@@ -355,7 +440,7 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_video_layout.addLayout(controls)
         inspector_layout.addWidget(self.asset_video_box, 1)
 
-        versions_panel = self._make_panel("Versions", "")
+        versions_panel = self._make_panel("Inventory", "")
         versions_layout = versions_panel.layout()  # type: ignore[assignment]
         versions_header = QtWidgets.QHBoxLayout()
         self.asset_context_combo = QtWidgets.QComboBox()
@@ -365,13 +450,15 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_context_combo.setCurrentText("All")
         versions_header.addWidget(self.asset_context_combo, 0)
         versions_header.addStretch(1)
-        self.asset_versions_hint = QtWidgets.QLabel("Published bundles")
-        self.asset_versions_hint.setStyleSheet(muted_text_style(size_px=11))
-        self.asset_versions_hint.setVisible(False)
-        versions_header.addWidget(self.asset_versions_hint, 0)
+        self.asset_inventory_hint = QtWidgets.QLabel("Inventory")
+        self.asset_inventory_hint.setStyleSheet(muted_text_style(size_px=11))
+        self.asset_inventory_hint.setVisible(False)
+        versions_header.addWidget(self.asset_inventory_hint, 0)
         versions_layout.addLayout(versions_header)
-        self.asset_versions_list = _AssetVersionsList()
-        versions_layout.addWidget(self.asset_versions_list, 1)
+        self.asset_inventory_list = _AssetInventoryList()
+        self.asset_versions_hint = self.asset_inventory_hint
+        self.asset_versions_list = self.asset_inventory_list
+        versions_layout.addWidget(self.asset_inventory_list, 1)
         inspector_layout.addWidget(versions_panel, 1)
 
         history_panel = self._make_panel("Notes", "Quick notes and git actions for the current entity are grouped here for now.")

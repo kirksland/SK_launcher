@@ -6,6 +6,8 @@ from PySide6 import QtGui
 
 from core.board_edit.tool_stack import extract_crop_settings
 
+DEFAULT_CROP_SETTINGS = (0.0, 0.0, 0.0, 0.0)
+
 
 def remove_override(overrides: dict[str, dict[str, object]], filename: str) -> bool:
     key = str(filename or "").strip()
@@ -31,26 +33,16 @@ def rename_override_key(
 def build_image_override(
     current: object,
     *,
-    brightness: float,
-    contrast: float,
-    saturation: float,
-    crop_left: float,
-    crop_top: float,
-    crop_right: float,
-    crop_bottom: float,
     tool_stack: list[dict[str, object]],
     exr_channel: Optional[str] = None,
     exr_gamma: Optional[float] = None,
     exr_srgb: Optional[bool] = None,
 ) -> dict[str, object]:
-    merged = dict(current) if isinstance(current, dict) else {}
-    merged["brightness"] = float(brightness)
-    merged["contrast"] = float(contrast)
-    merged["saturation"] = float(saturation)
-    merged["crop_left"] = float(crop_left)
-    merged["crop_top"] = float(crop_top)
-    merged["crop_right"] = float(crop_right)
-    merged["crop_bottom"] = float(crop_bottom)
+    merged: dict[str, object] = {}
+    if isinstance(current, dict):
+        for key in ("channel", "gamma", "srgb"):
+            if key in current:
+                merged[key] = current[key]
     merged["tool_stack"] = tool_stack
     channel_value = str(exr_channel or "").strip()
     if channel_value:
@@ -65,19 +57,9 @@ def build_image_override(
 def build_video_override(
     current: object,
     *,
-    crop_left: float,
-    crop_top: float,
-    crop_right: float,
-    crop_bottom: float,
     tool_stack: list[dict[str, object]],
 ) -> dict[str, object]:
-    merged = dict(current) if isinstance(current, dict) else {}
-    merged["crop_left"] = float(crop_left)
-    merged["crop_top"] = float(crop_top)
-    merged["crop_right"] = float(crop_right)
-    merged["crop_bottom"] = float(crop_bottom)
-    merged["tool_stack"] = tool_stack
-    return merged
+    return {"tool_stack": tool_stack}
 
 
 def commit_image_override(
@@ -86,13 +68,6 @@ def commit_image_override(
     *,
     current: object,
     effective: bool,
-    brightness: float,
-    contrast: float,
-    saturation: float,
-    crop_left: float,
-    crop_top: float,
-    crop_right: float,
-    crop_bottom: float,
     tool_stack: list[dict[str, object]],
     exr_channel: Optional[str] = None,
     exr_gamma: Optional[float] = None,
@@ -105,13 +80,6 @@ def commit_image_override(
         return remove_override(overrides, key)
     merged = build_image_override(
         current,
-        brightness=brightness,
-        contrast=contrast,
-        saturation=saturation,
-        crop_left=crop_left,
-        crop_top=crop_top,
-        crop_right=crop_right,
-        crop_bottom=crop_bottom,
         tool_stack=tool_stack,
         exr_channel=exr_channel,
         exr_gamma=exr_gamma,
@@ -128,10 +96,6 @@ def commit_video_override(
     *,
     current: object,
     effective: bool,
-    crop_left: float,
-    crop_top: float,
-    crop_right: float,
-    crop_bottom: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     key = str(filename or "").strip()
@@ -141,10 +105,6 @@ def commit_video_override(
         return remove_override(overrides, key)
     merged = build_video_override(
         current,
-        crop_left=crop_left,
-        crop_top=crop_top,
-        crop_right=crop_right,
-        crop_bottom=crop_bottom,
         tool_stack=tool_stack,
     )
     previous = overrides.get(key)
@@ -157,18 +117,12 @@ def build_exr_preview_override(
     channel: str,
     gamma: float,
     srgb: bool,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> dict[str, object]:
     return {
         "channel": str(channel).strip(),
         "gamma": float(gamma),
         "srgb": bool(srgb),
-        "brightness": float(brightness),
-        "contrast": float(contrast),
-        "saturation": float(saturation),
         "tool_stack": tool_stack,
     }
 
@@ -176,15 +130,13 @@ def build_exr_preview_override(
 def build_image_adjust_preview_override(
     current: object,
     *,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> dict[str, object]:
-    merged = dict(current) if isinstance(current, dict) else {}
-    merged["brightness"] = float(brightness)
-    merged["contrast"] = float(contrast)
-    merged["saturation"] = float(saturation)
+    merged: dict[str, object] = {}
+    if isinstance(current, dict):
+        for key in ("channel", "gamma", "srgb"):
+            if key in current:
+                merged[key] = current[key]
     merged["tool_stack"] = tool_stack
     return merged
 
@@ -217,9 +169,6 @@ def apply_exr_preview_result(
     channel: str,
     gamma: float,
     srgb: bool,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     if not apply_preview_payload_to_item(item, payload):
@@ -230,9 +179,6 @@ def apply_exr_preview_result(
         channel=channel,
         gamma=gamma,
         srgb=srgb,
-        brightness=brightness,
-        contrast=contrast,
-        saturation=saturation,
         tool_stack=tool_stack,
     )
 
@@ -245,9 +191,6 @@ def apply_image_adjust_preview_result(
     payload: object,
     effective: bool,
     current: object,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     pixmap = preview_payload_to_pixmap(payload)
@@ -272,9 +215,6 @@ def apply_image_adjust_preview_result(
         overrides,
         key,
         current=current,
-        brightness=brightness,
-        contrast=contrast,
-        saturation=saturation,
         tool_stack=tool_stack,
     )
     return True
@@ -287,9 +227,6 @@ def update_exr_preview_override(
     channel: str,
     gamma: float,
     srgb: bool,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     key = str(filename or "").strip()
@@ -300,9 +237,6 @@ def update_exr_preview_override(
         channel=channel_value,
         gamma=gamma,
         srgb=srgb,
-        brightness=brightness,
-        contrast=contrast,
-        saturation=saturation,
         tool_stack=tool_stack,
     )
     return True
@@ -313,9 +247,6 @@ def update_image_adjust_preview_override(
     filename: str,
     *,
     current: object,
-    brightness: float,
-    contrast: float,
-    saturation: float,
     tool_stack: list[dict[str, object]],
 ) -> bool:
     key = str(filename or "").strip()
@@ -323,9 +254,6 @@ def update_image_adjust_preview_override(
         return False
     overrides[key] = build_image_adjust_preview_override(
         current,
-        brightness=brightness,
-        contrast=contrast,
-        saturation=saturation,
         tool_stack=tool_stack,
     )
     return True
@@ -337,10 +265,9 @@ def apply_image_override_to_item(
     *,
     coerce_color_adjustments: Callable[[object], tuple[float, float, float]],
     tool_stack_from_override: Callable[[object], list[dict[str, object]]],
-    default_crop_settings: Callable[[], tuple[float, float, float, float]],
     tool_stack_is_effective: Callable[[object, float, float, float], bool],
-    queue_exr_display_for_item: Callable[[Any, str, float, bool, float, float, float, object], None],
-    queue_image_adjust_for_item: Callable[[Any, float, float, float, object], None],
+    queue_exr_display_for_item: Callable[[Any, str, float, bool, object], None],
+    queue_image_adjust_for_item: Callable[[Any, object], None],
 ) -> None:
     if item.scene() is None:
         return
@@ -351,7 +278,7 @@ def apply_image_override_to_item(
     if crop is not None:
         item.set_crop_norm(*crop)
     else:
-        item.set_crop_norm(*default_crop_settings())
+        item.set_crop_norm(*DEFAULT_CROP_SETTINGS)
     channel = str(override.get("channel", "")).strip()
     if channel and path.suffix.lower() == ".exr":
         gamma = float(override.get("gamma", 2.2))
@@ -361,18 +288,12 @@ def apply_image_override_to_item(
             channel,
             gamma,
             srgb,
-            brightness,
-            contrast,
-            saturation,
             tool_stack,
         )
         return
     if tool_stack_is_effective(tool_stack, brightness, contrast, saturation):
         queue_image_adjust_for_item(
             item,
-            brightness,
-            contrast,
-            saturation,
             tool_stack,
         )
 
@@ -382,7 +303,6 @@ def apply_video_override_to_item(
     override: dict[str, object],
     *,
     tool_stack_from_override: Callable[[object], list[dict[str, object]]],
-    default_crop_settings: Callable[[], tuple[float, float, float, float]],
     get_video_frame_pixmap: Callable[[Any, int, int], Any],
 ) -> None:
     if item.scene() is None:
@@ -392,7 +312,7 @@ def apply_video_override_to_item(
     if crop is not None:
         item.set_crop_norm(*crop)
     else:
-        item.set_crop_norm(*default_crop_settings())
+        item.set_crop_norm(*DEFAULT_CROP_SETTINGS)
     pixmap = get_video_frame_pixmap(item.file_path(), 0, 1024)
     if pixmap is not None:
         item.set_override_pixmap(pixmap)

@@ -25,14 +25,18 @@ from core.settings import (
     normalize_houdini_exe,
     normalize_asset_schema,
     normalize_asset_manager_projects,
+    normalize_asset_project_schemas,
     save_settings,
     settings_startup_issues,
 )
 from core.houdini_env import build_houdini_env
 from controllers.asset_manager_controller import AssetManagerController
+from controllers.app_command_controller import AppCommandController
+from controllers.app_shortcuts_controller import AppShortcutsController
 from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
-from controllers.board_controller import BoardController
+from controllers.board.command_dispatcher import BoardCommandDispatcher
+from controllers.board.controller import BoardController
 from ui.widgets.project_card import ProjectCard
 from ui.utils.styles import PALETTE, app_stylesheet, combo_dark_style, tool_button_dark_style
 
@@ -150,6 +154,7 @@ class LauncherLogPanel(QtWidgets.QFrame):
         self._entries: list[tuple[str, str, str]] = []
         self._log_path = log_path
         self._expanded_height = 220
+        self._expanded = False
         self.setStyleSheet(
             "QFrame {"
             "background: #171b21;"
@@ -157,11 +162,12 @@ class LauncherLogPanel(QtWidgets.QFrame):
             "}"
         )
         self.setMinimumHeight(0)
-        self.setMaximumHeight(0)
+        self.setMaximumHeight(self._expanded_height)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        self.hide()
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -259,12 +265,18 @@ class LauncherLogPanel(QtWidgets.QFrame):
                 self._append_html(entry)
 
     def set_expanded(self, expanded: bool) -> None:
-        self.setVisible(expanded)
-        self.setMaximumHeight(self._expanded_height if expanded else 0)
-        if expanded:
-            self.setMinimumHeight(140)
-        else:
-            self.setMinimumHeight(0)
+        self._expanded = bool(expanded)
+        self.setVisible(self._expanded)
+
+    def expanded_height(self) -> int:
+        return self._expanded_height if self._expanded else 0
+
+    def sizeHint(self) -> QtCore.QSize:
+        hint = super().sizeHint()
+        return QtCore.QSize(hint.width(), self.expanded_height())
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        return QtCore.QSize(0, 0)
 
 
 def _create_startup_splash() -> QtWidgets.QSplashScreen:
@@ -375,6 +387,10 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._asset_schema = normalize_asset_schema(
             self.settings.get("asset_schema", DEFAULT_ASSET_SCHEMA)
         )
+        self._asset_project_schemas = normalize_asset_project_schemas(
+            self.settings.get("asset_project_schemas", {})
+        )
+        self._asset_active_schema = dict(self._asset_schema)
         self.test_pipeline_root = TEST_PIPELINE_ROOT
         self._project_cache: Dict[Path, Tuple[float, List[Path], float]] = {}
         self._asset_cache: Dict[Path, Tuple[float, List[Path], float]] = {}
@@ -392,6 +408,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         outer.setSpacing(0)
 
         main_panel = QtWidgets.QWidget()
+        self._main_panel = main_panel
         layout = QtWidgets.QVBoxLayout(main_panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -406,6 +423,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         from ui.pages.settings_page import SettingsPage
         from ui.pages.board_page import BoardPage
         from ui.pages.dev_page import DevPage
+        self.command_controller = AppCommandController()
 
         self._startup_status("Loading project pages...")
         self.projects_page = ProjectsPage(self.projects_dir)
@@ -431,6 +449,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self._use_file_association,
             self._show_splash_screen,
             self._houdini_exe,
+            shortcut_commands=self.command_controller.registry.list(),
+            shortcut_overrides=self.settings.get("shortcuts", {}),
         )
         self.pages.addWidget(self.settings_page)
 
@@ -438,11 +458,10 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.pages.addWidget(self.dev_page)
         self._startup_status("Connecting controllers...")
 
-        self.log_panel = LauncherLogPanel(APP_LOG_PATH, parent=self)
+        self.log_panel = LauncherLogPanel(APP_LOG_PATH, parent=main_panel)
         self.log_panel.set_expanded(False)
         self.log_panel.load_entries(APP_LOG_BUS.entries)
         APP_LOG_BUS.entry_added.connect(self.log_panel.append_entry)
-        layout.addWidget(self.log_panel, 0)
 
         # Global media controls (bottom-right)
         self.media_group = QtWidgets.QFrame()
@@ -547,7 +566,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
             nav_buttons[4].clicked.connect(lambda: self.pages.setCurrentIndex(4))
         if len(nav_buttons) > 5:
             nav_buttons[5].clicked.connect(lambda: self.pages.setCurrentIndex(5))
-        self.log_toggle_btn.toggled.connect(self.log_panel.set_expanded)
+        self.log_toggle_btn.toggled.connect(self._set_log_panel_expanded)
 
         self._nav_clients_btn = nav_buttons[3] if len(nav_buttons) > 3 else None
         self._nav_clients_label = "Clients"
@@ -580,17 +599,29 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.asset_pages = self.asset_page.asset_pages
         self.asset_search_input = self.asset_page.asset_search_input
+        self.asset_layout_btn = self.asset_page.asset_layout_btn
         self.asset_refresh_btn = self.asset_page.asset_refresh_btn
         self.asset_auto_refresh = self.asset_page.asset_auto_refresh
+        self.asset_onboarding_card = self.asset_page.asset_onboarding_card
+        self.asset_onboarding_summary = self.asset_page.asset_onboarding_summary
+        self.asset_onboarding_details = self.asset_page.asset_onboarding_details
+        self.asset_onboarding_detect_btn = self.asset_page.asset_onboarding_detect_btn
+        self.asset_onboarding_default_btn = self.asset_page.asset_onboarding_default_btn
+        self.asset_onboarding_merge_library_btn = self.asset_page.asset_onboarding_merge_library_btn
+        self.asset_onboarding_manual_btn = self.asset_page.asset_onboarding_manual_btn
+        self.asset_onboarding_rescan_btn = self.asset_page.asset_onboarding_rescan_btn
         self.asset_path_label = self.asset_page.asset_path_label
         self.asset_grid = self.asset_page.asset_grid
         self.asset_back_btn = self.asset_page.asset_back_btn
         self.asset_details_title = self.asset_page.asset_details_title
+        self.asset_main_split = self.asset_page.asset_main_split
         self.asset_shots_filter = self.asset_page.asset_shots_filter
         self.asset_shots_size = self.asset_page.asset_shots_size
         self.asset_shots_list = self.asset_page.asset_shots_list
         self.asset_assets_filter = self.asset_page.asset_assets_filter
         self.asset_assets_list = self.asset_page.asset_assets_list
+        self.asset_library_filter = self.asset_page.asset_library_filter
+        self.asset_library_list = self.asset_page.asset_library_list
         self.asset_entity_search = self.asset_page.asset_entity_search
         self.asset_open_folder_btn = self.asset_page.asset_open_folder_btn
         self.asset_work_tabs = self.asset_page.asset_work_tabs
@@ -605,8 +636,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_fullscreen_btn = self.asset_page.asset_fullscreen_btn
         self.asset_video_slider = self.asset_page.asset_video_slider
         self.asset_context_combo = self.asset_page.asset_context_combo
-        self.asset_versions_list = self.asset_page.asset_versions_list
-        self.asset_versions_list.setContextMenuPolicy(
+        self.asset_inventory_list = self.asset_page.asset_inventory_list
+        self.asset_versions_list = self.asset_inventory_list
+        self.asset_inventory_list.setContextMenuPolicy(
             QtCore.Qt.ContextMenuPolicy.CustomContextMenu
         )
         self.asset_history_list = self.asset_page.asset_history_list
@@ -654,6 +686,29 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.board_load_btn = self.board_page.load_btn
         self.board_page.set_controller(self.board_controller)
         self.board_controller.set_project(None)
+        self._layout_overlay_panels()
+
+    def _set_log_panel_expanded(self, expanded: bool) -> None:
+        self.log_panel.set_expanded(expanded)
+        self._layout_overlay_panels()
+
+    def _layout_overlay_panels(self) -> None:
+        main_rect = self._main_panel.rect()
+        panel_height = self.log_panel.expanded_height()
+        if panel_height <= 0:
+            self.log_panel.setGeometry(0, main_rect.height(), main_rect.width(), 0)
+            return
+        bottom_height = self.log_toggle_btn.parentWidget().height()
+        y = max(0, main_rect.height() - bottom_height - panel_height)
+        self.log_panel.setGeometry(0, y, main_rect.width(), panel_height)
+        self.log_panel.raise_()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._layout_overlay_panels()
+        self.command_controller.register_dispatcher("board", BoardCommandDispatcher(self.board_controller))
+        self.shortcuts_controller = AppShortcutsController(self, self.command_controller, self.settings)
+        self.shortcuts_controller.install()
 
         self.settings_projects_dir = self.settings_page.settings_projects_dir
         self.settings_server_dir = self.settings_page.settings_server_dir
@@ -701,6 +756,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.remove_asset_btn.clicked.connect(self.remove_selected_project_from_asset_manager)
 
         self.asset_search_input.textChanged.connect(self.asset_controller.refresh_asset_manager)
+        self.asset_layout_btn.clicked.connect(self.asset_controller.reopen_layout_setup)
         self.asset_refresh_btn.clicked.connect(self.asset_controller.refresh_asset_manager)
         self.asset_auto_refresh.toggled.connect(self.asset_controller.toggle_asset_auto_refresh)
         self.asset_grid.itemClicked.connect(self.asset_controller.open_asset_details)
@@ -708,23 +764,33 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_shots_filter.currentTextChanged.connect(self.asset_controller.refresh_shots_list)
         self.asset_shots_size.currentTextChanged.connect(self.asset_controller.on_asset_shots_size_changed)
         self.asset_assets_filter.currentTextChanged.connect(self.asset_controller.refresh_assets_list)
+        self.asset_library_filter.currentTextChanged.connect(self.asset_controller.refresh_library_list)
         self.asset_entity_search.textChanged.connect(self.asset_controller.refresh_active_list)
         self.asset_open_folder_btn.clicked.connect(self.asset_controller.open_asset_project_folder)
         self.asset_work_tabs.currentChanged.connect(self.asset_controller.on_asset_tab_changed)
         self.asset_shots_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
         self.asset_assets_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
         self.asset_assets_list.customContextMenuRequested.connect(self.asset_controller.show_asset_context_menu)
+        self.asset_library_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
+        self.asset_library_list.customContextMenuRequested.connect(self.asset_controller.show_asset_context_menu)
         self.asset_prev_btn.clicked.connect(self.asset_controller.prev_preview_image)
         self.asset_next_btn.clicked.connect(self.asset_controller.next_preview_image)
         self.asset_fullscreen_btn.clicked.connect(self.asset_controller.toggle_asset_video_fullscreen)
         self.asset_context_combo.currentTextChanged.connect(self.asset_controller.update_asset_context)
-        self.asset_versions_list.itemClicked.connect(self.asset_controller.on_asset_version_clicked)
-        self.asset_versions_list.customContextMenuRequested.connect(
-            self.asset_controller.show_asset_version_context_menu
+        self.asset_inventory_list.itemClicked.connect(self.asset_controller.on_asset_inventory_clicked)
+        self.asset_inventory_list.customContextMenuRequested.connect(
+            self.asset_controller.show_asset_inventory_context_menu
         )
         self.asset_commit_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_push_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_fetch_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
+        self.asset_onboarding_detect_btn.clicked.connect(self.asset_controller.accept_detected_layout)
+        self.asset_onboarding_default_btn.clicked.connect(self.asset_controller.accept_default_layout)
+        self.asset_onboarding_merge_library_btn.clicked.connect(
+            self.asset_controller.accept_detected_layout_with_library_merged
+        )
+        self.asset_onboarding_manual_btn.clicked.connect(self.asset_controller.open_manual_layout_mapper)
+        self.asset_onboarding_rescan_btn.clicked.connect(self.asset_controller.redetect_layout)
 
         self.client_refresh_btn.clicked.connect(self.client_controller.refresh_client_catalog)
         self.client_bind_btn.clicked.connect(self.client_controller.clone_client_project)
@@ -794,6 +860,22 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._startup_status("Finishing startup...")
         QtCore.QTimer.singleShot(0, self._handle_startup_configuration)
 
+    def apply_initial_window_geometry(self) -> None:
+        screen = QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
+        if screen is None:
+            screen = self.screen()
+        if screen is None:
+            screen = QtGui.QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        margin = 40
+        target_width = min(self.width(), max(640, available.width() - margin))
+        target_height = min(self.height(), max(480, available.height() - margin))
+        self.resize(target_width, target_height)
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
 
     @staticmethod
     def _to_houdini_path(text: str) -> str:
@@ -824,6 +906,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
     def _on_main_page_changed(self, index: int) -> None:
         # Ensure board visuals/overrides are freshly applied when entering the Board page.
+        if int(index) == 1 and hasattr(self, "asset_controller") and self.asset_controller is not None:
+            QtCore.QTimer.singleShot(0, self.asset_controller.ensure_project_context_loaded)
         if int(index) == 2 and hasattr(self, "board_controller") and self.board_controller is not None:
             QtCore.QTimer.singleShot(0, self.board_controller.ensure_board_loaded)
 
@@ -858,6 +942,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         use_assoc = self.settings_use_assoc.isChecked()
         show_splash_screen = self.settings_show_splash.isChecked()
         houdini_exe = normalize_houdini_exe(self.settings_houdini_exe.text())
+        resolved_projects_dir = Path(projects_dir) if projects_dir else DEFAULT_PROJECTS_DIR
         backend_label = self.settings_video_backend.currentText().strip().lower()
         if backend_label == "opencv":
             video_backend = "opencv"
@@ -870,7 +955,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.settings.update(
             {
-                "projects_dir": projects_dir,
+                "projects_dir": str(resolved_projects_dir),
                 "server_repo_dir": server_repo_dir,
                 "template_hip": template_hip,
                 "new_hip_pattern": pattern,
@@ -879,11 +964,12 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 "houdini_exe": houdini_exe,
                 "video_backend": video_backend,
                 "asset_manager_projects": list(self._asset_manager_projects),
+                "shortcuts": self.settings_page.shortcut_overrides(),
             }
         )
         save_settings(self.settings)
+        self.shortcuts_controller.reload_settings(self.settings)
 
-        self.projects_dir = Path(projects_dir) if projects_dir else DEFAULT_PROJECTS_DIR
         self.server_repo_dir = Path(server_repo_dir) if server_repo_dir else Path(DEFAULT_SETTINGS["server_repo_dir"])
         self._template_hip = Path(template_hip) if template_hip else DEFAULT_TEMPLATE_HIP
         self._new_hip_pattern = pattern or "{projectName}_001.hipnc"
@@ -892,13 +978,32 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._houdini_exe = houdini_exe
         self._video_backend_pref = video_backend
 
-        self.path_label.setText(f"Projects: {self.projects_dir}")
-        self.project_controller.refresh_projects()
-        self.asset_controller.refresh_asset_manager()
-        self.project_controller.refresh_project_watch_paths()
-        self.asset_controller.refresh_asset_watch_paths()
+        self.apply_projects_dir(resolved_projects_dir, persist=False, sync_settings_field=False)
         self._is_first_run = False
         self.settings_page.set_startup_context(False)
+        self._refresh_settings_validation()
+
+    def apply_projects_dir(
+        self,
+        directory: Path,
+        *,
+        persist: bool,
+        sync_settings_field: bool,
+    ) -> None:
+        self.projects_dir = Path(directory)
+        self.settings["projects_dir"] = str(self.projects_dir)
+        if sync_settings_field and hasattr(self, "settings_projects_dir"):
+            self.settings_projects_dir.blockSignals(True)
+            self.settings_projects_dir.setText(str(self.projects_dir))
+            self.settings_projects_dir.blockSignals(False)
+        if persist:
+            save_settings(self.settings)
+
+        self.path_label.setText(f"Projects: {self.projects_dir}")
+        self.project_controller.refresh_projects()
+        self.project_controller.refresh_project_watch_paths()
+        self.asset_controller.refresh_asset_manager()
+        self.asset_controller.refresh_asset_watch_paths()
         self._refresh_settings_validation()
 
     def _handle_startup_configuration(self) -> None:
@@ -951,6 +1056,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         )
         if directory:
             self.settings_projects_dir.setText(directory)
+            self.apply_projects_dir(Path(directory), persist=False, sync_settings_field=False)
 
     def _browse_settings_server_dir(self) -> None:
         directory = QtWidgets.QFileDialog.getExistingDirectory(
@@ -1212,6 +1318,7 @@ def main() -> None:
 
         window = LauncherWindow(startup_status=update_splash)
         window.show()
+        window.apply_initial_window_geometry()
         if splash is not None:
             splash.finish(window)
         app.exec()

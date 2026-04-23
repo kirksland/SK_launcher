@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui
 
-from tools.board_tools.image import apply_image_tool_stack, build_bcs_stack, normalize_tool_stack
+from tools.board_tools.image import apply_image_tool_stack, normalize_tool_stack
 
 try:
     import cv2  # type: ignore
@@ -149,9 +149,6 @@ class ExrChannelPreviewWorker(QtCore.QObject):
         channel: str,
         gamma: float,
         srgb: bool,
-        brightness: float = 0.0,
-        contrast: float = 1.0,
-        saturation: float = 1.0,
         max_dim: int = 0,
         tool_stack: object = None,
     ) -> None:
@@ -160,9 +157,6 @@ class ExrChannelPreviewWorker(QtCore.QObject):
         self._channel = channel
         self._gamma = max(0.1, float(gamma))
         self._srgb = bool(srgb)
-        self._brightness = float(brightness)
-        self._contrast = max(0.0, float(contrast))
-        self._saturation = max(0.0, float(saturation))
         self._max_dim = int(max_dim)
         self._tool_stack = normalize_tool_stack(tool_stack)
 
@@ -233,8 +227,7 @@ class ExrChannelPreviewWorker(QtCore.QObject):
                 rgb = np.stack([img8, img8, img8], axis=-1)
             else:
                 rgb = (norm * 255.0).astype(np.uint8)
-            stack = self._tool_stack or build_bcs_stack(self._brightness, self._contrast, self._saturation)
-            rgb = apply_image_tool_stack(rgb, stack)
+            rgb = apply_image_tool_stack(rgb, self._tool_stack)
             rgb = _downscale_rgb_for_preview(rgb, self._max_dim)
             payload = (int(rgb.shape[1]), int(rgb.shape[0]), rgb.tobytes())
             self.finished.emit(True, self._channel, payload, None)
@@ -248,17 +241,11 @@ class ImageAdjustPreviewWorker(QtCore.QObject):
     def __init__(
         self,
         path: Path,
-        brightness: float,
-        contrast: float,
-        saturation: float,
         max_dim: int = 0,
         tool_stack: object = None,
     ) -> None:
         super().__init__()
         self._path = path
-        self._brightness = float(brightness)
-        self._contrast = max(0.0, float(contrast))
-        self._saturation = max(0.0, float(saturation))
         self._max_dim = int(max_dim)
         self._tool_stack = normalize_tool_stack(tool_stack)
 
@@ -314,8 +301,7 @@ class ImageAdjustPreviewWorker(QtCore.QObject):
                 rgb = img
         else:
             rgb = img
-        stack = self._tool_stack or build_bcs_stack(self._brightness, self._contrast, self._saturation)
-        rgb = apply_image_tool_stack(rgb, stack)
+        rgb = apply_image_tool_stack(rgb, self._tool_stack)
         rgb = _downscale_rgb_for_preview(rgb, self._max_dim)
         payload = (int(rgb.shape[1]), int(rgb.shape[0]), rgb.tobytes())
         self.finished.emit(True, payload, None)

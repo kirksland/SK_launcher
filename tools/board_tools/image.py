@@ -17,20 +17,6 @@ def register_tool(tool_id: str, apply_fn: ToolApplyFn) -> None:
     _TOOL_REGISTRY[key] = apply_fn
 
 
-def build_bcs_stack(brightness: float, contrast: float, saturation: float) -> list[dict[str, Any]]:
-    return [
-        {
-            "id": "bcs",
-            "enabled": True,
-            "settings": {
-                "brightness": float(brightness),
-                "contrast": float(contrast),
-                "saturation": float(saturation),
-            },
-        }
-    ]
-
-
 def normalize_tool_stack(stack: object) -> list[dict[str, Any]]:
     if not isinstance(stack, list):
         return []

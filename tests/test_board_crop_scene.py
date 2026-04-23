@@ -2,7 +2,7 @@ import unittest
 
 from PySide6 import QtCore
 
-from core.board_edit.crop_scene import (
+from tools.board_tools.crop.scene import (
     apply_crop_to_item,
     begin_crop_handle_drag,
     crop_handles_active,
