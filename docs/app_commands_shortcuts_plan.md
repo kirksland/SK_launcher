@@ -48,6 +48,8 @@ Exemples:
 ```text
 board.layout.auto
 board.view.fit
+board.group.create
+board.group.ungroup
 board.focus.exit
 project.open_selected
 asset.copy_path
@@ -183,6 +185,8 @@ Ajouter les commandes de base:
 - `board.layout.auto` -> default `L`
 - `board.view.fit` -> default `F`
 - `board.view.toggle_grid` -> default `G`
+- `board.group.create` -> default `Ctrl+G`
+- `board.group.ungroup` -> default `Ctrl+Shift+G`
 - `board.focus.exit` -> default `Escape`
 - `app.command_palette.open` -> default `Ctrl+K`
 

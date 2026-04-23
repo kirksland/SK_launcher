@@ -129,7 +129,12 @@ class BoardSceneViewController:
             y = col_heights[col_idx]
             item.setPos(item.pos() + QtCore.QPointF(x - rect.left(), y - rect.top()))
             col_heights[col_idx] = y + rect.height() + spacing
-        board._commit_scene_mutation(history=True, update_groups=True)
+        board._commit_scene_mutation(
+            kind="layout_selection_grid",
+            history_label="Layout selection",
+            history=True,
+            update_groups=True,
+        )
 
     def update_view_quality(self) -> None:
         board = self.board

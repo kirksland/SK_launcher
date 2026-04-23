@@ -37,6 +37,8 @@ class AppCommandTests(unittest.TestCase):
 
         self.assertEqual("L", registry.require("board.layout.auto").default_shortcuts[0])
         self.assertEqual("F", registry.require("board.view.fit").default_shortcuts[0])
+        self.assertEqual("Ctrl+G", registry.require("board.group.create").default_shortcuts[0])
+        self.assertEqual("Ctrl+Shift+G", registry.require("board.group.ungroup").default_shortcuts[0])
         self.assertEqual("Escape", registry.require("board.focus.exit").default_shortcuts[0])
 
     def test_command_registry_registers_and_lists_by_domain(self) -> None:
@@ -136,6 +138,17 @@ class AppCommandTests(unittest.TestCase):
         self.assertTrue(result.handled)
         self.assertFalse(board.w.board_page.grid_toggle.isChecked())
 
+    def test_board_command_dispatcher_executes_group_commands(self) -> None:
+        board = _FakeBoardController()
+        dispatcher = BoardCommandDispatcher(board)
+
+        group_result = dispatcher.execute_command("board.group.create")
+        ungroup_result = dispatcher.execute_command("board.group.ungroup")
+
+        self.assertTrue(group_result.handled)
+        self.assertTrue(ungroup_result.handled)
+        self.assertEqual(["group", "ungroup"], board.calls)
+
     def test_app_command_controller_reports_missing_dispatcher(self) -> None:
         controller = AppCommandController()
 
@@ -179,6 +192,12 @@ class _FakeBoardController:
 
     def exit_focus_mode(self) -> None:
         self.calls.append("exit_focus")
+
+    def add_group(self) -> None:
+        self.calls.append("group")
+
+    def ungroup_selected(self) -> None:
+        self.calls.append("ungroup")
 
 
 if __name__ == "__main__":

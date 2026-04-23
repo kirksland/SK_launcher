@@ -17,6 +17,10 @@ class BoardCommandDispatcher:
             return self._execute(command_id, "fit_view")
         if command_id == "board.view.toggle_grid":
             return self._toggle_grid(command_id)
+        if command_id == "board.group.create":
+            return self._execute(command_id, "add_group")
+        if command_id == "board.group.ungroup":
+            return self._execute(command_id, "ungroup_selected")
         if command_id == "board.focus.exit":
             return self._execute(command_id, "exit_focus_mode")
         return CommandResult(command_id, handled=False, message="Unknown board command.")

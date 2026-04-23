@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
-from core.board_actions import BoardAction, BoardMutationResult
+from core.board_actions import BoardAction, BoardMutationHooks, BoardMutationResult, commit_board_action
 from core.board_edit.context import BoardEditContext
 from core.board_edit.media_runtime import SequencePlaybackRuntime, VideoPlaybackRuntime
 from core.board_edit.workers import UiBridge
@@ -130,9 +130,11 @@ class BoardController:
         self._edit_preview_fast_dim: int = 640
         self._edit_preview_full_dim: int = 1280
         self._edit_exr_preview_busy: bool = False
+        self._edit_exr_preview_request_key: Optional[str] = None
         self._edit_exr_preview_pending_channel: Optional[str] = None
         self._edit_exr_preview_pending_max_dim: int = 0
         self._edit_image_preview_busy: bool = False
+        self._edit_image_preview_request_key: Optional[str] = None
         self._edit_image_preview_pending_path: Optional[Path] = None
         self._edit_image_preview_pending_max_dim: int = 0
         self._image_exr_display_overrides: dict[str, dict[str, object]] = {}
@@ -339,13 +341,16 @@ class BoardController:
     def _commit_scene_mutation(
         self,
         *,
+        kind: str = "scene_mutation",
+        history_label: str | None = None,
         history: bool = True,
         save: bool = False,
         reveal_items: Optional[list[QtWidgets.QGraphicsItem]] = None,
         update_groups: bool = True,
     ) -> dict:
         action = BoardAction(
-            kind="scene_mutation",
+            kind=kind,
+            history_label=history_label,
             affects_history=history,
             should_save=save,
             update_groups=update_groups,
@@ -359,28 +364,22 @@ class BoardController:
         *,
         reveal_items: Optional[list[QtWidgets.QGraphicsItem]] = None,
     ) -> BoardMutationResult:
-        if action.update_groups:
-            self._schedule_group_tree_update()
-        state = self._sync_board_state_from_scene()
-        self._refresh_scene_workspace()
-        self._dirty = True
-        history_scheduled = False
-        if action.affects_history:
-            self._schedule_history_snapshot()
-            history_scheduled = True
-        if reveal_items:
-            self._reveal_scene_items(reveal_items)
-        saved = False
-        if action.should_save:
-            self.save_board()
-            saved = True
-        return BoardMutationResult(
-            action=action,
-            state=state,
-            dirty=True,
-            history_scheduled=history_scheduled,
-            saved=saved,
+        return commit_board_action(
+            action,
+            BoardMutationHooks(
+                sync_state=self._sync_board_state_from_scene,
+                refresh_workspace=self._refresh_scene_workspace,
+                mark_dirty=self._mark_board_dirty,
+                schedule_history=self._schedule_history_snapshot,
+                schedule_groups=self._schedule_group_tree_update,
+                reveal_items=self._reveal_scene_items,
+                save=self.save_board,
+            ),
+            reveal_items=reveal_items,
         )
+
+    def _mark_board_dirty(self) -> None:
+        self._dirty = True
 
     def begin_scene_interaction(self) -> None:
         self._scene_interaction_depth += 1

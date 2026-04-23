@@ -1,25 +1,12 @@
 from __future__ import annotations
 
-import json
 from typing import Optional
+
+from .migrations import migrate_board_payload
 
 
 def clone_payload(payload: Optional[dict]) -> dict:
-    if not isinstance(payload, dict):
-        return {"items": [], "image_display_overrides": {}}
-    try:
-        cloned = json.loads(json.dumps(payload))
-    except Exception:
-        cloned = {"items": [], "image_display_overrides": {}}
-    if not isinstance(cloned, dict):
-        return {"items": [], "image_display_overrides": {}}
-    items = cloned.get("items", [])
-    if not isinstance(items, list):
-        cloned["items"] = []
-    overrides = cloned.get("image_display_overrides", {})
-    if not isinstance(overrides, dict):
-        cloned["image_display_overrides"] = {}
-    return cloned
+    return migrate_board_payload(payload)
 
 
 def payload_item_count(payload: object) -> int:

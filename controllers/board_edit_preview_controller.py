@@ -6,6 +6,7 @@ from typing import Optional
 from PySide6 import QtCore
 
 from core.board_edit.workers import ExrChannelPreviewWorker, ExrInfoWorker, ImageAdjustPreviewWorker
+from core.board_preview import PreviewRequest
 from core.board_scene.items import BoardImageItem
 from core.board_state import (
     apply_exr_preview_result,
@@ -149,6 +150,18 @@ class BoardEditPreviewController:
         msg = str(error or "Failed to render channel.")
         self.w.board_page.edit_footer.setText(msg)
 
+    def handle_exr_preview_finished_if_current(
+        self,
+        request_key: str,
+        success: bool,
+        channel: str,
+        payload: object,
+        error: object,
+    ) -> None:
+        if request_key != getattr(self.board, "_edit_exr_preview_request_key", None):
+            return
+        self.handle_exr_preview_finished(success, channel, payload, error)
+
     def handle_image_adjust_preview_finished(self, success: bool, payload: object, error: object) -> None:
         board = self.board
         if success:
@@ -179,6 +192,17 @@ class BoardEditPreviewController:
                     return
         msg = str(error or "Failed to render image adjustments.")
         self.w.board_page.edit_footer.setText(msg)
+
+    def handle_image_adjust_preview_finished_if_current(
+        self,
+        request_key: str,
+        success: bool,
+        payload: object,
+        error: object,
+    ) -> None:
+        if request_key != getattr(self.board, "_edit_image_preview_request_key", None):
+            return
+        self.handle_image_adjust_preview_finished(success, payload, error)
 
     def load_exr_channels_into_panel(self, path: Path) -> None:
         worker = ExrInfoWorker(path)
@@ -245,20 +269,44 @@ class BoardEditPreviewController:
             board._edit_exr_preview_pending_channel = str(channel)
             board._edit_exr_preview_pending_max_dim = int(max_dim)
             return
+        tool_stack = board.current_edit_tool_stack()
+        request = PreviewRequest.from_path(
+            kind="exr_channel",
+            media_kind="image",
+            source_path=board._edit_exr_path,
+            settings={
+                "channel": channel,
+                "gamma": board._edit_exr_gamma,
+                "srgb": board._edit_exr_srgb,
+                "max_dim": int(max_dim),
+                "tool_stack": tool_stack,
+            },
+        )
         worker = ExrChannelPreviewWorker(
             board._edit_exr_path,
             channel,
             board._edit_exr_gamma,
             board._edit_exr_srgb,
             int(max_dim),
-            board.current_edit_tool_stack(),
+            tool_stack,
         )
         thread = QtCore.QThread(self.w)
         worker.moveToThread(thread)
         board._edit_exr_preview_busy = True
+        board._edit_exr_preview_request_key = request.key
         board._edit_exr_thread = thread
         board._edit_exr_worker = worker
-        worker.finished.connect(board._ui_bridge.on_exr_preview_finished)
+        worker.finished.connect(
+            lambda success, finished_channel, payload, error, request_key=request.key: (
+                self.handle_exr_preview_finished_if_current(
+                    request_key,
+                    success,
+                    finished_channel,
+                    payload,
+                    error,
+                )
+            )
+        )
         worker.finished.connect(thread.quit)
         thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
@@ -271,6 +319,7 @@ class BoardEditPreviewController:
         board._edit_exr_preview_busy = False
         board._edit_exr_thread = None
         board._edit_exr_worker = None
+        board._edit_exr_preview_request_key = None
         pending_channel = board._edit_exr_preview_pending_channel
         pending_dim = board._edit_exr_preview_pending_max_dim
         board._edit_exr_preview_pending_channel = None
@@ -321,17 +370,34 @@ class BoardEditPreviewController:
             board._edit_image_preview_pending_path = path
             board._edit_image_preview_pending_max_dim = int(max_dim)
             return
+        tool_stack = board.current_edit_tool_stack()
+        request = PreviewRequest.from_path(
+            kind="image_adjust",
+            media_kind="image",
+            source_path=path,
+            settings={"max_dim": int(max_dim), "tool_stack": tool_stack},
+        )
         worker = ImageAdjustPreviewWorker(
             path,
             int(max_dim),
-            board.current_edit_tool_stack(),
+            tool_stack,
         )
         thread = QtCore.QThread(self.w)
         worker.moveToThread(thread)
         board._edit_image_preview_busy = True
+        board._edit_image_preview_request_key = request.key
         board._edit_image_thread = thread
         board._edit_image_worker = worker
-        worker.finished.connect(board._handle_image_adjust_preview_finished)
+        worker.finished.connect(
+            lambda success, payload, error, request_key=request.key: (
+                self.handle_image_adjust_preview_finished_if_current(
+                    request_key,
+                    success,
+                    payload,
+                    error,
+                )
+            )
+        )
         worker.finished.connect(thread.quit)
         thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
@@ -344,6 +410,7 @@ class BoardEditPreviewController:
         board._edit_image_preview_busy = False
         board._edit_image_thread = None
         board._edit_image_worker = None
+        board._edit_image_preview_request_key = None
         pending_path = board._edit_image_preview_pending_path
         pending_dim = board._edit_image_preview_pending_max_dim
         board._edit_image_preview_pending_path = None

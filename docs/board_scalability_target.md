@@ -319,7 +319,11 @@ On est deja sur une bonne base:
 - `BoardToolSceneHost`
 - `core.board_state`
 - `core.board_scene`
+- `core.board_actions` avec pipeline commun de mutation
+- `core.board_preview.PreviewRequest` pour identifier les previews
+- migrations explicites de payload board via `core.board_state.migrations`
+- commandes/raccourcis globaux via `core.commands`
 - widgets board extraits
 - tests sur les briques pures
 
-La prochaine marche n'est donc pas un gros refacto esthetique. La prochaine marche, c'est de poser les contrats d'execution: tools, mutations, preview, state.
+La prochaine marche n'est donc pas un gros refacto esthetique. La prochaine marche, c'est de continuer a connecter les surfaces encore manuelles aux contrats d'execution deja poses: groupage history des longues interactions, runtime preview plus centralise, migrations futures, et UI tool panels plus generes.

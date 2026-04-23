@@ -34,6 +34,20 @@ DEFAULT_APP_COMMANDS: tuple[AppCommand, ...] = (
         default_shortcuts=("G",),
     ),
     AppCommand(
+        id="board.group.create",
+        label="Group Selection",
+        domain="board",
+        scope="board",
+        default_shortcuts=("Ctrl+G",),
+    ),
+    AppCommand(
+        id="board.group.ungroup",
+        label="Ungroup Selection",
+        domain="board",
+        scope="board",
+        default_shortcuts=("Ctrl+Shift+G",),
+    ),
+    AppCommand(
         id="board.focus.exit",
         label="Exit Board Focus",
         domain="board",

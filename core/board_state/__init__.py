@@ -25,11 +25,13 @@ from .overrides import (
     update_exr_preview_override,
     update_image_adjust_preview_override,
 )
+from .migrations import BOARD_SCHEMA_VERSION, migrate_board_payload
 from .payload import clone_payload, parse_image_display_overrides, payload_item_count, sync_board_state_overrides
 from .rebuild import build_group_item, build_scene_item_from_entry
 
 __all__ = [
     "ApplyPayloadState",
+    "BOARD_SCHEMA_VERSION",
     "apply_pending_groups_to_scene",
     "build_group_item",
     "apply_exr_preview_result",
@@ -45,6 +47,7 @@ __all__ = [
     "clone_payload",
     "commit_image_override",
     "commit_video_override",
+    "migrate_board_payload",
     "parse_image_display_overrides",
     "partition_payload_entries",
     "payload_item_count",

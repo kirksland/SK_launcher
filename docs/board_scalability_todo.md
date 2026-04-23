@@ -18,23 +18,23 @@ Cette todo suit la transition du board vers une architecture vraiment scalable. 
 
 - [x] Ajouter un objet `BoardAction`.
 - [x] Ajouter un premier service de commit de mutation board.
-- [ ] Faire passer les mutations simples par ce service: move, delete, group, rename.
-- [ ] Brancher history, dirty state, group refresh et save via le pipeline commun.
+- [x] Faire passer les mutations simples par ce service: move, delete, group, rename.
+- [x] Brancher history, dirty state, group refresh et save via le pipeline commun.
 - [ ] Grouper les interactions longues en une seule mutation historique.
 
 ## Phase 3. Preview Runtime
 
-- [ ] Ajouter un objet `PreviewRequest`.
-- [ ] Donner un id/hash aux previews.
-- [ ] Ignorer les resultats de previews obsoletes.
+- [x] Ajouter un objet `PreviewRequest`.
+- [x] Donner un id/hash aux previews.
+- [x] Ignorer les resultats de previews obsoletes.
 - [ ] Centraliser debounce/cancel/replace.
 - [ ] Ajouter un busy/pending state fiable.
 
 ## Phase 4. Board State Et Migrations
 
-- [ ] Ajouter une version de schema au payload board.
-- [ ] Creer `core/board_state/migrations.py`.
-- [ ] Tester les migrations d'anciens payloads vers le format courant.
+- [x] Ajouter une version de schema au payload board.
+- [x] Creer `core/board_state/migrations.py`.
+- [x] Tester les migrations d'anciens payloads vers le format courant.
 - [ ] Documenter le contrat save/load.
 - [ ] Verifier que les nouveaux saves restent centres sur `tool_stack`.
 

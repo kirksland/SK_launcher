@@ -42,7 +42,12 @@ class BoardGroupActionsController:
             items=items,
         ) is None:
             return
-        self.board._commit_scene_mutation(history=False, update_groups=True)
+        self.board._commit_scene_mutation(
+            kind="group_selection",
+            history_label="Group selection",
+            history=True,
+            update_groups=True,
+        )
 
     def ungroup_selected(self) -> None:
         groups = [i for i in self.board._scene.selectedItems() if isinstance(i, BoardGroupItem)]
@@ -50,7 +55,12 @@ class BoardGroupActionsController:
             self.board._notify("Select a group to ungroup.")
             return
         ungroup_items(self.board._scene, groups)
-        self.board._commit_scene_mutation(history=False, update_groups=True)
+        self.board._commit_scene_mutation(
+            kind="ungroup_selection",
+            history_label="Ungroup selection",
+            history=True,
+            update_groups=True,
+        )
 
     def try_add_item_to_group(
         self, item: QtWidgets.QGraphicsItem, scene_pos: Optional[QtCore.QPointF]
@@ -58,7 +68,12 @@ class BoardGroupActionsController:
         if scene_pos is None:
             scene_pos = item.sceneBoundingRect().center()
         if try_add_item_to_groups(item, self.groups(), scene_pos):
-            self.board._commit_scene_mutation(history=True, update_groups=True)
+            self.board._commit_scene_mutation(
+                kind="add_item_to_group",
+                history_label="Add item to group",
+                history=True,
+                update_groups=True,
+            )
 
     def handle_item_drop(self, items: list[QtWidgets.QGraphicsItem]) -> None:
         moved = [
@@ -75,11 +90,21 @@ class BoardGroupActionsController:
 
     def remove_selected_from_groups(self) -> None:
         if remove_items_from_groups(self.board._scene.selectedItems(), self.groups()):
-            self.board._commit_scene_mutation(history=True, update_groups=True)
+            self.board._commit_scene_mutation(
+                kind="remove_from_group",
+                history_label="Remove from group",
+                history=True,
+                update_groups=True,
+            )
 
     def add_selected_items_to_group_ref(self, group: BoardGroupItem) -> None:
         if add_selected_items_to_group(group, self.board._scene.selectedItems()):
-            self.board._commit_scene_mutation(history=True, update_groups=True)
+            self.board._commit_scene_mutation(
+                kind="add_selection_to_group",
+                history_label="Add selection to group",
+                history=True,
+                update_groups=True,
+            )
 
     def select_group_members(self, group_item: BoardGroupItem) -> None:
         select_group_members(self.board._scene.selectedItems(), group_item)

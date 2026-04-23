@@ -3,6 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from core.board_io import backup_board_payload, board_path, load_board_payload, save_board_payload
+from core.board_state.migrations import BOARD_SCHEMA_VERSION
 
 
 class BoardIoTests(unittest.TestCase):
@@ -35,7 +36,14 @@ class BoardIoTests(unittest.TestCase):
         loaded = load_board_payload(root)
 
         self.assertEqual(saved_path, root / ".skyforge_board.json")
-        self.assertEqual(loaded, payload)
+        self.assertEqual(
+            loaded,
+            {
+                "items": [{"type": "note", "text": "hello"}],
+                "image_display_overrides": {},
+                "schema_version": BOARD_SCHEMA_VERSION,
+            },
+        )
 
     def test_load_board_payload_returns_none_for_missing_or_invalid_payload(self) -> None:
         root = self._make_case_dir("board_io_invalid")
