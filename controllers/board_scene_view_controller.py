@@ -87,7 +87,7 @@ class BoardSceneViewController:
         margins = 80
         view.ensureVisible(rect.adjusted(-margins, -margins, margins, margins))
 
-    def layout_selection_grid(self) -> None:
+    def layout_selection_grid(self, *, commit: bool = True) -> None:
         board = self.board
         items = [i for i in board._scene.selectedItems() if isinstance(i, QtWidgets.QGraphicsItem)]
         if not items:
@@ -129,12 +129,13 @@ class BoardSceneViewController:
             y = col_heights[col_idx]
             item.setPos(item.pos() + QtCore.QPointF(x - rect.left(), y - rect.top()))
             col_heights[col_idx] = y + rect.height() + spacing
-        board._commit_scene_mutation(
-            kind="layout_selection_grid",
-            history_label="Layout selection",
-            history=True,
-            update_groups=True,
-        )
+        if commit:
+            board._commit_scene_mutation(
+                kind="layout_selection_grid",
+                history_label="Layout selection",
+                history=True,
+                update_groups=True,
+            )
 
     def update_view_quality(self) -> None:
         board = self.board

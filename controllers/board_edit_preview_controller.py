@@ -158,7 +158,8 @@ class BoardEditPreviewController:
         payload: object,
         error: object,
     ) -> None:
-        if request_key != getattr(self.board, "_edit_exr_preview_request_key", None):
+        runtime = getattr(self.board, "_edit_exr_preview_runtime", None)
+        if runtime is not None and not runtime.is_current(request_key):
             return
         self.handle_exr_preview_finished(success, channel, payload, error)
 
@@ -200,7 +201,8 @@ class BoardEditPreviewController:
         payload: object,
         error: object,
     ) -> None:
-        if request_key != getattr(self.board, "_edit_image_preview_request_key", None):
+        runtime = getattr(self.board, "_edit_image_preview_runtime", None)
+        if runtime is not None and not runtime.is_current(request_key):
             return
         self.handle_image_adjust_preview_finished(success, payload, error)
 
@@ -265,10 +267,6 @@ class BoardEditPreviewController:
         board = self.board
         if board._edit_exr_path is None:
             return
-        if board._edit_exr_preview_busy:
-            board._edit_exr_preview_pending_channel = str(channel)
-            board._edit_exr_preview_pending_max_dim = int(max_dim)
-            return
         tool_stack = board.current_edit_tool_stack()
         request = PreviewRequest.from_path(
             kind="exr_channel",
@@ -282,6 +280,10 @@ class BoardEditPreviewController:
                 "tool_stack": tool_stack,
             },
         )
+        if not board._edit_exr_preview_runtime.start_or_queue(request):
+            board._edit_exr_preview_pending_channel = str(channel)
+            board._edit_exr_preview_pending_max_dim = int(max_dim)
+            return
         worker = ExrChannelPreviewWorker(
             board._edit_exr_path,
             channel,
@@ -320,11 +322,12 @@ class BoardEditPreviewController:
         board._edit_exr_thread = None
         board._edit_exr_worker = None
         board._edit_exr_preview_request_key = None
+        pending_request = board._edit_exr_preview_runtime.finish()
         pending_channel = board._edit_exr_preview_pending_channel
         pending_dim = board._edit_exr_preview_pending_max_dim
         board._edit_exr_preview_pending_channel = None
         board._edit_exr_preview_pending_max_dim = 0
-        if board._edit_exr_path is not None and pending_channel:
+        if pending_request is not None and board._edit_exr_path is not None and pending_channel:
             self.queue_exr_channel_preview(pending_channel, max_dim=pending_dim)
 
     def queue_exr_display_for_item(
@@ -366,10 +369,6 @@ class BoardEditPreviewController:
 
     def queue_image_adjust_preview(self, path: Path, max_dim: int = 0) -> None:
         board = self.board
-        if board._edit_image_preview_busy:
-            board._edit_image_preview_pending_path = path
-            board._edit_image_preview_pending_max_dim = int(max_dim)
-            return
         tool_stack = board.current_edit_tool_stack()
         request = PreviewRequest.from_path(
             kind="image_adjust",
@@ -377,6 +376,10 @@ class BoardEditPreviewController:
             source_path=path,
             settings={"max_dim": int(max_dim), "tool_stack": tool_stack},
         )
+        if not board._edit_image_preview_runtime.start_or_queue(request):
+            board._edit_image_preview_pending_path = path
+            board._edit_image_preview_pending_max_dim = int(max_dim)
+            return
         worker = ImageAdjustPreviewWorker(
             path,
             int(max_dim),
@@ -411,11 +414,12 @@ class BoardEditPreviewController:
         board._edit_image_thread = None
         board._edit_image_worker = None
         board._edit_image_preview_request_key = None
+        pending_request = board._edit_image_preview_runtime.finish()
         pending_path = board._edit_image_preview_pending_path
         pending_dim = board._edit_image_preview_pending_max_dim
         board._edit_image_preview_pending_path = None
         board._edit_image_preview_pending_max_dim = 0
-        if pending_path is not None and board._edit_image_path is not None:
+        if pending_request is not None and pending_path is not None and board._edit_image_path is not None:
             self.queue_image_adjust_preview(pending_path, max_dim=pending_dim)
 
     def queue_image_adjust_for_item(

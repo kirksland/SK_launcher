@@ -1,6 +1,12 @@
 import unittest
 
-from core.board_actions import BoardAction, BoardMutationHooks, BoardMutationResult, commit_board_action
+from core.board_actions import (
+    BoardAction,
+    BoardInteractionSession,
+    BoardMutationHooks,
+    BoardMutationResult,
+    commit_board_action,
+)
 
 
 class BoardActionTests(unittest.TestCase):
@@ -82,6 +88,22 @@ class BoardActionTests(unittest.TestCase):
         self.assertEqual(calls, ["sync", "refresh", "dirty"])
         self.assertFalse(result.history_scheduled)
         self.assertFalse(result.saved)
+
+    def test_board_interaction_session_groups_nested_interactions(self) -> None:
+        session = BoardInteractionSession()
+
+        session.begin(kind="move_selection", history_label="Move selection")
+        session.begin(kind="ignored", history_label="Ignored")
+
+        self.assertIsNone(session.end_action())
+        action = session.end_action(history=True, update_groups=False)
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual("move_selection", action.kind)
+        self.assertEqual("Move selection", action.history_label)
+        self.assertTrue(action.affects_history)
+        self.assertFalse(action.update_groups)
 
 
 if __name__ == "__main__":

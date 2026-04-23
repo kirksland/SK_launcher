@@ -8,10 +8,17 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
-from core.board_actions import BoardAction, BoardMutationHooks, BoardMutationResult, commit_board_action
+from core.board_actions import (
+    BoardAction,
+    BoardInteractionSession,
+    BoardMutationHooks,
+    BoardMutationResult,
+    commit_board_action,
+)
 from core.board_edit.context import BoardEditContext
 from core.board_edit.media_runtime import SequencePlaybackRuntime, VideoPlaybackRuntime
 from core.board_edit.workers import UiBridge
+from core.board_preview import PreviewRuntimeState
 from core.board_edit.session import EditSessionState
 from core.board_apply_runtime import BoardApplyRuntime
 from core.board_io import backup_board_payload, board_path, load_board_payload, save_board_payload
@@ -86,6 +93,7 @@ class BoardController:
         self._apply_runtime = BoardApplyRuntime(self.w, self._apply_state, self._apply_payload_batch)
         self._legacy_payload = BoardLegacyPayloadController(self)
         self._scene_interaction_depth = 0
+        self._scene_interaction = BoardInteractionSession()
         self._convert_thread: Optional[QtCore.QThread] = None
         self._convert_worker: Optional[VideoToSequenceWorker] = None
         self._convert_dialog: Optional[QtWidgets.QProgressDialog] = None
@@ -130,10 +138,12 @@ class BoardController:
         self._edit_preview_fast_dim: int = 640
         self._edit_preview_full_dim: int = 1280
         self._edit_exr_preview_busy: bool = False
+        self._edit_exr_preview_runtime = PreviewRuntimeState()
         self._edit_exr_preview_request_key: Optional[str] = None
         self._edit_exr_preview_pending_channel: Optional[str] = None
         self._edit_exr_preview_pending_max_dim: int = 0
         self._edit_image_preview_busy: bool = False
+        self._edit_image_preview_runtime = PreviewRuntimeState()
         self._edit_image_preview_request_key: Optional[str] = None
         self._edit_image_preview_pending_path: Optional[Path] = None
         self._edit_image_preview_pending_max_dim: int = 0
@@ -381,15 +391,22 @@ class BoardController:
     def _mark_board_dirty(self) -> None:
         self._dirty = True
 
-    def begin_scene_interaction(self) -> None:
-        self._scene_interaction_depth += 1
+    def begin_scene_interaction(
+        self,
+        *,
+        kind: str = "scene_interaction",
+        history_label: str | None = None,
+    ) -> None:
+        self._scene_interaction.begin(kind=kind, history_label=history_label)
+        self._scene_interaction_depth = self._scene_interaction.depth
 
     def end_scene_interaction(self, *, history: bool = True, update_groups: bool = True) -> dict:
-        if self._scene_interaction_depth > 0:
-            self._scene_interaction_depth -= 1
-        if self._scene_interaction_depth > 0:
+        action = self._scene_interaction.end_action(history=history, update_groups=update_groups)
+        self._scene_interaction_depth = self._scene_interaction.depth
+        if action is None:
             return self._clone_payload(self._board_state)
-        return self._commit_scene_mutation(history=history, update_groups=update_groups)
+        result = self.commit_board_action(action)
+        return dict(result.state)
 
     def ensure_board_loaded(self) -> None:
         if self._project_root is None:
@@ -617,7 +634,7 @@ class BoardController:
         selected = list(self._scene.selectedItems())
         if not selected:
             return
-        self.begin_scene_interaction()
+        self.begin_scene_interaction(kind="delete_selection", history_label="Delete selection")
         try:
             for item in selected:
                 if item.scene() is self._scene:
@@ -662,8 +679,8 @@ class BoardController:
     def _reveal_scene_items(self, items: list[QtWidgets.QGraphicsItem]) -> None:
         self._scene_view.reveal_scene_items(items)
 
-    def layout_selection_grid(self) -> None:
-        self._scene_view.layout_selection_grid()
+    def layout_selection_grid(self, *, commit: bool = True) -> None:
+        self._scene_view.layout_selection_grid(commit=commit)
 
     def save_board(self) -> None:
         if not self._project_root:

@@ -321,7 +321,9 @@ On est deja sur une bonne base:
 - `core.board_scene`
 - `core.board_actions` avec pipeline commun de mutation
 - `core.board_preview.PreviewRequest` pour identifier les previews
+- `core.board_preview.PreviewRuntimeState` pour active/pending/cancel des previews
 - migrations explicites de payload board via `core.board_state.migrations`
+- contrat save/load documente dans `docs/board_state_contract.md`
 - commandes/raccourcis globaux via `core.commands`
 - widgets board extraits
 - tests sur les briques pures

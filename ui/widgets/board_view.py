@@ -69,7 +69,7 @@ class BoardView(QtWidgets.QGraphicsView):
             if items:
                 controller = self._resolve_controller()
                 if controller is not None and hasattr(controller, "begin_scene_interaction"):
-                    controller.begin_scene_interaction()
+                    controller.begin_scene_interaction(kind="scale_selection_wheel", history_label="Scale selection")
                 factor = 1.08 if event.angleDelta().y() > 0 else 0.92
                 try:
                     for item in items:
@@ -111,7 +111,10 @@ class BoardView(QtWidgets.QGraphicsView):
             self._move_start_positions = {id(i): i.pos() for i in self.scene().selectedItems()}
             controller = self._resolve_controller()
             if controller is not None and hasattr(controller, "begin_scene_interaction"):
-                controller.begin_scene_interaction()
+                if event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
+                    controller.begin_scene_interaction(kind="scale_selection_drag", history_label="Scale selection")
+                else:
+                    controller.begin_scene_interaction(kind="move_selection", history_label="Move selection")
         if event.button() == QtCore.Qt.MouseButton.LeftButton and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
             items = [i for i in self.scene().selectedItems() if i.data(0) in ("image", "note", "video", "sequence")]
             if items:

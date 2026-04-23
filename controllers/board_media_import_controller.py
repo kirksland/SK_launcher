@@ -43,7 +43,11 @@ class BoardMediaImportController:
         self.add_image_from_path(Path(path))
 
     def add_image_from_path(
-        self, src: Path, scene_pos: Optional[QtCore.QPointF] = None
+        self,
+        src: Path,
+        scene_pos: Optional[QtCore.QPointF] = None,
+        *,
+        commit: bool = True,
     ) -> Optional[QtWidgets.QGraphicsPixmapItem]:
         board = self.board
         if not board._project_root:
@@ -81,10 +85,15 @@ class BoardMediaImportController:
         item.setPos(scene_pos)
         self._scale_large_item(item)
         board._scene.addItem(item)
-        board._commit_scene_mutation(history=False, update_groups=False)
+        if commit:
+            board._commit_scene_mutation(
+                kind="import_image",
+                history_label="Import image",
+                history=True,
+                update_groups=False,
+            )
         board._update_view_quality()
         board.update_visible_items()
-        board._schedule_history_snapshot()
         return item
 
     def add_image_from_url(self, url: str, scene_pos: Optional[QtCore.QPointF] = None) -> None:
@@ -160,7 +169,11 @@ class BoardMediaImportController:
         self.add_video_from_path(Path(path))
 
     def add_video_from_path(
-        self, src: Path, scene_pos: Optional[QtCore.QPointF] = None
+        self,
+        src: Path,
+        scene_pos: Optional[QtCore.QPointF] = None,
+        *,
+        commit: bool = True,
     ) -> Optional[QtWidgets.QGraphicsItem]:
         board = self.board
         if not board._project_root:
@@ -197,9 +210,14 @@ class BoardMediaImportController:
         item.setPos(scene_pos)
         self._scale_large_item(item)
         board._scene.addItem(item)
-        board._commit_scene_mutation(history=False, update_groups=False)
+        if commit:
+            board._commit_scene_mutation(
+                kind="import_video",
+                history_label="Import video",
+                history=True,
+                update_groups=False,
+            )
         board._update_view_quality()
-        board._schedule_history_snapshot()
         return item
 
     def find_iconvert(self) -> Optional[Path]:
@@ -218,6 +236,8 @@ class BoardMediaImportController:
         self,
         src_path: Optional[Path] = None,
         scene_pos: Optional[QtCore.QPointF] = None,
+        *,
+        commit: bool = True,
     ) -> Optional[QtWidgets.QGraphicsPixmapItem]:
         board = self.board
         iconvert = self.find_iconvert()
@@ -271,7 +291,7 @@ class BoardMediaImportController:
             return None
         board._notify(f"Converted: {out_path.name}")
         if board._is_image_file(out_path):
-            return self.add_image_from_path(out_path, scene_pos=scene_pos)
+            return self.add_image_from_path(out_path, scene_pos=scene_pos, commit=commit)
         return None
 
     def add_paths_from_selection(
@@ -294,17 +314,17 @@ class BoardMediaImportController:
             item = None
             if path.is_file():
                 if board._is_video_file(path):
-                    item = self.add_video_from_path(path, scene_pos=current_pos)
+                    item = self.add_video_from_path(path, scene_pos=current_pos, commit=False)
                 elif board._is_image_file(path):
-                    item = self.add_image_from_path(path, scene_pos=current_pos)
+                    item = self.add_image_from_path(path, scene_pos=current_pos, commit=False)
                     if isinstance(item, BoardImageItem):
                         added_images.append(item)
                 elif board._is_pic_file(path):
-                    item = self.convert_picnc_interactive(path, scene_pos=current_pos)
+                    item = self.convert_picnc_interactive(path, scene_pos=current_pos, commit=False)
                     if isinstance(item, BoardImageItem):
                         added_images.append(item)
             elif path.exists() and path.is_dir():
-                item = self.add_sequence_from_dir(path, scene_pos=current_pos)
+                item = self.add_sequence_from_dir(path, scene_pos=current_pos, commit=False)
             if item is not None:
                 added += 1
                 added_items.append(item)
@@ -318,12 +338,14 @@ class BoardMediaImportController:
                 sel.setSelected(False)
             for img in added_images:
                 img.setSelected(True)
-            board.layout_selection_grid()
+            board.layout_selection_grid(commit=False)
             for img in added_images:
                 img.setSelected(False)
             for sel in prev_selected:
                 sel.setSelected(True)
         board._commit_scene_mutation(
+            kind="import_media_selection",
+            history_label="Import media selection",
             history=True,
             save=True,
             reveal_items=added_items,
@@ -345,7 +367,11 @@ class BoardMediaImportController:
         self.add_sequence_from_dir(Path(dir_path))
 
     def add_sequence_from_dir(
-        self, dir_path: Path, scene_pos: Optional[QtCore.QPointF] = None
+        self,
+        dir_path: Path,
+        scene_pos: Optional[QtCore.QPointF] = None,
+        *,
+        commit: bool = True,
     ) -> Optional[QtWidgets.QGraphicsItem]:
         board = self.board
         if not board._project_root:
@@ -375,9 +401,14 @@ class BoardMediaImportController:
         item.setPos(scene_pos)
         self._scale_large_item(item)
         board._scene.addItem(item)
-        board._commit_scene_mutation(history=False, update_groups=False)
+        if commit:
+            board._commit_scene_mutation(
+                kind="import_sequence",
+                history_label="Import sequence",
+                history=True,
+                update_groups=False,
+            )
         board._update_view_quality()
-        board._schedule_history_snapshot()
         return item
 
     def convert_video_to_sequence(self, item: QtWidgets.QGraphicsItem) -> None:
@@ -438,13 +469,18 @@ class BoardMediaImportController:
             scale = item.scale()
             group = board._find_group_for_item(item)
             board._scene.removeItem(item)
-            seq_item = self.add_sequence_from_dir(out_path, scene_pos=scene_pos)
+            seq_item = self.add_sequence_from_dir(out_path, scene_pos=scene_pos, commit=False)
             if seq_item is not None:
                 seq_item.setScale(scale)
                 if group is not None:
                     group.add_member(seq_item)
                     group.update_bounds()
-            board._commit_scene_mutation(history=True, update_groups=True)
+            board._commit_scene_mutation(
+                kind="convert_video_to_sequence",
+                history_label="Convert video to sequence",
+                history=True,
+                update_groups=True,
+            )
             board._notify("Video converted to sequence.")
 
         def _on_cancel() -> None:
