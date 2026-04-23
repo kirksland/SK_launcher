@@ -328,6 +328,7 @@ On est deja sur une bonne base:
 - widgets board extraits
 - chrome, controls actuels et preview stack du panneau edit extraits dans `ui.widgets.board_edit_panel`
 - lecture/ecriture/visibilite des controls de tools pilotees par `ToolUiControlSpec`
+- nouveaux panels de tools construits depuis les specs sans ajouter d'attributs legacy dans `BoardPage`
 - tests sur les briques pures
 
 La prochaine marche n'est donc pas un gros refacto esthetique. La prochaine marche, c'est de continuer a connecter les surfaces encore manuelles aux contrats d'execution deja poses: groupage history des longues interactions, runtime preview plus centralise, migrations futures, et UI tool panels plus generes.

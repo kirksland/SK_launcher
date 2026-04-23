@@ -42,10 +42,10 @@ Cette todo suit la transition du board vers une architecture vraiment scalable. 
 
 - [x] Extraire le chrome du panneau edit et la preview stack de `BoardPage`.
 - [x] Extraire la construction des controls du panneau edit de `BoardPage`.
-- [ ] Creer un widget ou builder pour les panels de tools.
+- [x] Creer un widget ou builder pour les panels de tools.
 - [x] Piloter la visibilite, lecture/ecriture et slider binding des controls depuis `ToolUiControlSpec`.
-- [ ] Creer un widget ou builder pour les nouveaux panels sans alias legacy.
-- [ ] Eviter toute nouvelle logique tool-specific dans `BoardPage`.
+- [x] Creer un widget ou builder pour les nouveaux panels sans alias legacy.
+- [x] Eviter toute nouvelle logique tool-specific dans `BoardPage`.
 
 ## Phase 6. Commandes Et Raccourcis Globaux
 

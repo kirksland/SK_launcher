@@ -240,14 +240,6 @@ class BoardPage(QtWidgets.QWidget):
         )
 
         self._bind_slider_to_input(self.edit_exr_gamma_slider, self.edit_exr_gamma_input, 10.0)
-        self._bind_slider_to_input(self.edit_image_adjust_brightness_slider, self.edit_image_adjust_brightness_value, 100.0)
-        self._bind_slider_to_input(self.edit_image_adjust_contrast_slider, self.edit_image_adjust_contrast_value, 100.0)
-        self._bind_slider_to_input(self.edit_image_adjust_saturation_slider, self.edit_image_adjust_saturation_value, 100.0)
-        self._bind_slider_to_input(self.edit_image_vibrance_slider, self.edit_image_vibrance_value, 100.0)
-        self._bind_slider_to_input(self.edit_crop_left_slider, self.edit_crop_left_value, 1.0)
-        self._bind_slider_to_input(self.edit_crop_right_slider, self.edit_crop_right_value, 1.0)
-        self._bind_slider_to_input(self.edit_crop_top_slider, self.edit_crop_top_value, 1.0)
-        self._bind_slider_to_input(self.edit_crop_bottom_slider, self.edit_crop_bottom_value, 1.0)
 
         self._undo_shortcut = QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Undo, self)
         self._undo_shortcut.activated.connect(self._on_undo)
@@ -487,42 +479,15 @@ class BoardPage(QtWidgets.QWidget):
             self.edit_image_tool_add_btn,
             self.edit_image_tool_up_btn,
             self.edit_image_tool_down_btn,
-            self.edit_image_adjust_label,
-            self.edit_image_adjust_brightness_title,
-            self.edit_image_adjust_brightness_slider,
-            self.edit_image_adjust_brightness_value,
-            self.edit_image_adjust_contrast_title,
-            self.edit_image_adjust_contrast_slider,
-            self.edit_image_adjust_contrast_value,
-            self.edit_image_adjust_saturation_title,
-            self.edit_image_adjust_saturation_slider,
-            self.edit_image_adjust_saturation_value,
-            self.edit_image_vibrance_title,
-            self.edit_image_vibrance_slider,
-            self.edit_image_vibrance_value,
-            self.edit_crop_label,
-            self.edit_crop_left_title,
-            self.edit_crop_left_slider,
-            self.edit_crop_left_value,
-            self.edit_crop_right_title,
-            self.edit_crop_right_slider,
-            self.edit_crop_right_value,
-            self.edit_crop_top_title,
-            self.edit_crop_top_slider,
-            self.edit_crop_top_value,
-            self.edit_crop_bottom_title,
-            self.edit_crop_bottom_slider,
-            self.edit_crop_bottom_value,
             self.edit_image_adjust_reset_btn,
         ]
+        for panel_widgets in self.edit_controls.panel_widgets().values():
+            controls.extend(panel_widgets)
         for widget in controls:
             widget.setVisible(bool(visible))
         self.edit_image_tool_add_combo.setVisible(False)
         if visible:
             self.set_active_image_tool_panel("")
-
-    def _image_tool_panel_widgets(self) -> dict[str, list[QtWidgets.QWidget]]:
-        return self.edit_controls.panel_widgets()
 
     def set_image_tool_panel_visible(self, panel: str, visible: bool) -> None:
         self.edit_controls.set_tool_panel_visible(panel, visible)
@@ -530,63 +495,10 @@ class BoardPage(QtWidgets.QWidget):
     def set_active_image_tool_panel(self, panel: str) -> None:
         self.edit_controls.set_active_tool_panel(panel)
 
-    def current_image_brightness(self) -> float:
-        return float(self.edit_image_adjust_brightness_slider.value()) / 100.0
-
-    def current_image_contrast(self) -> float:
-        return float(self.edit_image_adjust_contrast_slider.value()) / 100.0
-
-    def current_image_saturation(self) -> float:
-        return float(self.edit_image_adjust_saturation_slider.value()) / 100.0
-
     def set_image_adjust_labels(self, brightness: float, contrast: float, saturation: float) -> None:
-        self._set_spinbox_value(self.edit_image_adjust_brightness_value, brightness)
-        self._set_spinbox_value(self.edit_image_adjust_contrast_value, contrast)
-        self._set_spinbox_value(self.edit_image_adjust_saturation_value, saturation)
-
-    def set_image_vibrance_value(self, amount: float) -> None:
-        self.edit_image_vibrance_slider.blockSignals(True)
-        self.edit_image_vibrance_slider.setValue(int(round(float(amount) * 100.0)))
-        self.edit_image_vibrance_slider.blockSignals(False)
-        self._set_spinbox_value(self.edit_image_vibrance_value, float(amount))
-
-    def current_image_vibrance(self) -> float:
-        return float(self.edit_image_vibrance_slider.value()) / 100.0
-
-    def set_image_vibrance_visible(self, visible: bool) -> None:
-        self.set_image_tool_panel_visible("vibrance", visible)
-
-    def set_image_crop_visible(self, visible: bool) -> None:
-        self.set_image_tool_panel_visible("crop", visible)
-
-    def set_image_crop_values(self, left: float, top: float, right: float, bottom: float) -> None:
-        self.edit_crop_left_slider.blockSignals(True)
-        self.edit_crop_top_slider.blockSignals(True)
-        self.edit_crop_right_slider.blockSignals(True)
-        self.edit_crop_bottom_slider.blockSignals(True)
-        self.edit_crop_left_slider.setValue(int(round(float(left) * 100.0)))
-        self.edit_crop_top_slider.setValue(int(round(float(top) * 100.0)))
-        self.edit_crop_right_slider.setValue(int(round(float(right) * 100.0)))
-        self.edit_crop_bottom_slider.setValue(int(round(float(bottom) * 100.0)))
-        self.edit_crop_left_slider.blockSignals(False)
-        self.edit_crop_top_slider.blockSignals(False)
-        self.edit_crop_right_slider.blockSignals(False)
-        self.edit_crop_bottom_slider.blockSignals(False)
-        self._set_spinbox_value(self.edit_crop_left_value, int(round(float(left) * 100.0)))
-        self._set_spinbox_value(self.edit_crop_top_value, int(round(float(top) * 100.0)))
-        self._set_spinbox_value(self.edit_crop_right_value, int(round(float(right) * 100.0)))
-        self._set_spinbox_value(self.edit_crop_bottom_value, int(round(float(bottom) * 100.0)))
-
-    def current_image_crop_settings(self) -> tuple[float, float, float, float]:
-        return (
-            float(self.edit_crop_left_slider.value()) / 100.0,
-            float(self.edit_crop_top_slider.value()) / 100.0,
-            float(self.edit_crop_right_slider.value()) / 100.0,
-            float(self.edit_crop_bottom_slider.value()) / 100.0,
-        )
-
-    def set_image_bcs_controls_visible(self, visible: bool) -> None:
-        self.set_image_tool_panel_visible("bcs", visible)
+        self.edit_controls.set_control_value("brightness", brightness)
+        self.edit_controls.set_control_value("contrast", contrast)
+        self.edit_controls.set_control_value("saturation", saturation)
 
     def set_image_tool_add_options(self, options: list[tuple[str, str]]) -> None:
         self.edit_image_tool_add_combo.blockSignals(True)
@@ -636,18 +548,6 @@ class BoardPage(QtWidgets.QWidget):
             if isinstance(row, _ToolStackRow):
                 row.set_selected(idx == int(current_row))
 
-    def set_image_adjust_values(self, brightness: float, contrast: float, saturation: float) -> None:
-        self.edit_image_adjust_brightness_slider.blockSignals(True)
-        self.edit_image_adjust_contrast_slider.blockSignals(True)
-        self.edit_image_adjust_saturation_slider.blockSignals(True)
-        self.edit_image_adjust_brightness_slider.setValue(int(round(float(brightness) * 100.0)))
-        self.edit_image_adjust_contrast_slider.setValue(int(round(float(contrast) * 100.0)))
-        self.edit_image_adjust_saturation_slider.setValue(int(round(float(saturation) * 100.0)))
-        self.edit_image_adjust_brightness_slider.blockSignals(False)
-        self.edit_image_adjust_contrast_slider.blockSignals(False)
-        self.edit_image_adjust_saturation_slider.blockSignals(False)
-        self.set_image_adjust_labels(brightness, contrast, saturation)
-
     def current_image_tool_panel_state(self, panel: str) -> dict[str, float]:
         key = str(panel or "").strip().lower()
         spec = tool_spec_for_panel(key)
@@ -658,7 +558,7 @@ class BoardPage(QtWidgets.QWidget):
             control_key = str(getattr(control, "key", "") or "").strip()
             if not control_key:
                 continue
-            current = self._current_image_tool_control_value(control_key)
+            current = self.edit_controls.current_control_value(control_key)
             if current is not None:
                 values[control_key] = current
         return values
@@ -675,16 +575,10 @@ class BoardPage(QtWidgets.QWidget):
             control_key = str(getattr(control, "key", "") or "").strip()
             if not control_key:
                 continue
-            self._set_image_tool_control_value(control_key, merged.get(control_key, getattr(control, "minimum", 0.0)))
-
-    def _current_image_tool_control_value(self, control_key: str) -> float | None:
-        return self.edit_controls.current_control_value(control_key)
+            self.edit_controls.set_control_value(control_key, merged.get(control_key, getattr(control, "minimum", 0.0)))
 
     def image_tool_control_slider(self, control_key: str) -> QtWidgets.QSlider | None:
         return self.edit_controls.control_slider(control_key)
-
-    def _set_image_tool_control_value(self, control_key: str, value: object) -> None:
-        self.edit_controls.set_control_value(control_key, value)
 
     def show_edit_preview_image(self, pixmap: QtGui.QPixmap, label: str = "") -> None:
         self.edit_preview_stack.setCurrentWidget(self.edit_image_preview)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from tools.board_tools.edit import ToolUiControlSpec, list_edit_tools
@@ -86,6 +88,64 @@ class BoardEditPanel(QtWidgets.QFrame):
         self.content_layout.setSpacing(8)
 
 
+@dataclass(slots=True)
+class ToolControlRow:
+    spec: ToolUiControlSpec
+    widget: QtWidgets.QWidget
+    title: QtWidgets.QLabel
+    slider: QtWidgets.QSlider
+    spinbox: QtWidgets.QDoubleSpinBox
+
+    @property
+    def key(self) -> str:
+        return str(self.spec.key or "").strip().lower()
+
+    @property
+    def scale(self) -> float:
+        scale = float(getattr(self.spec, "display_scale", 1.0) or 1.0)
+        if abs(scale - 1.0) > 1e-6:
+            return scale
+        decimals = int(getattr(self.spec, "display_decimals", 2))
+        return float(10 ** max(0, decimals))
+
+    @property
+    def has_display_suffix(self) -> bool:
+        return bool(str(getattr(self.spec, "display_suffix", "") or ""))
+
+    def current_value(self) -> float:
+        return float(self.slider.value()) / self.scale
+
+    def set_value(self, value: object) -> None:
+        try:
+            numeric = float(value)
+        except Exception:
+            numeric = float(getattr(self.spec, "minimum", 0.0))
+        self.slider.blockSignals(True)
+        self.slider.setValue(int(round(numeric * self.scale)))
+        self.slider.blockSignals(False)
+        display_value = numeric * self.scale if self.has_display_suffix else numeric
+        self.spinbox.blockSignals(True)
+        self.spinbox.setValue(float(display_value))
+        self.spinbox.blockSignals(False)
+
+    def bind_spinbox(self) -> None:
+        def on_slider_changed(value: int) -> None:
+            numeric = float(value) / self.scale
+            display_value = numeric * self.scale if self.has_display_suffix else numeric
+            self.spinbox.blockSignals(True)
+            self.spinbox.setValue(float(display_value))
+            self.spinbox.blockSignals(False)
+
+        def on_spinbox_changed(value: float) -> None:
+            numeric = float(value) / self.scale if self.has_display_suffix else float(value)
+            self.slider.blockSignals(True)
+            self.slider.setValue(int(round(numeric * self.scale)))
+            self.slider.blockSignals(False)
+
+        self.slider.valueChanged.connect(on_slider_changed)
+        self.spinbox.valueChanged.connect(on_spinbox_changed)
+
+
 class BoardEditControlsPanel(QtWidgets.QWidget):
     """Tool stack and edit controls used by the floating edit panel."""
 
@@ -110,54 +170,20 @@ class BoardEditControlsPanel(QtWidgets.QWidget):
         "edit_image_tool_order_row",
         "edit_image_tool_up_btn",
         "edit_image_tool_down_btn",
-        "edit_image_adjust_label",
-        "edit_image_adjust_brightness_row",
-        "edit_image_adjust_brightness_title",
-        "edit_image_adjust_brightness_value",
-        "edit_image_adjust_brightness_slider",
-        "edit_image_adjust_contrast_row",
-        "edit_image_adjust_contrast_title",
-        "edit_image_adjust_contrast_value",
-        "edit_image_adjust_contrast_slider",
-        "edit_image_adjust_saturation_row",
-        "edit_image_adjust_saturation_title",
-        "edit_image_adjust_saturation_value",
-        "edit_image_adjust_saturation_slider",
-        "edit_image_vibrance_row",
-        "edit_image_vibrance_title",
-        "edit_image_vibrance_value",
-        "edit_image_vibrance_slider",
-        "edit_crop_label",
-        "edit_crop_left_row",
-        "edit_crop_left_title",
-        "edit_crop_left_value",
-        "edit_crop_left_slider",
-        "edit_crop_right_row",
-        "edit_crop_right_title",
-        "edit_crop_right_value",
-        "edit_crop_right_slider",
-        "edit_crop_top_row",
-        "edit_crop_top_title",
-        "edit_crop_top_value",
-        "edit_crop_top_slider",
-        "edit_crop_bottom_row",
-        "edit_crop_bottom_title",
-        "edit_crop_bottom_value",
-        "edit_crop_bottom_slider",
         "edit_image_adjust_reset_btn",
     )
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._panel_widgets: dict[str, list[QtWidgets.QWidget]] = {}
-        self._control_widgets: dict[str, tuple[ToolUiControlSpec, QtWidgets.QSlider, QtWidgets.QDoubleSpinBox]] = {}
+        self._control_rows: dict[str, ToolControlRow] = {}
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
         self._build_exr_controls(layout)
         self._build_tool_stack_controls(layout)
-        self._bind_tool_specs()
+        self._build_tool_panels()
 
     def exported_attribute_names(self) -> tuple[str, ...]:
         return self.EXPORTED_ATTRS
@@ -284,105 +310,33 @@ class BoardEditControlsPanel(QtWidgets.QWidget):
         self.edit_image_tool_down_btn.setVisible(False)
         self.edit_image_tool_add_btn.setVisible(False)
 
-        self.edit_image_adjust_label = QtWidgets.QLabel("Image Adjustments")
-        self.edit_image_adjust_label.setStyleSheet(muted_text_style())
-        self.edit_image_adjust_label.setVisible(False)
-        self.edit_tool_stack_layout.addWidget(self.edit_image_adjust_label, 0)
-
-        self._add_slider_spin_row(
-            "edit_image_adjust_brightness",
-            "Brightness",
-            spin_range=(-1.0, 1.0),
-            spin_decimals=2,
-            spin_step=0.05,
-            slider_range=(-100, 100),
-            slider_value=0,
-            spin_width=70,
-        )
-        self._add_slider_spin_row(
-            "edit_image_adjust_contrast",
-            "Contrast",
-            spin_range=(0.0, 2.0),
-            spin_decimals=2,
-            spin_step=0.05,
-            slider_range=(0, 200),
-            slider_value=100,
-            spin_width=70,
-        )
-        self._add_slider_spin_row(
-            "edit_image_adjust_saturation",
-            "Saturation",
-            spin_range=(0.0, 2.0),
-            spin_decimals=2,
-            spin_step=0.05,
-            slider_range=(0, 200),
-            slider_value=100,
-            spin_width=70,
-        )
-        self._add_slider_spin_row(
-            "edit_image_vibrance",
-            "Vibrance",
-            spin_range=(-1.0, 1.0),
-            spin_decimals=2,
-            spin_step=0.05,
-            slider_range=(-100, 100),
-            slider_value=0,
-            spin_width=70,
-        )
-
-        self.edit_crop_label = QtWidgets.QLabel("Crop")
-        self.edit_crop_label.setStyleSheet(muted_text_style())
-        self.edit_crop_label.setVisible(False)
-        self.edit_tool_stack_layout.addWidget(self.edit_crop_label, 0)
-
-        for key, label in (
-            ("edit_crop_left", "Left"),
-            ("edit_crop_right", "Right"),
-            ("edit_crop_top", "Top"),
-            ("edit_crop_bottom", "Bottom"),
-        ):
-            self._add_slider_spin_row(
-                key,
-                label,
-                spin_range=(0.0, 90.0),
-                spin_decimals=0,
-                spin_step=1.0,
-                slider_range=(0, 90),
-                slider_value=0,
-                spin_width=74,
-                spin_suffix="%",
-            )
-
         self.edit_image_adjust_reset_btn = QtWidgets.QPushButton("Reset Adjustments")
         self.edit_image_adjust_reset_btn.setVisible(False)
         self.edit_tool_stack_layout.addWidget(self.edit_image_adjust_reset_btn, 0)
 
         self.edit_tool_stack_section.setVisible(False)
 
-    def _bind_tool_specs(self) -> None:
+    def _build_tool_panels(self) -> None:
         self._panel_widgets.clear()
-        self._control_widgets.clear()
-        heading_widgets = {
-            "bcs": [self.edit_image_adjust_label],
-            "crop": [self.edit_crop_label],
-        }
+        self._control_rows.clear()
         for spec in list_edit_tools():
             panel = str(getattr(spec, "ui_panel", "") or "").strip().lower()
             if not panel:
                 continue
-            widgets: list[QtWidgets.QWidget] = list(heading_widgets.get(panel, []))
+            label = QtWidgets.QLabel(str(getattr(spec, "label", "") or panel))
+            label.setStyleSheet(muted_text_style())
+            label.setVisible(False)
+            self.edit_tool_stack_layout.addWidget(label, 0)
+            widgets: list[QtWidgets.QWidget] = [label]
             for control in getattr(spec, "ui_controls", ()):
                 control_key = str(getattr(control, "key", "") or "").strip().lower()
                 if not control_key:
                     continue
-                row_widgets = self._legacy_control_widgets(control_key)
-                if row_widgets is None:
-                    continue
-                title, slider, value = row_widgets
-                title.setText(str(getattr(control, "label", "") or control_key))
-                self._configure_control_widgets(control, slider, value)
-                widgets.extend((title, slider, value))
-                self._control_widgets[control_key] = (control, slider, value)
+                row = self._create_control_row(control)
+                row.widget.setVisible(False)
+                self.edit_tool_stack_layout.addWidget(row.widget, 0)
+                widgets.append(row.widget)
+                self._control_rows[control_key] = row
             self._panel_widgets[panel] = widgets
 
     def panel_widgets(self) -> dict[str, list[QtWidgets.QWidget]]:
@@ -399,138 +353,63 @@ class BoardEditControlsPanel(QtWidgets.QWidget):
 
     def current_control_value(self, control_key: str) -> float | None:
         key = str(control_key or "").strip().lower()
-        control_data = self._control_widgets.get(key)
-        if control_data is None:
+        row = self._control_rows.get(key)
+        if row is None:
             return None
-        control, slider, _value = control_data
-        return float(slider.value()) / self._slider_scale(control)
+        return row.current_value()
 
     def control_slider(self, control_key: str) -> QtWidgets.QSlider | None:
-        control_data = self._control_widgets.get(str(control_key or "").strip().lower())
-        return control_data[1] if control_data is not None else None
+        row = self._control_rows.get(str(control_key or "").strip().lower())
+        return row.slider if row is not None else None
 
     def set_control_value(self, control_key: str, value: object) -> None:
         key = str(control_key or "").strip().lower()
-        control_data = self._control_widgets.get(key)
-        if control_data is None:
+        row = self._control_rows.get(key)
+        if row is None:
             return
-        control, slider, spinbox = control_data
-        try:
-            numeric = float(value)
-        except Exception:
-            numeric = float(getattr(control, "minimum", 0.0))
-        slider.blockSignals(True)
-        slider.setValue(int(round(numeric * self._slider_scale(control))))
-        slider.blockSignals(False)
-        self._set_spinbox_display_value(control, spinbox, numeric)
+        row.set_value(value)
 
-    def _configure_control_widgets(
-        self,
-        control: ToolUiControlSpec,
-        slider: QtWidgets.QSlider,
-        spinbox: QtWidgets.QDoubleSpinBox,
-    ) -> None:
-        scale = self._slider_scale(control)
+    def _create_control_row(self, control: ToolUiControlSpec) -> ToolControlRow:
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        title = QtWidgets.QLabel(str(getattr(control, "label", "") or getattr(control, "key", "")))
+        title.setStyleSheet(muted_text_style())
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        scale = self._control_scale(control)
         slider.setRange(
             int(round(float(control.minimum) * scale)),
             int(round(float(control.maximum) * scale)),
         )
+        spinbox = QtWidgets.QDoubleSpinBox()
         spinbox.setDecimals(int(getattr(control, "display_decimals", 2)))
         if str(getattr(control, "display_suffix", "") or ""):
             spinbox.setSuffix(str(control.display_suffix))
             spinbox.setRange(float(control.minimum) * scale, float(control.maximum) * scale)
             spinbox.setSingleStep(max(1.0, 1.0 / max(1.0, scale)))
+            spinbox.setFixedWidth(74)
         else:
-            spinbox.setSuffix("")
             spinbox.setRange(float(control.minimum), float(control.maximum))
             spinbox.setSingleStep(max(0.01, 1.0 / max(1.0, scale)))
+            spinbox.setFixedWidth(70)
+        spinbox.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        spinbox.setKeyboardTracking(False)
+        spinbox.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(title, 0)
+        layout.addWidget(slider, 1)
+        layout.addWidget(spinbox, 0)
+        row = ToolControlRow(control, widget, title, slider, spinbox)
+        row.bind_spinbox()
+        row.set_value(float(getattr(control, "minimum", 0.0)))
+        return row
 
-    def _legacy_control_widgets(
-        self,
-        control_key: str,
-    ) -> tuple[QtWidgets.QLabel, QtWidgets.QSlider, QtWidgets.QDoubleSpinBox] | None:
-        key = str(control_key or "").strip().lower()
-        controls = {
-            "brightness": (
-                self.edit_image_adjust_brightness_title,
-                self.edit_image_adjust_brightness_slider,
-                self.edit_image_adjust_brightness_value,
-            ),
-            "contrast": (
-                self.edit_image_adjust_contrast_title,
-                self.edit_image_adjust_contrast_slider,
-                self.edit_image_adjust_contrast_value,
-            ),
-            "saturation": (
-                self.edit_image_adjust_saturation_title,
-                self.edit_image_adjust_saturation_slider,
-                self.edit_image_adjust_saturation_value,
-            ),
-            "amount": (
-                self.edit_image_vibrance_title,
-                self.edit_image_vibrance_slider,
-                self.edit_image_vibrance_value,
-            ),
-            "left": (self.edit_crop_left_title, self.edit_crop_left_slider, self.edit_crop_left_value),
-            "right": (self.edit_crop_right_title, self.edit_crop_right_slider, self.edit_crop_right_value),
-            "top": (self.edit_crop_top_title, self.edit_crop_top_slider, self.edit_crop_top_value),
-            "bottom": (self.edit_crop_bottom_title, self.edit_crop_bottom_slider, self.edit_crop_bottom_value),
-        }
-        return controls.get(key)
-
-    def _set_spinbox_display_value(
-        self,
-        control: ToolUiControlSpec,
-        spinbox: QtWidgets.QDoubleSpinBox,
-        numeric: float,
-    ) -> None:
-        value = numeric * self._slider_scale(control) if str(control.display_suffix or "") else numeric
-        spinbox.blockSignals(True)
-        spinbox.setValue(float(value))
-        spinbox.blockSignals(False)
-
-    def _slider_scale(self, control: ToolUiControlSpec) -> float:
+    def _control_scale(self, control: ToolUiControlSpec) -> float:
         scale = float(getattr(control, "display_scale", 1.0) or 1.0)
         if abs(scale - 1.0) > 1e-6:
             return scale
         decimals = int(getattr(control, "display_decimals", 2))
         return float(10 ** max(0, decimals))
-
-    def _add_slider_spin_row(
-        self,
-        attr_prefix: str,
-        label: str,
-        *,
-        spin_range: tuple[float, float],
-        spin_decimals: int,
-        spin_step: float,
-        slider_range: tuple[int, int],
-        slider_value: int,
-        spin_width: int,
-        spin_suffix: str = "",
-    ) -> None:
-        row = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel(label)
-        title.setStyleSheet(muted_text_style())
-        value = self._create_spinbox(
-            spin_range[0],
-            spin_range[1],
-            spin_decimals,
-            spin_step,
-            spin_width,
-            suffix=spin_suffix,
-        )
-        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        slider.setRange(slider_range[0], slider_range[1])
-        slider.setValue(slider_value)
-        row.addWidget(title, 0)
-        row.addWidget(slider, 1)
-        row.addWidget(value, 0)
-        self.edit_tool_stack_layout.addLayout(row)
-        setattr(self, f"{attr_prefix}_row", row)
-        setattr(self, f"{attr_prefix}_title", title)
-        setattr(self, f"{attr_prefix}_value", value)
-        setattr(self, f"{attr_prefix}_slider", slider)
 
     def _create_spinbox(
         self,
