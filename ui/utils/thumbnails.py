@@ -375,7 +375,7 @@ def _render_exr_qimage_with_openexr(path: Path, max_dim: int = 0) -> QtGui.QImag
                 ys = np.linspace(0, current_h - 1, scaled_h).astype(np.int32)
                 xs = np.linspace(0, current_w - 1, scaled_w).astype(np.int32)
                 normalized = normalized[ys][:, xs]
-        image_rgb = (normalized * 255.0).astype(np.uint8)
+        image_rgb = np.ascontiguousarray((normalized * 255.0).astype(np.uint8))
 
         image = QtGui.QImage(
             image_rgb.data,

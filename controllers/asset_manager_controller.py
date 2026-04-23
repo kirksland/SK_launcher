@@ -55,6 +55,8 @@ class AssetManagerController:
             if path_text:
                 project_path = Path(str(path_text))
         current_project = getattr(self.w, "_asset_current_project_root", None)
+        if project_path is None and current_project is not None:
+            project_path = Path(current_project)
         current_entity = getattr(self.w, "_asset_current_entity", None)
         if (
             project_path is not None
@@ -362,6 +364,7 @@ class AssetManagerController:
                     ),
                 )
             self.w.asset_shots_list.setUpdatesEnabled(True)
+            self._restore_entity_selection(self.w.asset_shots_list)
 
         if target in ("both", "assets"):
             self.w.asset_assets_list.setUpdatesEnabled(False)
@@ -391,6 +394,7 @@ class AssetManagerController:
                     ),
                 )
             self.w.asset_assets_list.setUpdatesEnabled(True)
+            self._restore_entity_selection(self.w.asset_assets_list)
 
         if target in ("both", "library"):
             self.w.asset_library_list.setUpdatesEnabled(False)
@@ -420,6 +424,7 @@ class AssetManagerController:
                     ),
                 )
             self.w.asset_library_list.setUpdatesEnabled(True)
+            self._restore_entity_selection(self.w.asset_library_list)
         self._schedule_entity_icon_hydration(target, entity_icon_request_id)
 
     def _schedule_entity_icon_hydration(self, target: str, request_id: int) -> None:
@@ -473,6 +478,24 @@ class AssetManagerController:
             self.w.asset_assets_list,
             self.w.asset_library_list,
         )
+
+    def _restore_entity_selection(self, list_widget: QtWidgets.QListWidget) -> None:
+        current_entity = getattr(self.w, "_asset_current_entity", None)
+        if not current_entity:
+            return
+        current_text = str(current_entity)
+        for row in range(list_widget.count()):
+            item = list_widget.item(row)
+            if item is None or item.data(self._EMPTY_ENTITY_ROLE):
+                continue
+            if item.data(QtCore.Qt.ItemDataRole.UserRole) != current_text:
+                continue
+            if item.isHidden():
+                return
+            list_widget.blockSignals(True)
+            list_widget.setCurrentItem(item)
+            list_widget.blockSignals(False)
+            return
 
     @staticmethod
     def _add_empty_entity_item(list_widget: QtWidgets.QListWidget, title: str, detail: str) -> None:
