@@ -40,9 +40,11 @@ Cette todo suit la transition du board vers une architecture vraiment scalable. 
 
 ## Phase 5. UI Edit Panel
 
-- [ ] Extraire la construction du panneau edit de `BoardPage`.
+- [x] Extraire le chrome du panneau edit et la preview stack de `BoardPage`.
+- [x] Extraire la construction des controls du panneau edit de `BoardPage`.
 - [ ] Creer un widget ou builder pour les panels de tools.
-- [ ] Generer davantage de controls depuis `ToolUiControlSpec`.
+- [x] Piloter la visibilite, lecture/ecriture et slider binding des controls depuis `ToolUiControlSpec`.
+- [ ] Creer un widget ou builder pour les nouveaux panels sans alias legacy.
 - [ ] Eviter toute nouvelle logique tool-specific dans `BoardPage`.
 
 ## Phase 6. Commandes Et Raccourcis Globaux

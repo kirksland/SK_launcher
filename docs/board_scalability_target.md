@@ -326,6 +326,8 @@ On est deja sur une bonne base:
 - contrat save/load documente dans `docs/board_state_contract.md`
 - commandes/raccourcis globaux via `core.commands`
 - widgets board extraits
+- chrome, controls actuels et preview stack du panneau edit extraits dans `ui.widgets.board_edit_panel`
+- lecture/ecriture/visibilite des controls de tools pilotees par `ToolUiControlSpec`
 - tests sur les briques pures
 
 La prochaine marche n'est donc pas un gros refacto esthetique. La prochaine marche, c'est de continuer a connecter les surfaces encore manuelles aux contrats d'execution deja poses: groupage history des longues interactions, runtime preview plus centralise, migrations futures, et UI tool panels plus generes.

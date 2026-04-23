@@ -52,9 +52,9 @@ register_edit_tool(
         ui_panel="bcs",
         ui_settings_keys=("brightness", "contrast", "saturation"),
         ui_controls=(
-            ToolUiControlSpec("brightness", "Brightness", -1.0, 1.0, display_signed=True),
-            ToolUiControlSpec("contrast", "Contrast", 0.0, 2.0),
-            ToolUiControlSpec("saturation", "Saturation", 0.0, 2.0),
+            ToolUiControlSpec("brightness", "Brightness", -1.0, 1.0, display_scale=100.0, display_signed=True),
+            ToolUiControlSpec("contrast", "Contrast", 0.0, 2.0, display_scale=100.0),
+            ToolUiControlSpec("saturation", "Saturation", 0.0, 2.0, display_scale=100.0),
         ),
     )
 )
