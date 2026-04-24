@@ -783,6 +783,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_inventory_list.customContextMenuRequested.connect(
             self.asset_controller.show_asset_inventory_context_menu
         )
+        self.asset_page.asset_pipeline_process_list.currentItemChanged.connect(
+            lambda _current, _previous: self.asset_controller.on_asset_pipeline_process_selected()
+        )
         self.asset_commit_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_push_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_fetch_btn.clicked.connect(self.asset_controller.asset_placeholder_action)

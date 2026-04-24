@@ -41,6 +41,7 @@ class AssetManagerController:
         self._asset_detail_request_id = 0
         self._asset_preview_request_id = 0
         self._entity_icon_request_id = 0
+        self._asset_pipeline_inspection = None
         self._pending_project_context: Optional[Path] = None
         self._context_refresh_timer = QtCore.QTimer(self.w)
         self._context_refresh_timer.setSingleShot(True)
@@ -140,6 +141,10 @@ class AssetManagerController:
             self.w.asset_page.asset_pipeline_list.addItem("No entity selected")
             self.w.asset_page.asset_pipeline_process_list.clear()
             self.w.asset_page.asset_pipeline_process_list.addItem("No entity selected")
+            self.w.asset_page.asset_pipeline_process_summary.setText(
+                "Select a process to inspect what it would prepare."
+            )
+        self._asset_pipeline_inspection = None
         self.w.asset_inventory_list.clear()
         self.w.asset_inventory_list.addItem("No entity selected")
         self.w.asset_history_list.clear()
@@ -183,6 +188,10 @@ class AssetManagerController:
                 self.w.asset_page.asset_pipeline_list.addItem("Layout setup required")
                 self.w.asset_page.asset_pipeline_process_list.clear()
                 self.w.asset_page.asset_pipeline_process_list.addItem("Layout setup required")
+                self.w.asset_page.asset_pipeline_process_summary.setText(
+                    "Confirm the layout before preparing process requests."
+                )
+            self._asset_pipeline_inspection = None
             self.w.asset_inventory_list.addItem("Layout setup required")
             self.w.asset_history_list.addItem("Layout setup required")
             self.set_asset_status("Confirm the detected layout or use the default layout.")
@@ -204,6 +213,10 @@ class AssetManagerController:
             self.w.asset_page.asset_pipeline_list.addItem("No entity selected")
             self.w.asset_page.asset_pipeline_process_list.clear()
             self.w.asset_page.asset_pipeline_process_list.addItem("No entity selected")
+            self.w.asset_page.asset_pipeline_process_summary.setText(
+                "Select a process to inspect what it would prepare."
+            )
+        self._asset_pipeline_inspection = None
         self.w.asset_inventory_list.addItem("No entity selected")
         self.w.asset_history_list.addItem("No entity selected")
         self._sync_asset_contexts(active_schema)
@@ -725,6 +738,7 @@ class AssetManagerController:
             self.w.asset_page.asset_pipeline_list.addItem("Loading pipeline inspection...")
             self.w.asset_page.asset_pipeline_process_list.clear()
             self.w.asset_page.asset_pipeline_process_list.addItem("Loading processes...")
+            self.w.asset_page.asset_pipeline_process_summary.setText("Preparing process request preview...")
 
         self.w.asset_history_list.clear()
         self.w.asset_history_list.addItem("Loading history...")
@@ -825,7 +839,12 @@ class AssetManagerController:
             summary_label.setText("No pipeline inspection available.")
             list_widget.addItem("No pipeline data")
             process_list.addItem("No process definitions")
+            self.w.asset_page.asset_pipeline_process_summary.setText(
+                "Select a process to inspect what it would prepare."
+            )
+            self._asset_pipeline_inspection = None
             return
+        self._asset_pipeline_inspection = inspection
         freshness_label = inspection.freshness.replace("_", " ").title()
         downstream_count = len(inspection.downstream)
         summary_label.setText(
@@ -843,12 +862,52 @@ class AssetManagerController:
             list_widget.addItem(item)
         if not inspection.available_processes:
             process_list.addItem("No process definitions")
+            self.w.asset_page.asset_pipeline_process_summary.setText(
+                "No process definitions are registered for this entity yet."
+            )
             return
         for process in inspection.available_processes:
             item = QtWidgets.QListWidgetItem(f"{process.label} [{process.family}]")
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, process.id)
             if process.description:
                 item.setToolTip(process.description)
             process_list.addItem(item)
+        process_list.setCurrentRow(0)
+        self.on_asset_pipeline_process_selected()
+
+    def on_asset_pipeline_process_selected(self) -> None:
+        if not hasattr(self.w.asset_page, "asset_pipeline_process_summary"):
+            return
+        process_list = self.w.asset_page.asset_pipeline_process_list
+        item = process_list.currentItem()
+        if item is None:
+            self.w.asset_page.asset_pipeline_process_summary.setText(
+                "Select a process to inspect what it would prepare."
+            )
+            return
+        process_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        process_controller = getattr(self.w, "process_controller", None)
+        prepared = (
+            process_controller.prepare_request(self._asset_pipeline_inspection, process_id)
+            if process_controller is not None
+            else None
+        )
+        if prepared is None:
+            self.w.asset_page.asset_pipeline_process_summary.setText(
+                "This process cannot be prepared for the current selection."
+            )
+            return
+        capability_text = ", ".join(prepared.required_capabilities) if prepared.required_capabilities else "No special capabilities"
+        outputs_text = ", ".join(prepared.outputs) if prepared.outputs else "No declared outputs"
+        remote_text = "Remote-capable" if prepared.supports_remote else "Local-only"
+        review_text = "Review required" if prepared.review_required else "No review gate declared"
+        self.w.asset_page.asset_pipeline_process_summary.setText(
+            f"{prepared.process_label}\n"
+            f"Target: {prepared.entity_label} [{prepared.entity_kind}]\n"
+            f"Requires: {capability_text}\n"
+            f"Outputs: {outputs_text}\n"
+            f"Mode: {remote_text} / {review_text}"
+        )
 
     def _update_preview_label(self) -> None:
         total = len(getattr(self.w, "_preview_images", []))

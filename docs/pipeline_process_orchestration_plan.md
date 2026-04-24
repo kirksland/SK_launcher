@@ -1495,10 +1495,12 @@ Current implementation checkpoint as of 2026-04-24:
 - a read-only dependency graph exists
 - a read-only impact/freshness layer exists
 - a minimal asset-manager bridge exists
+- a thin `process_controller` now exists between the UI and `core/pipeline`
 - the asset manager inspector now exposes:
   - pipeline freshness
   - tracked downstream outputs
   - available process definitions
+  - a read-only prepared request summary for the selected process
 
 ### In Place But Still Read-Only
 
@@ -1506,12 +1508,12 @@ Current implementation checkpoint as of 2026-04-24:
 - dependency traversal
 - freshness classification
 - process availability by entity kind
+- prepared process request summaries
 
-At this stage, the app can describe and surface orchestration-related information, but it does not execute pipeline processes yet.
+At this stage, the app can describe and surface orchestration-related information, and it can prepare a structured process request preview, but it does not execute pipeline processes yet.
 
 ### Not Done Yet
 
-- no process controller
 - no job runtime
 - no Houdini execution backend
 - no remote/client-server execution target flow
@@ -1523,15 +1525,16 @@ We now have the first visible orchestration layer in the app:
 
 - the launcher can start telling the user what seems missing or stale
 - the launcher can start telling the user which process types make sense for the selected entity
-- the launcher is no longer only a browser; it is beginning to reason about production state
+- the launcher can show what a selected process would target and prepare
+- the launcher is no longer only a browser; it is beginning to reason about production state and next actions
 
 ### Next Recommended Step
 
 The next clean step is:
 
-- add a thin `process_controller`
-- keep process selection read-only at first
-- prepare the transition toward a shared job runtime without jumping into raw script execution
+- keep the process controller thin
+- formalize process-request objects as the handoff to the future runtime
+- introduce the shared job runtime only after this read-only process-preparation path feels stable
 
 ## A Safe Implementation Order Inside This App
 

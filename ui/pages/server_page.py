@@ -397,6 +397,10 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_pipeline_process_list = QtWidgets.QListWidget()
         self.asset_pipeline_process_list.setMaximumHeight(120)
         pipeline_layout.addWidget(self.asset_pipeline_process_list, 0)
+        self.asset_pipeline_process_summary = QtWidgets.QLabel("Select a process to inspect what it would prepare.")
+        self.asset_pipeline_process_summary.setStyleSheet("color: #c6ccd6;")
+        self.asset_pipeline_process_summary.setWordWrap(True)
+        pipeline_layout.addWidget(self.asset_pipeline_process_summary, 0)
 
         self.asset_preview = QtWidgets.QLabel()
         self.asset_preview.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
