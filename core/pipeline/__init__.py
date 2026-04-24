@@ -10,6 +10,7 @@ from .graph import (
 )
 from .jobs.models import JobRecord, JobState
 from .processes.definitions import ProcessDefinition, ProcessFamily
+from .processes.registry import available_processes_for_entity_kind, list_process_definitions
 
 __all__ = [
     "DependencyEdge",
@@ -25,9 +26,11 @@ __all__ = [
     "ProcessDefinition",
     "ProcessFamily",
     "TargetCapability",
+    "available_processes_for_entity_kind",
     "build_entity_dependency_graph",
     "entity_ref_for_record",
     "inspect_entity_pipeline",
     "impacted_downstream_entities",
+    "list_process_definitions",
     "summarize_freshness",
 ]

@@ -139,6 +139,8 @@ class AssetManagerController:
             self.w.asset_page.asset_pipeline_summary.setText("No pipeline inspection available.")
             self.w.asset_page.asset_pipeline_list.clear()
             self.w.asset_page.asset_pipeline_list.addItem("No entity selected")
+            self.w.asset_page.asset_pipeline_process_list.clear()
+            self.w.asset_page.asset_pipeline_process_list.addItem("No entity selected")
         self.w.asset_inventory_list.clear()
         self.w.asset_inventory_list.addItem("No entity selected")
         self.w.asset_history_list.clear()
@@ -180,6 +182,8 @@ class AssetManagerController:
                 self.w.asset_page.asset_pipeline_summary.setText("Pipeline inspection will be available after layout confirmation.")
                 self.w.asset_page.asset_pipeline_list.clear()
                 self.w.asset_page.asset_pipeline_list.addItem("Layout setup required")
+                self.w.asset_page.asset_pipeline_process_list.clear()
+                self.w.asset_page.asset_pipeline_process_list.addItem("Layout setup required")
             self.w.asset_inventory_list.addItem("Layout setup required")
             self.w.asset_history_list.addItem("Layout setup required")
             self.set_asset_status("Confirm the detected layout or use the default layout.")
@@ -199,6 +203,8 @@ class AssetManagerController:
             self.w.asset_page.asset_pipeline_summary.setText("Select a shot or asset to inspect pipeline status.")
             self.w.asset_page.asset_pipeline_list.clear()
             self.w.asset_page.asset_pipeline_list.addItem("No entity selected")
+            self.w.asset_page.asset_pipeline_process_list.clear()
+            self.w.asset_page.asset_pipeline_process_list.addItem("No entity selected")
         self.w.asset_inventory_list.addItem("No entity selected")
         self.w.asset_history_list.addItem("No entity selected")
         self._sync_asset_contexts(active_schema)
@@ -718,6 +724,8 @@ class AssetManagerController:
             self.w.asset_page.asset_pipeline_summary.setText("Loading pipeline inspection...")
             self.w.asset_page.asset_pipeline_list.clear()
             self.w.asset_page.asset_pipeline_list.addItem("Loading pipeline inspection...")
+            self.w.asset_page.asset_pipeline_process_list.clear()
+            self.w.asset_page.asset_pipeline_process_list.addItem("Loading processes...")
 
         self.w.asset_history_list.clear()
         self.w.asset_history_list.addItem("Loading history...")
@@ -806,10 +814,13 @@ class AssetManagerController:
         )
         summary_label = self.w.asset_page.asset_pipeline_summary
         list_widget = self.w.asset_page.asset_pipeline_list
+        process_list = self.w.asset_page.asset_pipeline_process_list
         list_widget.clear()
+        process_list.clear()
         if inspection is None:
             summary_label.setText("No pipeline inspection available.")
             list_widget.addItem("No pipeline data")
+            process_list.addItem("No process definitions")
             return
         freshness_label = inspection.freshness.replace("_", " ").title()
         downstream_count = len(inspection.downstream)
@@ -826,6 +837,14 @@ class AssetManagerController:
             if record.entity.path:
                 item.setToolTip(record.entity.path)
             list_widget.addItem(item)
+        if not inspection.available_processes:
+            process_list.addItem("No process definitions")
+            return
+        for process in inspection.available_processes:
+            item = QtWidgets.QListWidgetItem(f"{process.label} [{process.family}]")
+            if process.description:
+                item.setToolTip(process.description)
+            process_list.addItem(item)
 
     def _update_preview_label(self) -> None:
         total = len(getattr(self.w, "_preview_images", []))

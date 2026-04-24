@@ -42,6 +42,7 @@ class PipelineAssetBridgeTests(unittest.TestCase):
         assert inspection is not None
         self.assertEqual(FreshnessState.MISSING_DEPENDENCY, inspection.freshness)
         self.assertEqual(2, len(inspection.downstream))
+        self.assertTrue(any(process.id == "publish.asset.usd" for process in inspection.available_processes))
 
     def test_inspect_entity_pipeline_marks_publish_stale_when_source_is_newer(self) -> None:
         root = self._make_case_dir("pipeline_asset_bridge_stale")
@@ -67,6 +68,7 @@ class PipelineAssetBridgeTests(unittest.TestCase):
         assert inspection is not None
         self.assertEqual(FreshnessState.STALE, inspection.freshness)
         self.assertEqual(2, inspection.summary[FreshnessState.STALE])
+        self.assertTrue(any(process.id == "validate.asset.readiness" for process in inspection.available_processes))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from pathlib import Path
 from core.asset_layout import EntityRecord, ResolvedAssetLayout
 from core.pipeline.entities.models import EntityRef, FreshnessState
 from core.pipeline.graph import DependencyEdge, DependencyGraph, impacted_downstream_entities, summarize_freshness
+from core.pipeline.processes.registry import available_processes_for_entity_kind
 
 
 def _clean_token(value: object) -> str:
@@ -54,6 +55,7 @@ class PipelineEntityInspection:
     freshness: str
     downstream: tuple[object, ...]
     summary: dict[str, int]
+    available_processes: tuple[object, ...]
 
 
 def build_entity_dependency_graph(
@@ -145,4 +147,5 @@ def inspect_entity_pipeline(
         freshness=freshness,
         downstream=downstream,
         summary=summary,
+        available_processes=available_processes_for_entity_kind(source.kind),
     )

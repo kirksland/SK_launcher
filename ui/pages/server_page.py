@@ -365,6 +365,12 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_pipeline_list = QtWidgets.QListWidget()
         self.asset_pipeline_list.setMaximumHeight(132)
         pipeline_layout.addWidget(self.asset_pipeline_list, 0)
+        process_title = QtWidgets.QLabel("Available Processes")
+        process_title.setStyleSheet("font-weight: 600; color: #d8dde5;")
+        pipeline_layout.addWidget(process_title, 0)
+        self.asset_pipeline_process_list = QtWidgets.QListWidget()
+        self.asset_pipeline_process_list.setMaximumHeight(120)
+        pipeline_layout.addWidget(self.asset_pipeline_process_list, 0)
         inspector_layout.addWidget(pipeline_frame, 0)
 
         preview_header = QtWidgets.QHBoxLayout()
