@@ -1496,11 +1496,13 @@ Current implementation checkpoint as of 2026-04-24:
 - a read-only impact/freshness layer exists
 - a minimal asset-manager bridge exists
 - a thin `process_controller` now exists between the UI and `core/pipeline`
+- a minimal shared local runtime now exists for runtime-request intake
 - the asset manager inspector now exposes:
   - pipeline freshness
   - tracked downstream outputs
   - available process definitions
   - a read-only prepared request summary for the selected process
+  - a read-only runtime handoff preview for the selected process
 
 ### In Place But Still Read-Only
 
@@ -1509,12 +1511,14 @@ Current implementation checkpoint as of 2026-04-24:
 - freshness classification
 - process availability by entity kind
 - prepared process request summaries
+- runtime handoff request objects
+- local runtime job intake and in-memory job records
 
-At this stage, the app can describe and surface orchestration-related information, and it can prepare a structured process request preview, but it does not execute pipeline processes yet.
+At this stage, the app can describe and surface orchestration-related information, it can prepare a structured process request preview, it can convert that preview into a runtime-facing handoff object, and it can register that handoff into a shared local runtime, but it does not execute pipeline processes yet.
 
 ### Not Done Yet
 
-- no job runtime
+- no real process execution inside the runtime
 - no Houdini execution backend
 - no remote/client-server execution target flow
 - no automation
@@ -1526,6 +1530,8 @@ We now have the first visible orchestration layer in the app:
 - the launcher can start telling the user what seems missing or stale
 - the launcher can start telling the user which process types make sense for the selected entity
 - the launcher can show what a selected process would target and prepare
+- the launcher can already shape the future runtime input without launching anything yet
+- the launcher can already register a formal local job record from that request
 - the launcher is no longer only a browser; it is beginning to reason about production state and next actions
 
 ### Next Recommended Step
@@ -1534,7 +1540,8 @@ The next clean step is:
 
 - keep the process controller thin
 - formalize process-request objects as the handoff to the future runtime
-- introduce the shared job runtime only after this read-only process-preparation path feels stable
+- keep the runtime generic and local-first
+- introduce real execution only after this intake path feels stable
 
 ## A Safe Implementation Order Inside This App
 

@@ -892,6 +892,11 @@ class AssetManagerController:
             if process_controller is not None
             else None
         )
+        runtime_request = (
+            process_controller.build_runtime_request(self._asset_pipeline_inspection, process_id)
+            if process_controller is not None
+            else None
+        )
         if prepared is None:
             self.w.asset_page.asset_pipeline_process_summary.setText(
                 "This process cannot be prepared for the current selection."
@@ -901,12 +906,27 @@ class AssetManagerController:
         outputs_text = ", ".join(prepared.outputs) if prepared.outputs else "No declared outputs"
         remote_text = "Remote-capable" if prepared.supports_remote else "Local-only"
         review_text = "Review required" if prepared.review_required else "No review gate declared"
+        runtime_text = "Runtime handoff unavailable"
+        if runtime_request is not None:
+            target_text = f"{runtime_request.execution_target.label} [{runtime_request.execution_target.kind}]"
+            if runtime_request.capability_gaps:
+                if runtime_request.execution_target.id == "local":
+                    runtime_text = (
+                        f"Runtime target: {target_text}\n"
+                        "Runtime handoff: ready, target capabilities still need formal resolution"
+                    )
+                else:
+                    gaps = ", ".join(runtime_request.capability_gaps)
+                    runtime_text = f"Runtime target: {target_text}\nMissing target capabilities: {gaps}"
+            else:
+                runtime_text = f"Runtime target: {target_text}\nRuntime handoff: ready"
         self.w.asset_page.asset_pipeline_process_summary.setText(
             f"{prepared.process_label}\n"
             f"Target: {prepared.entity_label} [{prepared.entity_kind}]\n"
             f"Requires: {capability_text}\n"
             f"Outputs: {outputs_text}\n"
-            f"Mode: {remote_text} / {review_text}"
+            f"Mode: {remote_text} / {review_text}\n"
+            f"{runtime_text}"
         )
 
     def _update_preview_label(self) -> None:
