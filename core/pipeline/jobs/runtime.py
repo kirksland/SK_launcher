@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import uuid4
 
+from core.pipeline.execution.result import ExecutionResult, ExecutionStatus
+
 from .models import JobRecord, JobState
 from .requests import RuntimeProcessRequest
 
@@ -18,11 +20,29 @@ class RuntimeSubmissionResult:
     accepted: bool
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeExecutionResult:
+    request: RuntimeProcessRequest
+    job: JobRecord
+    execution: ExecutionResult
+
+
+def _job_state_for_execution_status(status: str) -> str:
+    mapping = {
+        ExecutionStatus.SUCCEEDED: JobState.SUCCEEDED,
+        ExecutionStatus.FAILED: JobState.FAILED,
+        ExecutionStatus.BLOCKED: JobState.BLOCKED,
+        ExecutionStatus.SKIPPED: JobState.PLANNING,
+    }
+    return mapping.get(_clean_token(status), JobState.FAILED)
+
+
 class LocalJobRuntime:
     """Minimal shared runtime that records jobs without executing them yet."""
 
     def __init__(self) -> None:
         self._jobs: list[JobRecord] = []
+        self._results: dict[str, ExecutionResult] = {}
 
     def submit(self, request: RuntimeProcessRequest | None) -> RuntimeSubmissionResult | None:
         if request is None:
@@ -49,6 +69,37 @@ class LocalJobRuntime:
             accepted=state == JobState.QUEUED,
         )
 
+    def execute(
+        self,
+        request: RuntimeProcessRequest | None,
+        *,
+        executor: object,
+    ) -> RuntimeExecutionResult | None:
+        submission = self.submit(request)
+        if submission is None:
+            return None
+        if not callable(executor):
+            raise ValueError("LocalJobRuntime.execute requires a callable executor.")
+        execution = executor(submission.request)
+        if not isinstance(execution, ExecutionResult):
+            raise TypeError("LocalJobRuntime executor must return an ExecutionResult.")
+        updated_job = JobRecord(
+            id=submission.job.id,
+            process_id=submission.job.process_id,
+            target_entity=submission.job.target_entity,
+            execution_target_id=submission.job.execution_target_id,
+            state=_job_state_for_execution_status(execution.status),
+            parameters=submission.job.parameters,
+            message=execution.message or submission.job.message,
+        )
+        self._jobs[-1] = updated_job
+        self._results[updated_job.id] = execution
+        return RuntimeExecutionResult(
+            request=submission.request,
+            job=updated_job,
+            execution=execution,
+        )
+
     def jobs(self) -> tuple[JobRecord, ...]:
         return tuple(self._jobs)
 
@@ -68,3 +119,15 @@ class LocalJobRuntime:
         if not key:
             return ()
         return tuple(job for job in self._jobs if job.target_entity.id == key)
+
+    def execution_result_for_job(self, job_id: object) -> ExecutionResult | None:
+        key = _clean_token(job_id)
+        if not key:
+            return None
+        return self._results.get(key)
+
+    def latest_result(self) -> ExecutionResult | None:
+        if not self._jobs:
+            return None
+        latest = self._jobs[-1]
+        return self._results.get(latest.id)

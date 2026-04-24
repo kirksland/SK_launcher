@@ -1,6 +1,7 @@
 import unittest
 
 from core.pipeline.entities.models import EntityRef, ExecutionTarget
+from core.pipeline.execution import ExecutionResult, ExecutionStatus
 from core.pipeline.jobs import LocalJobRuntime
 from core.pipeline.jobs.models import JobState
 from core.pipeline.jobs.requests import RuntimeProcessRequest
@@ -77,6 +78,36 @@ class PipelineJobRuntimeTests(unittest.TestCase):
 
         self.assertEqual(1, len(runtime.jobs_for_process("publish.asset.usd")))
         self.assertEqual(1, len(runtime.jobs_for_entity("testpipeline:pipeline_asset:tree")))
+
+    def test_execute_updates_job_state_and_stores_result(self) -> None:
+        runtime = LocalJobRuntime()
+        request = RuntimeProcessRequest(
+            process_id="publish.asset.usd",
+            process_label="Publish Asset USD",
+            family="publish",
+            target_entity=EntityRef("testpipeline:pipeline_asset:tree", "pipeline_asset", label="tree"),
+            execution_target=ExecutionTarget(
+                id="pipeline_host_a",
+                kind="pipeline_host",
+                label="Pipeline Host A",
+                capabilities=("houdini", "usd"),
+            ),
+            required_capabilities=("houdini", "usd"),
+        )
+
+        result = runtime.execute(
+            request,
+            executor=lambda _request: ExecutionResult(
+                status=ExecutionStatus.SUCCEEDED,
+                message="USD publish completed.",
+            ),
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(JobState.SUCCEEDED, result.job.state)
+        self.assertEqual(ExecutionStatus.SUCCEEDED, result.execution.status)
+        self.assertEqual(ExecutionStatus.SUCCEEDED, runtime.latest_result().status)  # type: ignore[union-attr]
 
 
 if __name__ == "__main__":

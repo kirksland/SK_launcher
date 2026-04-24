@@ -4,7 +4,7 @@ Date: 2026-04-24
 
 This document defines the next integration layer between the launcher orchestration system and real Houdini-driven pipeline execution.
 
-It is a focused companion to `docs/pipeline_process_orchestration_plan.md`.
+It is a focused companion to `docs/06_pipeline_process_orchestration_plan.md`.
 
 The orchestration plan already defines:
 
@@ -46,6 +46,8 @@ As of this document, the launcher can already do the following:
 - define structured execution result models
 - build a headless Houdini execution plan from a runtime request
 - return a placeholder/stub execution result from a launcher-side Houdini backend adapter
+- route a runtime request through the local runtime to the Houdini backend stub
+- store the returned execution result and reflect it back into the job state
 
 What it cannot do yet:
 
@@ -190,6 +192,113 @@ The Houdini runner should do only a few things:
 5. exit cleanly with a predictable status
 
 That means the runner is a dispatcher, not the place where every process is implemented inline.
+
+## First Runner Contract
+
+To avoid drift, the first Houdini runner contract should be treated as explicit and small.
+
+### Proposed Runner Location
+
+Recommended first location on the Houdini side:
+
+```text
+houdini_pipeline/process_runner.py
+```
+
+This path is already what the launcher-side backend preview uses for now.
+
+That does not force the final repository layout yet, but it gives both sides one stable name to target.
+
+### Proposed Invocation Shape
+
+Recommended first launcher-to-Houdini call shape:
+
+```text
+hython houdini_pipeline/process_runner.py --request-json "<serialized request payload>"
+```
+
+This is enough for the first proof of concept.
+
+Later, if the payload becomes too large, we can switch to:
+
+```text
+hython houdini_pipeline/process_runner.py --request-file "<path to json file>"
+```
+
+But we should start with the smallest usable form.
+
+### First Runner Input Rules
+
+The runner should assume it receives one request at a time.
+
+It should expect:
+
+- `process_id`
+- `entity`
+- `execution_target`
+- `parameters`
+
+Minimal expected payload:
+
+```json
+{
+  "process_id": "publish.asset.usd",
+  "entity": {
+    "id": "testpipeline:pipeline_asset:tree",
+    "kind": "pipeline_asset",
+    "label": "tree",
+    "path": ""
+  },
+  "execution_target": {
+    "id": "local",
+    "kind": "local_workstation",
+    "label": "Local Workstation"
+  },
+  "parameters": {}
+}
+```
+
+### First Runner Output Rules
+
+The runner should always write a structured result, even on failure.
+
+Minimal required fields:
+
+- `status`
+- `message`
+- `outputs`
+- `log_path`
+- `payload`
+
+The safest first rule is:
+
+- never print raw success state as the only signal
+- always return a parseable JSON result
+
+### First Logging Rule
+
+The runner should produce one clear log path per run whenever possible.
+
+Even before we build fancy logging, the runner should aim to give the launcher:
+
+- a human-readable message
+- a stable log path if one exists
+
+That will make later debugging much easier.
+
+### First Dispatch Rule
+
+The runner should never contain all process logic inline.
+
+It should only do:
+
+1. parse request
+2. validate `process_id`
+3. import the matching process module
+4. call its entry point
+5. normalize the returned result
+
+That is the most important structural rule on the Houdini side.
 
 ## Recommended Request Contract
 
@@ -568,7 +677,7 @@ This contract must be stable before process proliferation begins.
 
 Status:
 
-- next
+- next and now the most important remaining launcher/Houdini interface task
 
 ### 4. Define The First Process Interface In Houdini
 
@@ -617,6 +726,76 @@ The standard run path should stay headless.
 Status:
 
 - active rule
+
+## When Houdini Work Should Start
+
+At this point, the launcher side is ready enough that Houdini-side preparation can begin.
+
+You do not need to build the full process implementation yet.
+
+The right first Houdini tasks are:
+
+### Houdini Task 1
+
+Create the first runner entry point:
+
+```text
+houdini_pipeline/process_runner.py
+```
+
+It does not need to execute real pipeline work yet.
+
+Its first job is simply:
+
+- accept the request
+- recognize `publish.asset.usd`
+- return a structured stub result
+
+### Houdini Task 2
+
+Choose the first process wrapper format for `publish.asset.usd`:
+
+- HDA wrapper
+- standardized subnet wrapper
+
+Recommended default:
+
+- HDA wrapper if the interface is already clear
+- subnet wrapper if you want to prototype the graph first
+
+### Houdini Task 3
+
+Decide the first minimal process inputs for `publish.asset.usd`.
+
+For example:
+
+- asset identifier
+- optional source/work path
+- output publish path
+- context
+
+### Houdini Task 4
+
+Prepare the first process graph in Houdini, but keep it tiny.
+
+The purpose is not to solve the whole pipeline immediately.
+
+The purpose is to prove:
+
+- launcher request
+- runner dispatch
+- Houdini process wrapper
+- structured result
+
+## Practical Signal
+
+If you want the simple answer:
+
+> yes, this is now the moment where you can start preparing the first tiny Houdini-side runner and the first `publish.asset.usd` process wrapper.
+
+You do not need to build the full publish logic yet.
+
+You only need enough Houdini-side structure to let us prove the end-to-end contract cleanly.
 
 ## Recommended Immediate Next Step
 

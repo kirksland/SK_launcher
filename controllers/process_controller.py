@@ -3,9 +3,11 @@ from __future__ import annotations
 from core.asset_layout import EntityRecord, ResolvedAssetLayout
 from core.pipeline.asset_bridge import PipelineEntityInspection, inspect_entity_pipeline
 from core.pipeline.entities.models import ExecutionTarget
+from core.pipeline.execution import ExecutionResult, execute_houdini_request
 from core.pipeline.jobs import (
     LocalJobRuntime,
     RuntimeProcessRequest,
+    RuntimeExecutionResult,
     RuntimeSubmissionResult,
     build_runtime_process_request,
 )
@@ -66,5 +68,27 @@ class ProcessController:
         )
         return self._runtime.submit(request)
 
+    def execute_houdini_request(
+        self,
+        inspection: PipelineEntityInspection | None,
+        process_id: object,
+        *,
+        execution_target: ExecutionTarget | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> RuntimeExecutionResult | None:
+        request = self.build_runtime_request(
+            inspection,
+            process_id,
+            execution_target=execution_target,
+            parameters=parameters,
+        )
+        return self._runtime.execute(
+            request,
+            executor=execute_houdini_request,
+        )
+
     def runtime_jobs(self) -> tuple[object, ...]:
         return self._runtime.jobs()
+
+    def latest_execution_result(self) -> ExecutionResult | None:
+        return self._runtime.latest_result()

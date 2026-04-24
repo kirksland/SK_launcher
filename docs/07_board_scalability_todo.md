@@ -2,7 +2,7 @@
 
 Date: 2026-04-22
 
-Cette todo suit la transition du board vers une architecture vraiment scalable. Elle complete `board_scalability_target.md` avec des taches executables.
+Cette todo suit la transition du board vers une architecture vraiment scalable. Elle complete `08_board_scalability_target.md` avec des taches executables.
 
 ## Phase 1. Contrats De Tools
 
