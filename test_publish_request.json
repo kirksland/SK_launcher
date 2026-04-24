@@ -1,0 +1,8 @@
+{
+  "process_id": "publish.asset.usd",
+  "parameters": {
+    "source": "C:/Users/justi/Documents/HoudiniProjects/test_pipeline/library/assets/bar_double_lamp/bar_double_lamp.obj",
+    "output": "C:/Users/justi/Documents/HoudiniProjects/test_pipeline/assets/bar_double_lamp/publish/modeling/test.usdnc",
+    "context": "modeling"
+  }
+}

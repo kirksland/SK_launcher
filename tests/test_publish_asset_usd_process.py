@@ -13,21 +13,30 @@ from houdini_pipeline.processes.publish_asset_usd import (
 
 
 class _FakeParm:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, on_press=None) -> None:
         self.name = name
         self.value = None
+        self.pressed = False
+        self.on_press = on_press
 
     def set(self, value: str) -> None:
         self.value = value
 
+    def pressButton(self) -> None:
+        self.pressed = True
+        if self.on_press is not None:
+            self.on_press()
+
 
 class _FakeNode:
-    def __init__(self, node_type: str = "node") -> None:
+    def __init__(self, node_type: str = "node", write_output_on_cook: bool = True) -> None:
         self.node_type = node_type
+        self.write_output_on_cook = write_output_on_cook
         self.parms = {
             "source": _FakeParm("source"),
             "output": _FakeParm("output"),
             "context": _FakeParm("context"),
+            "execute": _FakeParm("execute", on_press=self._write_output_if_needed),
         }
         self.cooked = False
         self.destroyed = False
@@ -38,20 +47,33 @@ class _FakeNode:
 
     def cook(self, force: bool = False) -> None:
         self.cooked = force
+        self._write_output_if_needed()
+
+    def _write_output_if_needed(self) -> None:
+        if self.write_output_on_cook:
+            output = self.parms["output"].value
+            if output:
+                output_path = Path(output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text("usd", encoding="utf-8")
 
     def destroy(self) -> None:
         self.destroyed = True
 
     def createNode(self, node_type: str, node_name: str | None = None):
-        child = _FakeNode(node_type=node_type)
+        child = _FakeNode(node_type=node_type, write_output_on_cook=self.write_output_on_cook)
         self.created.append((node_type, node_name, child))
         return child
 
 
 class _FakeHou:
-    def __init__(self, include_stage: bool = True) -> None:
-        self.root = _FakeNode(node_type="root")
-        self.stage = _FakeNode(node_type="lopnet") if include_stage else None
+    def __init__(self, include_stage: bool = True, write_output_on_cook: bool = True) -> None:
+        self.root = _FakeNode(node_type="root", write_output_on_cook=write_output_on_cook)
+        self.stage = (
+            _FakeNode(node_type="lopnet", write_output_on_cook=write_output_on_cook)
+            if include_stage
+            else None
+        )
 
     def node(self, path: str):
         if path == "/":
@@ -126,7 +148,7 @@ class PublishAssetUsdProcessTests(unittest.TestCase):
         self.assertEqual(str(source), hda_node.parm("source").value)
         self.assertEqual(str(output), hda_node.parm("output").value)
         self.assertEqual("lookdev", hda_node.parm("context").value)
-        self.assertTrue(hda_node.cooked)
+        self.assertTrue(hda_node.parm("execute").pressed)
         self.assertTrue(hda_node.destroyed)
 
     def test_run_creates_stage_parent_when_missing(self) -> None:
@@ -176,6 +198,31 @@ class PublishAssetUsdProcessTests(unittest.TestCase):
                 )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_run_fails_when_hda_does_not_write_output_file(self) -> None:
+        temp_dir = _make_workspace_temp_dir()
+        try:
+            source = temp_dir / "source.bgeo"
+            source.write_text("geo", encoding="utf-8")
+            output = temp_dir / "publish" / "tree.usd"
+            fake_hou = _FakeHou(write_output_on_cook=False)
+
+            result = run(
+                {
+                    "process_id": "publish.asset.usd",
+                    "parameters": {
+                        "source": str(source),
+                        "output": str(output),
+                        "context": "lookdev",
+                    },
+                },
+                hou_module=fake_hou,
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+        self.assertEqual("failed", result["status"])
+        self.assertIn("no output file was produced", result["message"])
 
 
 if __name__ == "__main__":
