@@ -181,3 +181,9 @@ If we say it in the simplest possible way:
 - Houdini returns a structured result
 
 That is the model we are now committing to.
+
+
+# test console : 
+"""
+& "C:\Program Files\Side Effects Software\Houdini 21.0.559\bin\hython.exe" -m houdini_pipeline.process_runner --request-file "C:\Users\justi\Desktop\SK_launcher\tests\manual\test_publish_request.json"
+"""
