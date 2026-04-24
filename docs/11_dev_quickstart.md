@@ -66,8 +66,8 @@ Video:
 - `video/player.py` backend selection + OpenCV playback + zoom/pan widget
 
 Board / edit refactor note:
-- `docs/board_edit_refactor_devnote.md`
-- `docs/how_to_add_board_tool.md`
+- `docs/03_board_edit_refactor_devnote.md`
+- `docs/01_how_to_add_board_tool.md`
 
 Image tools (modular stack):
 - `tools/image_tools/registry.py` auto-discovers image tools and applies tool stacks
