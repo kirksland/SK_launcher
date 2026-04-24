@@ -350,6 +350,32 @@ class AssetManagerPage(QtWidgets.QWidget):
         inspector_layout.addWidget(meta_frame, 0)
         meta_frame.setVisible(False)
 
+        self.asset_inspector_tabs = QtWidgets.QTabWidget()
+        self.asset_inspector_tabs.setDocumentMode(True)
+        self.asset_inspector_tabs.setStyleSheet(
+            "QTabWidget::pane { border: none; }"
+            "QTabBar::tab {"
+            "background: rgba(255,255,255,0.04);"
+            "border: 1px solid rgba(255,255,255,0.08);"
+            "border-bottom: none;"
+            "padding: 7px 12px;"
+            "margin-right: 4px;"
+            "border-top-left-radius: 6px;"
+            "border-top-right-radius: 6px;"
+            "color: #9aa3ad;"
+            "}"
+            "QTabBar::tab:selected {"
+            "background: rgba(255,255,255,0.08);"
+            "color: #d8dde5;"
+            "}"
+        )
+        inspector_layout.addWidget(self.asset_inspector_tabs, 1)
+
+        preview_tab = QtWidgets.QWidget()
+        preview_tab_layout = QtWidgets.QVBoxLayout(preview_tab)
+        preview_tab_layout.setContentsMargins(0, 4, 0, 0)
+        preview_tab_layout.setSpacing(10)
+
         pipeline_frame = QtWidgets.QFrame()
         pipeline_frame.setStyleSheet(panel_style())
         pipeline_layout = QtWidgets.QVBoxLayout(pipeline_frame)
@@ -371,41 +397,13 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_pipeline_process_list = QtWidgets.QListWidget()
         self.asset_pipeline_process_list.setMaximumHeight(120)
         pipeline_layout.addWidget(self.asset_pipeline_process_list, 0)
-        inspector_layout.addWidget(pipeline_frame, 0)
-
-        preview_header = QtWidgets.QHBoxLayout()
-        preview_title = QtWidgets.QLabel("Preview")
-        preview_title.setStyleSheet("font-weight: 600;")
-        preview_header.addWidget(preview_title, 0)
-        preview_header.addStretch(1)
-        self.asset_preview_label = QtWidgets.QLabel("0/0")
-        self.asset_preview_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.asset_preview_label.setStyleSheet("color: #c6ccd6; padding: 2px 6px;")
-        preview_header.addWidget(self.asset_preview_label, 0)
-        inspector_layout.addLayout(preview_header)
-        preview_title.setVisible(False)
-
-        preview_container = QtWidgets.QFrame()
-        preview_container.setStyleSheet(panel_style())
-        preview_container.setFixedHeight(220)
-        preview_container.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        preview_layout = QtWidgets.QGridLayout(preview_container)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-        preview_layout.setSpacing(0)
 
         self.asset_preview = QtWidgets.QLabel()
-        self.asset_preview.setFixedHeight(220)
         self.asset_preview.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.asset_preview.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        preview_layout.addWidget(self.asset_preview, 0, 0)
-        inspector_layout.addWidget(preview_container, 0)
-        preview_container.setVisible(False)
 
         self.asset_status = QtWidgets.QLabel("")
         self.asset_status.setWordWrap(True)
@@ -430,11 +428,21 @@ class AssetManagerPage(QtWidgets.QWidget):
         self.asset_video_controller = VideoController(
             video_backend_pref,
             status_label=self.asset_status,
-            preview_label=self.asset_preview_label,
+            preview_label=None,
             preview_widget=self.asset_preview,
             parent=self,
         )
         self.asset_video = self.asset_video_controller.widget
+        preview_header = QtWidgets.QHBoxLayout()
+        preview_title = QtWidgets.QLabel("Preview")
+        preview_title.setStyleSheet("font-weight: 600;")
+        preview_header.addWidget(preview_title, 0)
+        preview_header.addStretch(1)
+        self.asset_preview_label = QtWidgets.QLabel("0/0")
+        self.asset_preview_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.asset_preview_label.setStyleSheet("color: #c6ccd6; padding: 2px 6px;")
+        preview_header.addWidget(self.asset_preview_label, 0)
+        self.asset_video_layout.addLayout(preview_header)
         self.asset_video_layout.addWidget(self.asset_video, 1)
 
         controls = QtWidgets.QHBoxLayout()
@@ -461,7 +469,16 @@ class AssetManagerPage(QtWidgets.QWidget):
         controls.addWidget(self.asset_video_slider, 1)
         self.asset_video_controller.bind_controls(self.asset_play_btn, self.asset_video_slider)
         self.asset_video_layout.addLayout(controls)
-        inspector_layout.addWidget(self.asset_video_box, 1)
+        preview_tab_layout.addWidget(self.asset_video_box, 1)
+
+        pipeline_tab = QtWidgets.QWidget()
+        pipeline_tab_layout = QtWidgets.QVBoxLayout(pipeline_tab)
+        pipeline_tab_layout.setContentsMargins(0, 4, 0, 0)
+        pipeline_tab_layout.setSpacing(10)
+        pipeline_tab_layout.addWidget(pipeline_frame, 1)
+
+        self.asset_inspector_tabs.addTab(preview_tab, "Preview")
+        self.asset_inspector_tabs.addTab(pipeline_tab, "Pipeline")
 
         versions_panel = self._make_panel("Inventory", "")
         versions_layout = versions_panel.layout()  # type: ignore[assignment]

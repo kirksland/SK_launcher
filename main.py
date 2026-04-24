@@ -35,6 +35,7 @@ from controllers.app_command_controller import AppCommandController
 from controllers.app_shortcuts_controller import AppShortcutsController
 from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
+from controllers.process_controller import ProcessController
 from controllers.board.command_dispatcher import BoardCommandDispatcher
 from controllers.board.controller import BoardController
 from ui.widgets.project_card import ProjectCard
@@ -671,6 +672,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.client_conflict_keep_both_btn = self.client_page.client_conflict_keep_both_btn
 
         self.asset_controller = AssetManagerController(self)
+        self.process_controller = ProcessController(self)
         self.project_controller = ProjectsController(self)
         self.client_controller = ClientController(self)
         self.board_controller = BoardController(self)

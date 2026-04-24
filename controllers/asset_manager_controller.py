@@ -21,7 +21,6 @@ from core.asset_browser import (
     resolved_filter_choice,
 )
 from core.asset_layout import EntityRecord, ResolvedAssetLayout, resolve_asset_layout
-from core.pipeline.asset_bridge import inspect_entity_pipeline
 from core.asset_schema import entity_root_candidates
 from core.fs import find_projects
 from core.metadata import load_metadata
@@ -807,10 +806,15 @@ class AssetManagerController:
     ) -> None:
         if not hasattr(self.w.asset_page, "asset_pipeline_summary"):
             return
-        inspection = inspect_entity_pipeline(
-            layout,
-            record,
-            context=normalize_list_context(context),
+        process_controller = getattr(self.w, "process_controller", None)
+        inspection = (
+            process_controller.inspect_entity(
+                layout,
+                record,
+                context=normalize_list_context(context),
+            )
+            if process_controller is not None
+            else None
         )
         summary_label = self.w.asset_page.asset_pipeline_summary
         list_widget = self.w.asset_page.asset_pipeline_list

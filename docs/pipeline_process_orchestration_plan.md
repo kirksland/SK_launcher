@@ -1483,6 +1483,56 @@ The next real implementation slice should be:
 
 That is the cleanest possible beginning and the best protection against future ugly refactors.
 
+## Checkpoint
+
+Current implementation checkpoint as of 2026-04-24:
+
+### Done
+
+- the orchestration vision and phased rollout are documented
+- canonical pipeline models exist
+- contract tests exist for those models
+- a read-only dependency graph exists
+- a read-only impact/freshness layer exists
+- a minimal asset-manager bridge exists
+- the asset manager inspector now exposes:
+  - pipeline freshness
+  - tracked downstream outputs
+  - available process definitions
+
+### In Place But Still Read-Only
+
+- entity inspection
+- dependency traversal
+- freshness classification
+- process availability by entity kind
+
+At this stage, the app can describe and surface orchestration-related information, but it does not execute pipeline processes yet.
+
+### Not Done Yet
+
+- no process controller
+- no job runtime
+- no Houdini execution backend
+- no remote/client-server execution target flow
+- no automation
+
+### Current Practical Meaning
+
+We now have the first visible orchestration layer in the app:
+
+- the launcher can start telling the user what seems missing or stale
+- the launcher can start telling the user which process types make sense for the selected entity
+- the launcher is no longer only a browser; it is beginning to reason about production state
+
+### Next Recommended Step
+
+The next clean step is:
+
+- add a thin `process_controller`
+- keep process selection read-only at first
+- prepare the transition toward a shared job runtime without jumping into raw script execution
+
 ## A Safe Implementation Order Inside This App
 
 To fit the current Skyforge structure, the cleanest implementation path is:
