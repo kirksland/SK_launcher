@@ -20,7 +20,8 @@ from core.asset_browser import (
     filter_entity_dirs,
     resolved_filter_choice,
 )
-from core.asset_layout import EntityRecord, resolve_asset_layout
+from core.asset_layout import EntityRecord, ResolvedAssetLayout, resolve_asset_layout
+from core.pipeline.asset_bridge import inspect_entity_pipeline
 from core.asset_schema import entity_root_candidates
 from core.fs import find_projects
 from core.metadata import load_metadata
@@ -134,6 +135,10 @@ class AssetManagerController:
         self.w.asset_details_title.setText("No project selected")
         self.w.asset_path_label.setText(message)
         self.w.asset_meta.setText(message)
+        if hasattr(self.w.asset_page, "asset_pipeline_summary"):
+            self.w.asset_page.asset_pipeline_summary.setText("No pipeline inspection available.")
+            self.w.asset_page.asset_pipeline_list.clear()
+            self.w.asset_page.asset_pipeline_list.addItem("No entity selected")
         self.w.asset_inventory_list.clear()
         self.w.asset_inventory_list.addItem("No entity selected")
         self.w.asset_history_list.clear()
@@ -171,6 +176,10 @@ class AssetManagerController:
             self.w.asset_details_title.setText(project_path.name)
             self.w.asset_path_label.setText(f"{project_path.name} / Confirm asset layout")
             self.w.asset_meta.setText("Confirm the detected asset layout before browsing entities.")
+            if hasattr(self.w.asset_page, "asset_pipeline_summary"):
+                self.w.asset_page.asset_pipeline_summary.setText("Pipeline inspection will be available after layout confirmation.")
+                self.w.asset_page.asset_pipeline_list.clear()
+                self.w.asset_page.asset_pipeline_list.addItem("Layout setup required")
             self.w.asset_inventory_list.addItem("Layout setup required")
             self.w.asset_history_list.addItem("Layout setup required")
             self.set_asset_status("Confirm the detected layout or use the default layout.")
@@ -186,6 +195,10 @@ class AssetManagerController:
         self._clear_asset_detail_lists(self.w)
         self.w.asset_preview.clear()
         self.w.asset_meta.setText("Select a shot or asset to view details.")
+        if hasattr(self.w.asset_page, "asset_pipeline_summary"):
+            self.w.asset_page.asset_pipeline_summary.setText("Select a shot or asset to inspect pipeline status.")
+            self.w.asset_page.asset_pipeline_list.clear()
+            self.w.asset_page.asset_pipeline_list.addItem("No entity selected")
         self.w.asset_inventory_list.addItem("No entity selected")
         self.w.asset_history_list.addItem("No entity selected")
         self._sync_asset_contexts(active_schema)
@@ -701,6 +714,10 @@ class AssetManagerController:
 
         self.w.asset_inventory_list.clear()
         self.w.asset_inventory_list.addItem("Loading inventory...")
+        if hasattr(self.w.asset_page, "asset_pipeline_summary"):
+            self.w.asset_page.asset_pipeline_summary.setText("Loading pipeline inspection...")
+            self.w.asset_page.asset_pipeline_list.clear()
+            self.w.asset_page.asset_pipeline_list.addItem("Loading pipeline inspection...")
 
         self.w.asset_history_list.clear()
         self.w.asset_history_list.addItem("Loading history...")
@@ -747,6 +764,7 @@ class AssetManagerController:
             context = self._pick_best_context(entity_dir, context)
         list_context = normalize_list_context(context)
         self.w.asset_meta.setText(build_asset_meta_text(owner, status, context, entity_dir.name))
+        self._update_asset_pipeline_inspection(layout, record, context)
 
         self.w.asset_inventory_list.clear()
         inventory = build_entity_inventory(
@@ -772,6 +790,42 @@ class AssetManagerController:
 
         self.w.asset_history_list.clear()
         self.w.asset_history_list.addItem(read_history_note(entity_dir))
+
+    def _update_asset_pipeline_inspection(
+        self,
+        layout: ResolvedAssetLayout | None,
+        record: EntityRecord | None,
+        context: str,
+    ) -> None:
+        if not hasattr(self.w.asset_page, "asset_pipeline_summary"):
+            return
+        inspection = inspect_entity_pipeline(
+            layout,
+            record,
+            context=normalize_list_context(context),
+        )
+        summary_label = self.w.asset_page.asset_pipeline_summary
+        list_widget = self.w.asset_page.asset_pipeline_list
+        list_widget.clear()
+        if inspection is None:
+            summary_label.setText("No pipeline inspection available.")
+            list_widget.addItem("No pipeline data")
+            return
+        freshness_label = inspection.freshness.replace("_", " ").title()
+        downstream_count = len(inspection.downstream)
+        summary_label.setText(
+            f"Freshness: {freshness_label}\nDownstream items: {downstream_count}"
+        )
+        if not inspection.downstream:
+            list_widget.addItem("No downstream outputs tracked yet")
+            return
+        for record in inspection.downstream[:6]:
+            item = QtWidgets.QListWidgetItem(
+                f"{record.freshness.replace('_', ' ').title()} - {record.entity.label or record.entity.id}"
+            )
+            if record.entity.path:
+                item.setToolTip(record.entity.path)
+            list_widget.addItem(item)
 
     def _update_preview_label(self) -> None:
         total = len(getattr(self.w, "_preview_images", []))
