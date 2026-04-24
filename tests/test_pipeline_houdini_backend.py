@@ -53,7 +53,7 @@ class PipelineHoudiniBackendTests(unittest.TestCase):
         assert plan is not None
         self.assertTrue(plan.headless)
         self.assertEqual("hython", plan.executable)
-        self.assertIn("houdini_pipeline/process_runner.py", plan.command_preview)
+        self.assertIn("houdini_pipeline.process_runner", plan.command_preview)
 
     def test_execute_houdini_request_blocks_when_capabilities_are_missing(self) -> None:
         request = RuntimeProcessRequest(

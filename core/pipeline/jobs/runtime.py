@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from core.pipeline.execution.result import ExecutionResult, ExecutionStatus
+from core.pipeline.provenance import ProducedArtifactRecord, build_artifact_records
 
 from .models import JobRecord, JobState
 from .requests import RuntimeProcessRequest
@@ -43,6 +44,7 @@ class LocalJobRuntime:
     def __init__(self) -> None:
         self._jobs: list[JobRecord] = []
         self._results: dict[str, ExecutionResult] = {}
+        self._artifacts: dict[str, tuple[ProducedArtifactRecord, ...]] = {}
 
     def submit(self, request: RuntimeProcessRequest | None) -> RuntimeSubmissionResult | None:
         if request is None:
@@ -94,6 +96,11 @@ class LocalJobRuntime:
         )
         self._jobs[-1] = updated_job
         self._results[updated_job.id] = execution
+        self._artifacts[updated_job.id] = build_artifact_records(
+            request=submission.request,
+            job=updated_job,
+            execution=execution,
+        )
         return RuntimeExecutionResult(
             request=submission.request,
             job=updated_job,
@@ -131,3 +138,15 @@ class LocalJobRuntime:
             return None
         latest = self._jobs[-1]
         return self._results.get(latest.id)
+
+    def artifact_records_for_job(self, job_id: object) -> tuple[ProducedArtifactRecord, ...]:
+        key = _clean_token(job_id)
+        if not key:
+            return ()
+        return self._artifacts.get(key, ())
+
+    def latest_artifacts(self) -> tuple[ProducedArtifactRecord, ...]:
+        if not self._jobs:
+            return ()
+        latest = self._jobs[-1]
+        return self._artifacts.get(latest.id, ())

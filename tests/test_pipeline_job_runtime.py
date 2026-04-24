@@ -93,6 +93,7 @@ class PipelineJobRuntimeTests(unittest.TestCase):
                 capabilities=("houdini", "usd"),
             ),
             required_capabilities=("houdini", "usd"),
+            parameters={"source": "C:/project/source/tree.obj"},
         )
 
         result = runtime.execute(
@@ -108,6 +109,50 @@ class PipelineJobRuntimeTests(unittest.TestCase):
         self.assertEqual(JobState.SUCCEEDED, result.job.state)
         self.assertEqual(ExecutionStatus.SUCCEEDED, result.execution.status)
         self.assertEqual(ExecutionStatus.SUCCEEDED, runtime.latest_result().status)  # type: ignore[union-attr]
+        artifacts = runtime.latest_artifacts()
+        self.assertEqual(0, len(artifacts))
+
+    def test_execute_registers_artifacts_with_source_provenance(self) -> None:
+        runtime = LocalJobRuntime()
+        request = RuntimeProcessRequest(
+            process_id="publish.asset.usd",
+            process_label="Publish Asset USD",
+            family="publish",
+            target_entity=EntityRef("testpipeline:library_asset:tree", "library_asset", label="tree"),
+            execution_target=ExecutionTarget(
+                id="pipeline_host_a",
+                kind="pipeline_host",
+                label="Pipeline Host A",
+                capabilities=("houdini", "usd"),
+            ),
+            required_capabilities=("houdini", "usd"),
+            parameters={
+                "source": "C:/project/library/tree.obj",
+                "output": "C:/project/assets/tree/publish/modeling/tree.usd",
+                "context": "modeling",
+            },
+        )
+
+        result = runtime.execute(
+            request,
+            executor=lambda _request: ExecutionResult(
+                status=ExecutionStatus.SUCCEEDED,
+                message="USD publish completed.",
+                outputs=(
+                    __import__("core.pipeline.execution", fromlist=["ProducedOutput"]).ProducedOutput(
+                        kind="usd",
+                        path="C:/project/assets/tree/publish/modeling/tree.usd",
+                    ),
+                ),
+                payload={"execution_mode": "houdini_headless"},
+            ),
+        )
+
+        self.assertIsNotNone(result)
+        artifacts = runtime.latest_artifacts()
+        self.assertEqual(1, len(artifacts))
+        self.assertEqual("publish.asset.usd", artifacts[0].process_id)
+        self.assertEqual("C:/project/library/tree.obj", artifacts[0].source_artifacts[0].path)
 
 
 if __name__ == "__main__":

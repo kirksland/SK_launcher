@@ -20,6 +20,7 @@ from .graph import (
 from .jobs.models import JobRecord, JobState
 from .jobs.requests import RuntimeProcessRequest, build_runtime_process_request, default_local_execution_target
 from .jobs.runtime import LocalJobRuntime, RuntimeExecutionResult, RuntimeSubmissionResult
+from .provenance import ProducedArtifactRecord, SourceArtifactRef, build_artifact_records
 from .processes.definitions import ProcessDefinition, ProcessFamily
 from .processes.planning import PreparedProcessRequest, get_process_definition, prepare_process_request
 from .processes.registry import available_processes_for_entity_kind, list_process_definitions
@@ -41,13 +42,16 @@ __all__ = [
     "LocalJobRuntime",
     "ProcessDefinition",
     "ProcessFamily",
+    "ProducedArtifactRecord",
     "PreparedProcessRequest",
     "ProducedOutput",
     "RuntimeSubmissionResult",
     "RuntimeExecutionResult",
     "RuntimeProcessRequest",
+    "SourceArtifactRef",
     "TargetCapability",
     "available_processes_for_entity_kind",
+    "build_artifact_records",
     "build_houdini_execution_plan",
     "build_houdini_request_payload",
     "build_runtime_process_request",

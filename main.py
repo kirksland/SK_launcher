@@ -786,6 +786,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_page.asset_pipeline_process_list.currentItemChanged.connect(
             lambda _current, _previous: self.asset_controller.on_asset_pipeline_process_selected()
         )
+        self.asset_page.asset_pipeline_run_btn.clicked.connect(
+            self.asset_controller.run_selected_asset_pipeline_process
+        )
         self.asset_commit_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_push_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_fetch_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
