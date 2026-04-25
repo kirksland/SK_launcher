@@ -149,6 +149,9 @@ class DccSceneFileTests(unittest.TestCase):
         self.assertIsNone(result.scene_path)
         self.assertIn("No DCC handler is registered", result.error)
 
+    def test_default_scene_filename_can_be_used_to_append_missing_extension(self) -> None:
+        self.assertEqual(default_scene_filename("Demo", "houdini"), "Demo_001.hipnc")
+
 
 if __name__ == "__main__":
     unittest.main()

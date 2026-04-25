@@ -152,7 +152,7 @@ class AssetPipelinePanelController:
                 runtime_text = f"Runtime target: {target_text}\nRuntime handoff: ready"
         preview_text = ""
         if prepared.process_id == "publish.asset.usd":
-            preview_parameters = self._resolve_publish_parameters(False)
+            preview_parameters = self._resolve_publish_parameters(ensure_dirs=False)
             if preview_parameters is not None:
                 preview_text = (
                     f"\nResolved source: {preview_parameters['source']}\n"
@@ -215,7 +215,7 @@ class AssetPipelinePanelController:
 
     def _resolve_pipeline_process_parameters(self, process_id: str) -> dict[str, object] | None:
         if process_id == "publish.asset.usd":
-            return self._resolve_publish_parameters(True)
+            return self._resolve_publish_parameters(ensure_dirs=True)
         self._set_status(f"{process_id} is not executable from the Asset Manager yet.")
         self._set_run_summary(
             f"{process_id} is visible in the inspector, but its execution planner is not wired yet."

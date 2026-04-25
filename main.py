@@ -1090,8 +1090,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 f"[CACHE] Runtime cache cleanup removed {removed} project cache(s), freed {freed // (1024 * 1024)} MB.",
             )
         self._refresh_settings_validation()
-        APP_LOG_BUS.append("warning", message)
-        QtWidgets.QMessageBox.information(self, APP_TITLE, message)
 
     def _refresh_settings_validation(self) -> None:
         snapshot = {

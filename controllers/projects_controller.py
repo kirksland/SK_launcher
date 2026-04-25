@@ -226,6 +226,7 @@ class ProjectsController:
         return None
 
     def _prompt_scene_filename(self, project_path: Path, dcc_id: str) -> Optional[str]:
+        descriptor = next((entry for entry in iter_dccs() if entry.id == dcc_id), None)
         handler = get_dcc_handler(dcc_id)
         default_name = (
             handler.default_scene_filename(project_path.name)
@@ -244,6 +245,8 @@ class ProjectsController:
         if not normalized:
             self.w._warn("Scene name cannot be empty.")
             return None
+        if "." not in Path(normalized).name and descriptor is not None and descriptor.extensions:
+            normalized = f"{normalized}{descriptor.extensions[0]}"
         return normalized
 
     def _create_scene_for_project(self, project_path: Path) -> Optional[Path]:
