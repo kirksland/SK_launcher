@@ -393,7 +393,12 @@ class AssetManagerController:
                 shot_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "shot")
                 preview = layout.preview_path(self._entity_record_for_path(shot_dir)) if layout else None
                 shot_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
-                shot_item.setIcon(QtGui.QIcon(self._get_placeholder_pixmap(shot_dir, shot_icon_size)))
+                initial_pix = (
+                    self._get_scaled_preview_pixmap(Path(str(preview)), shot_dir, shot_icon_size)
+                    if preview
+                    else self._get_placeholder_pixmap(shot_dir, shot_icon_size)
+                )
+                shot_item.setIcon(QtGui.QIcon(initial_pix))
                 self.w.asset_shots_list.addItem(shot_item)
             if not visible_shots:
                 self._add_empty_entity_item(
@@ -423,7 +428,12 @@ class AssetManagerController:
                 asset_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "asset")
                 preview = layout.preview_path(self._entity_record_for_path(asset_dir)) if layout else None
                 asset_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
-                asset_item.setIcon(QtGui.QIcon(self._get_placeholder_pixmap(asset_dir, asset_icon_size)))
+                initial_pix = (
+                    self._get_scaled_preview_pixmap(Path(str(preview)), asset_dir, asset_icon_size)
+                    if preview
+                    else self._get_placeholder_pixmap(asset_dir, asset_icon_size)
+                )
+                asset_item.setIcon(QtGui.QIcon(initial_pix))
                 self.w.asset_assets_list.addItem(asset_item)
             if not visible_assets:
                 self._add_empty_entity_item(
@@ -453,7 +463,12 @@ class AssetManagerController:
                 library_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "asset")
                 preview = layout.preview_path(self._entity_record_for_path(library_dir)) if layout else None
                 library_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
-                library_item.setIcon(QtGui.QIcon(self._get_placeholder_pixmap(library_dir, asset_icon_size)))
+                initial_pix = (
+                    self._get_scaled_preview_pixmap(Path(str(preview)), library_dir, asset_icon_size)
+                    if preview
+                    else self._get_placeholder_pixmap(library_dir, asset_icon_size)
+                )
+                library_item.setIcon(QtGui.QIcon(initial_pix))
                 self.w.asset_library_list.addItem(library_item)
             if not visible_library_assets:
                 self._add_empty_entity_item(
@@ -468,7 +483,10 @@ class AssetManagerController:
                 )
             self.w.asset_library_list.setUpdatesEnabled(True)
             self._restore_entity_selection(self.w.asset_library_list)
-        self._schedule_entity_icon_hydration(target, entity_icon_request_id)
+        # These entity cards should stay visually stable while the user scrolls,
+        # hovers, or resizes the window. We now resolve the best preview
+        # synchronously during list construction, so we intentionally avoid a
+        # second async hydration pass here.
 
     def _schedule_entity_icon_hydration(self, target: str, request_id: int) -> None:
         QtCore.QTimer.singleShot(
@@ -482,6 +500,7 @@ class AssetManagerController:
         target_widgets = self._entity_list_widgets_for_target(target)
         batch_size = 8
         next_index = start_index
+        touched_widgets: list[QtWidgets.QListWidget] = []
         for list_widget in target_widgets:
             count = list_widget.count()
             if start_index >= count:
@@ -502,7 +521,10 @@ class AssetManagerController:
                 else:
                     pix = self._get_placeholder_pixmap(entity_dir, icon_size)
                 item.setIcon(QtGui.QIcon(pix))
+            touched_widgets.append(list_widget)
             next_index = max(next_index, end)
+        for list_widget in touched_widgets:
+            list_widget.viewport().update()
         if any(next_index < widget.count() for widget in target_widgets):
             QtCore.QTimer.singleShot(
                 0,
@@ -578,7 +600,7 @@ class AssetManagerController:
             preview_path,
             size,
             cache_root=self._asset_preview_cache_root(),
-            allow_sync_exr=False,
+            allow_sync_exr=True,
         )
         if pix.isNull():
             pix = build_thumbnail_pixmap(entity_dir, size)
@@ -943,6 +965,15 @@ class AssetManagerController:
                     runtime_text = f"Runtime target: {target_text}\nMissing target capabilities: {gaps}"
             else:
                 runtime_text = f"Runtime target: {target_text}\nRuntime handoff: ready"
+        preview_text = ""
+        if prepared.process_id == "publish.asset.usd":
+            preview_parameters = self._resolve_publish_asset_usd_parameters(ensure_dirs=False)
+            if preview_parameters is not None:
+                preview_text = (
+                    f"\nResolved source: {preview_parameters['source']}\n"
+                    f"Resolved output: {preview_parameters['output']}\n"
+                    f"Resolved context: {preview_parameters['context']}"
+                )
         self.w.asset_page.asset_pipeline_process_summary.setText(
             f"{prepared.process_label}\n"
             f"Target: {prepared.entity_label} [{prepared.entity_kind}]\n"
@@ -950,6 +981,7 @@ class AssetManagerController:
             f"Outputs: {outputs_text}\n"
             f"Mode: {remote_text} / {review_text}\n"
             f"{runtime_text}"
+            f"{preview_text}"
         )
         if run_btn is not None:
             run_btn.setEnabled(runtime_request is not None and prepared.process_id == "publish.asset.usd")
@@ -973,6 +1005,7 @@ class AssetManagerController:
         parameters = self._resolve_pipeline_process_parameters(process_id)
         if parameters is None:
             return
+        self._log_pipeline_run_start(process_id, parameters)
         self.w.asset_page.asset_pipeline_run_summary.setText(
             f"Running {process_id}..."
         )
@@ -992,6 +1025,7 @@ class AssetManagerController:
             self.set_asset_status("Pipeline execution could not be prepared.")
             return
         self._update_asset_pipeline_run_feedback(runtime_result)
+        self._log_pipeline_run_result(runtime_result)
         if runtime_result.execution.status == "succeeded":
             self.set_asset_status(f"{runtime_result.request.process_id} completed.")
             entity = getattr(self.w, "_asset_current_entity", None)
@@ -1003,14 +1037,14 @@ class AssetManagerController:
 
     def _resolve_pipeline_process_parameters(self, process_id: str) -> dict[str, object] | None:
         if process_id == "publish.asset.usd":
-            return self._resolve_publish_asset_usd_parameters()
+            return self._resolve_publish_asset_usd_parameters(ensure_dirs=True)
         self.set_asset_status(f"{process_id} is not executable from the Asset Manager yet.")
         self.w.asset_page.asset_pipeline_run_summary.setText(
             f"{process_id} is visible in the inspector, but its execution planner is not wired yet."
         )
         return None
 
-    def _resolve_publish_asset_usd_parameters(self) -> dict[str, object] | None:
+    def _resolve_publish_asset_usd_parameters(self, *, ensure_dirs: bool) -> dict[str, object] | None:
         entity = getattr(self.w, "_asset_current_entity", None)
         if not entity:
             self.set_asset_status("No entity selected.")
@@ -1025,7 +1059,8 @@ class AssetManagerController:
             return None
         context = self._effective_pipeline_context()
         output_path = self._resolve_publish_output_path(entity_dir, context)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if ensure_dirs:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
         return {
             "source": source_path.as_posix(),
             "output": output_path.as_posix(),
@@ -1145,6 +1180,29 @@ class AssetManagerController:
             item = QtWidgets.QListWidgetItem(text)
             item.setToolTip(artifact.path)
             artifact_list.addItem(item)
+
+    @staticmethod
+    def _log_pipeline_run_start(process_id: str, parameters: dict[str, object]) -> None:
+        print(f"[PIPELINE] Starting {process_id}")
+        for key in ("source", "output", "context"):
+            value = str(parameters.get(key, "") or "").strip()
+            if value:
+                print(f"[PIPELINE]   {key}: {value}")
+
+    @staticmethod
+    def _log_pipeline_run_result(runtime_result: object) -> None:
+        execution = getattr(runtime_result, "execution", None)
+        request = getattr(runtime_result, "request", None)
+        if execution is None or request is None:
+            return
+        print(
+            f"[PIPELINE] Finished {request.process_id} with status={execution.status} "
+            f"message={execution.message}"
+        )
+        for output in tuple(getattr(execution, "outputs", ()) or ()):
+            path = str(getattr(output, "path", "") or "").strip()
+            if path:
+                print(f"[PIPELINE]   output: {path}")
 
     def _update_preview_label(self) -> None:
         total = len(getattr(self.w, "_preview_images", []))
@@ -1348,16 +1406,14 @@ class AssetManagerController:
             return
         if self._is_ignored_asset_watch_path(changed_path):
             return
+        print(f"[ASSET_WATCH] queued refresh from: {changed_path}")
         if not self._asset_refresh_watch_timer.isActive():
             self._asset_refresh_watch_timer.start()
 
     def _run_asset_refresh(self) -> None:
+        print("[ASSET_WATCH] running asset manager refresh")
         self._refresh_asset_watch_paths()
         self.refresh_asset_manager()
-        if getattr(self.w.asset_pages, "currentIndex", lambda: 0)() == 1:
-            entity = getattr(self.w, "_asset_current_entity", None)
-            if entity:
-                self._load_entity_details(Path(entity))
 
     def _refresh_asset_watch_paths(self) -> None:
         if not getattr(self.w, "_asset_watch_enabled", True):
@@ -1384,9 +1440,6 @@ class AssetManagerController:
                     assets_root = project_path / root_name
                     if assets_root.exists():
                         paths.append(assets_root)
-        entity = getattr(self.w, "_asset_current_entity", None)
-        if entity and Path(entity).exists():
-            paths.append(Path(entity))
         update_watcher_paths(self._asset_watcher, paths)
 
     @staticmethod

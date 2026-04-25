@@ -518,3 +518,91 @@ The clean ecosystem model is:
 - `shots` = downstream assembly ecosystem
 
 If we keep building around that model, the asset manager can become a real production cockpit instead of only a project browser with pipeline hints.
+
+## Checkpoint
+
+This checkpoint records the current real state of the implementation.
+
+### What Is Already Working
+
+- the `Pipeline` tab in the Asset Manager inspector exists and is now actionable
+- the first wired executable process is `publish.asset.usd`
+- the process can be launched from:
+  - `pipeline_asset`
+  - `library_asset`
+- the launcher now resolves before execution:
+  - source
+  - output
+  - context
+- the Houdini runner executes the HDA headlessly
+- the execution result is shown back in the inspector
+- produced artifacts are registered through provenance
+- launcher logs now record:
+  - process id
+  - source
+  - output
+  - context
+  - final status
+
+### Important Current Behavior
+
+When the selected entity is a `library_asset`, the publish does not write back into the source folder anymore.
+
+Instead, the planner now targets the managed asset side:
+
+- if a matching managed asset already exists, it publishes there
+- otherwise, it resolves a target under the asset root defined by the layout
+
+So the intended flow is now:
+
+```text
+Library source
+-> managed asset publish target
+-> USD output
+```
+
+That matches the architecture better than publishing beside the source files.
+
+### What Is Still Missing
+
+The downstream panel is not fully caught up yet.
+
+Right now, a publish triggered from `Library` can succeed and create a managed USD output, but that new output does not always appear under `Downstream items` for the selected library entity.
+
+Why:
+
+- the planner knows where to publish
+- the runtime knows how to execute
+- provenance knows what artifact was produced
+- but the inspection graph still does not fully express:
+
+```text
+library source -> managed asset publish
+```
+
+So the missing piece is not execution anymore.
+The missing piece is graph visibility and relationship modeling between source-side entities and managed downstream outputs.
+
+### Practical Meaning
+
+Today, the Asset Manager can already do something real:
+
+- select a source-side library asset
+- publish a USD from it
+- route that publish into the managed asset ecosystem
+
+But it still cannot fully narrate that relationship back to the user in the downstream inspection.
+
+### Next Structural Step
+
+The next clean improvement is:
+
+- use provenance plus planner knowledge
+- register the produced managed publish as a downstream artifact of the source-side entity
+- surface that relationship in `Downstream items`
+
+That will close the gap between:
+
+- "the process ran successfully"
+and
+- "the ecosystem understands what this publish now belongs to"
