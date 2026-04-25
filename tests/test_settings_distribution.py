@@ -162,12 +162,26 @@ class SettingsDistributionTests(unittest.TestCase):
                 "template_hip": "",
                 "use_file_association": False,
                 "houdini_exe": "",
+                "blender_exe": "",
             }
         )
         self.assertEqual(
             issues,
             ["Projects Folder", "Server Repo Folder", "Template Hip", "Houdini Executable"],
         )
+
+    def test_settings_startup_issues_reports_invalid_blender_path_when_present(self) -> None:
+        issues = settings_startup_issues(
+            {
+                "projects_dir": str(DEFAULT_PROJECTS_DIR),
+                "server_repo_dir": str(DEFAULT_SERVER_REPO_DIR),
+                "template_hip": str(DEFAULT_TEMPLATE_HIP),
+                "use_file_association": True,
+                "houdini_exe": "",
+                "blender_exe": r"C:\missing\blender.exe",
+            }
+        )
+        self.assertIn("Blender Executable", issues)
 
     @staticmethod
     def _restore_env(previous: str | None) -> None:

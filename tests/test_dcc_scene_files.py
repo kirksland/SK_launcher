@@ -58,6 +58,17 @@ class DccSceneFileTests(unittest.TestCase):
             open_scene_with_dcc(Path("C:/projects/test/scene.blend"), context)
         startfile.assert_called_once()
 
+    def test_open_scene_with_dcc_uses_blender_executable_when_available(self) -> None:
+        context = DccOpenContext(
+            project_path=Path("C:/projects/test"),
+            launcher_root=Path("C:/launcher"),
+            use_file_association=False,
+            executable="C:/Program Files/Blender Foundation/Blender/blender.exe",
+        )
+        with mock.patch("subprocess.Popen") as popen:
+            open_scene_with_dcc(Path("C:/projects/test/scene.blend"), context)
+        popen.assert_called_once()
+
     def test_open_scene_with_dcc_uses_houdini_executable_when_available(self) -> None:
         context = DccOpenContext(
             project_path=Path("C:/projects/test"),
@@ -117,21 +128,49 @@ class DccSceneFileTests(unittest.TestCase):
         self.assertIsNone(result.scene_path)
         self.assertIn("Could not resolve a valid hython executable", result.error)
 
-    def test_create_scene_with_blender_without_template_returns_helpful_error(self) -> None:
+    def test_create_scene_with_blender_creates_blend_file(self) -> None:
         root = self._make_case_dir("dcc_blender_scene")
         project = root / "Demo"
         project.mkdir()
 
-        result = create_scene_with_dcc(
-            "blender",
-            DccCreateContext(
-                project_path=project,
-                launcher_root=root,
-            ),
-        )
+        def _fake_run(command, **_kwargs):
+            self.assertIn("--background", command)
+            (project / "Demo_layout.blend").write_text("blend", encoding="utf-8")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("core.dcc_handlers.blender._resolve_blender_executable", return_value="C:/Blender/blender.exe"):
+            with mock.patch("subprocess.run", side_effect=_fake_run) as run_mock:
+                result = create_scene_with_dcc(
+                    "blender",
+                    DccCreateContext(
+                        project_path=project,
+                        launcher_root=root,
+                        executable="C:/Blender/blender.exe",
+                        filename_pattern="Demo_layout.blend",
+                    ),
+                )
+
+        self.assertEqual(result.error, "")
+        self.assertEqual(result.scene_path, project / "Demo_layout.blend")
+        self.assertTrue((project / "Demo_layout.blend").exists())
+        run_mock.assert_called_once()
+
+    def test_create_scene_with_blender_reports_missing_executable(self) -> None:
+        root = self._make_case_dir("dcc_blender_missing_exe")
+        project = root / "Demo"
+        project.mkdir()
+
+        with mock.patch("core.dcc_handlers.blender._resolve_blender_executable", return_value=""):
+            result = create_scene_with_dcc(
+                "blender",
+                DccCreateContext(
+                    project_path=project,
+                    launcher_root=root,
+                ),
+            )
 
         self.assertIsNone(result.scene_path)
-        self.assertIn("Blender scene creation is not configured yet", result.error)
+        self.assertIn("Could not resolve a valid Blender executable", result.error)
 
     def test_create_scene_with_unknown_dcc_returns_error(self) -> None:
         root = self._make_case_dir("dcc_unknown_scene")

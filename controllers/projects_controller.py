@@ -230,6 +230,14 @@ class ProjectsController:
             normalized = f"{normalized}{descriptor.extensions[0]}"
         return normalized
 
+    def _dcc_executable(self, dcc_id: str) -> str:
+        token = str(dcc_id or "").strip().lower()
+        if token == "houdini":
+            return str(getattr(self.w, "_houdini_exe", "") or "").strip()
+        if token == "blender":
+            return str(getattr(self.w, "_blender_exe", "") or "").strip()
+        return ""
+
     def _create_scene_for_project(self, project_path: Path) -> Optional[Path]:
         dcc_id = self._prompt_scene_dcc_id(project_path)
         if not dcc_id:
@@ -246,7 +254,7 @@ class ProjectsController:
             DccCreateContext(
                 project_path=project_path,
                 launcher_root=Path(__file__).resolve().parents[1],
-                executable=str(getattr(self.w, "_houdini_exe", "") or "").strip(),
+                executable=self._dcc_executable(dcc_id),
                 template_path=self.w._template_hip,
                 filename_pattern=filename,
             ),
@@ -282,13 +290,14 @@ class ProjectsController:
             self.w._warn(f"Failed to open: {scene_file}\n{exc}")
 
     def _open_scene_file(self, scene_file: Path, project_path: Path) -> None:
+        descriptor = next((entry for entry in iter_dccs() if scene_file.suffix.lower() in entry.extensions), None)
         open_scene_with_dcc(
             scene_file,
             DccOpenContext(
                 project_path=project_path,
                 launcher_root=Path(__file__).resolve().parents[1],
                 use_file_association=bool(self.w._use_file_association),
-                executable=str(getattr(self.w, "_houdini_exe", "") or "").strip(),
+                executable=self._dcc_executable(descriptor.id if descriptor is not None else ""),
             ),
         )
 

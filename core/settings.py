@@ -33,6 +33,7 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "use_file_association": True,
     "show_splash_screen": True,
     "houdini_exe": "",
+    "blender_exe": "",
     "server_repo_dir": str(DEFAULT_SERVER_REPO_DIR),
     "video_backend": "auto",
     "asset_manager_projects": [],
@@ -161,6 +162,7 @@ def settings_startup_issues(settings: Dict[str, object]) -> List[str]:
     template_hip = str(settings.get("template_hip", "")).strip()
     use_assoc = bool(settings.get("use_file_association", True))
     houdini_exe = str(settings.get("houdini_exe", "")).strip()
+    blender_exe = str(settings.get("blender_exe", "")).strip()
 
     if not projects_dir or not Path(projects_dir).exists():
         issues.append("Projects Folder")
@@ -170,6 +172,8 @@ def settings_startup_issues(settings: Dict[str, object]) -> List[str]:
         issues.append("Template Hip")
     if not use_assoc and (not houdini_exe or not Path(houdini_exe).exists()):
         issues.append("Houdini Executable")
+    if blender_exe and not Path(blender_exe).exists():
+        issues.append("Blender Executable")
 
     return issues
 
@@ -245,6 +249,17 @@ def normalize_houdini_exe(path_text: str) -> str:
     p = Path(path_text)
     if p.is_dir():
         candidate = p / "houdini.exe"
+        return str(candidate)
+    return str(p)
+
+
+def normalize_blender_exe(path_text: str) -> str:
+    path_text = path_text.strip().strip('"')
+    if not path_text:
+        return ""
+    p = Path(path_text)
+    if p.is_dir():
+        candidate = p / "blender.exe"
         return str(candidate)
     return str(p)
 

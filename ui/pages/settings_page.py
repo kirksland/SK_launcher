@@ -6,7 +6,7 @@ from typing import Mapping, Sequence
 from PySide6 import QtCore, QtWidgets
 
 from core.commands import AppCommand
-from core.settings import discover_houdini_installations, normalize_houdini_exe
+from core.settings import discover_houdini_installations, normalize_blender_exe, normalize_houdini_exe
 from ui.utils.styles import PALETTE, title_style
 
 
@@ -54,6 +54,7 @@ class SettingsPage(QtWidgets.QWidget):
         use_file_association: bool,
         show_splash_screen: bool,
         houdini_exe: str,
+        blender_exe: str,
         runtime_cache_location: str,
         runtime_cache_max_gb: int,
         runtime_cache_max_days: int,
@@ -191,7 +192,7 @@ class SettingsPage(QtWidgets.QWidget):
             runtime_cache_max_days,
         )
         self._build_launch_fields(video_backend_pref, use_file_association, show_splash_screen)
-        self._build_houdini_fields(houdini_exe)
+        self._build_houdini_fields(houdini_exe, blender_exe)
         self._build_shortcut_fields()
 
         self.settings_status = QtWidgets.QLabel("")
@@ -411,11 +412,11 @@ class SettingsPage(QtWidgets.QWidget):
         )
         toggles_form.addRow("", self.settings_show_splash)
 
-    def _build_houdini_fields(self, houdini_exe: str) -> None:
+    def _build_houdini_fields(self, houdini_exe: str, blender_exe: str) -> None:
         houdini_form = self._build_card(
             self.houdini_page,
-            "Executable Selection",
-            "Pick a detected Houdini install or point the launcher to a custom executable for explicit Houdini launches.",
+            "DCC Executables",
+            "Pick the executables Skyforge can use for explicit scene creation and launches when file association is not enough.",
         )
         self.settings_houdini_version = QtWidgets.QComboBox()
         self.settings_houdini_version.addItem("Custom (use field below)", "")
@@ -429,6 +430,13 @@ class SettingsPage(QtWidgets.QWidget):
         )
         self.settings_houdini_browse_btn = QtWidgets.QPushButton("Browse...")
         houdini_form.addRow("Houdini Executable", self._with_browse(self.settings_houdini_exe, self.settings_houdini_browse_btn))
+
+        self.settings_blender_exe = QtWidgets.QLineEdit(blender_exe)
+        self.settings_blender_exe.setPlaceholderText(
+            r"C:\Program Files\Blender Foundation\Blender <version>\blender.exe"
+        )
+        self.settings_blender_browse_btn = QtWidgets.QPushButton("Browse...")
+        houdini_form.addRow("Blender Executable", self._with_browse(self.settings_blender_exe, self.settings_blender_browse_btn))
 
     def _build_shortcut_fields(self) -> None:
         shortcuts_form = self._build_card(
@@ -488,6 +496,9 @@ class SettingsPage(QtWidgets.QWidget):
         path = self.settings_houdini_version.currentData()
         if isinstance(path, str) and path:
             self.settings_houdini_exe.setText(path)
+
+    def normalized_blender_executable(self) -> str:
+        return normalize_blender_exe(self.settings_blender_exe.text())
 
     @staticmethod
     def _with_browse(field: QtWidgets.QLineEdit, button: QtWidgets.QPushButton) -> QtWidgets.QWidget:

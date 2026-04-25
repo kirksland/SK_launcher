@@ -22,6 +22,7 @@ from core.settings import (
     active_settings_path,
     is_first_run,
     load_settings,
+    normalize_blender_exe,
     normalize_houdini_exe,
     normalize_asset_schema,
     normalize_asset_manager_projects,
@@ -383,6 +384,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._use_file_association = bool(self.settings["use_file_association"])
         self._show_splash_screen = bool(self.settings.get("show_splash_screen", True))
         self._houdini_exe = self.settings["houdini_exe"]
+        self._blender_exe = str(self.settings.get("blender_exe", "") or "").strip()
         self._video_backend_pref = str(self.settings.get("video_backend", "auto")).strip().lower() or "auto"
         self._asset_manager_projects = normalize_asset_manager_projects(
             self.settings.get("asset_manager_projects", [])
@@ -452,6 +454,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self._use_file_association,
             self._show_splash_screen,
             self._houdini_exe,
+            self._blender_exe,
             str(self.settings.get("runtime_cache_location", "local_appdata")),
             int(self.settings.get("runtime_cache_max_gb", 5)),
             int(self.settings.get("runtime_cache_max_days", 30)),
@@ -753,11 +756,13 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings_use_assoc = self.settings_page.settings_use_assoc
         self.settings_show_splash = self.settings_page.settings_show_splash
         self.settings_houdini_exe = self.settings_page.settings_houdini_exe
+        self.settings_blender_exe = self.settings_page.settings_blender_exe
         self.settings_save_btn = self.settings_page.settings_save_btn
         self.settings_projects_browse_btn = self.settings_page.settings_projects_browse_btn
         self.settings_server_browse_btn = self.settings_page.settings_server_browse_btn
         self.settings_template_browse_btn = self.settings_page.settings_template_browse_btn
         self.settings_houdini_browse_btn = self.settings_page.settings_houdini_browse_btn
+        self.settings_blender_browse_btn = self.settings_page.settings_blender_browse_btn
 
         self.dev_add_box_btn = self.dev_page.add_box_btn
         self.dev_status = self.dev_page.status
@@ -866,10 +871,12 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings_server_browse_btn.clicked.connect(self._browse_settings_server_dir)
         self.settings_template_browse_btn.clicked.connect(self._browse_settings_template_hip)
         self.settings_houdini_browse_btn.clicked.connect(self._browse_settings_houdini_exe)
+        self.settings_blender_browse_btn.clicked.connect(self._browse_settings_blender_exe)
         self.settings_projects_dir.textChanged.connect(self._refresh_settings_validation)
         self.settings_server_dir.textChanged.connect(self._refresh_settings_validation)
         self.settings_template_hip.textChanged.connect(self._refresh_settings_validation)
         self.settings_houdini_exe.textChanged.connect(self._refresh_settings_validation)
+        self.settings_blender_exe.textChanged.connect(self._refresh_settings_validation)
         self.settings_use_assoc.toggled.connect(self._refresh_settings_validation)
         self.dev_add_box_btn.clicked.connect(self._dev_add_box_in_houdini)
         self.dev_picnc_browse_btn.clicked.connect(self._dev_browse_picnc)
@@ -985,6 +992,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         use_assoc = self.settings_use_assoc.isChecked()
         show_splash_screen = self.settings_show_splash.isChecked()
         houdini_exe = normalize_houdini_exe(self.settings_houdini_exe.text())
+        blender_exe = normalize_blender_exe(self.settings_blender_exe.text())
         runtime_cache_location = str(
             self.settings_page.settings_runtime_cache_location.currentData() or "local_appdata"
         )
@@ -1010,6 +1018,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 "use_file_association": use_assoc,
                 "show_splash_screen": show_splash_screen,
                 "houdini_exe": houdini_exe,
+                "blender_exe": blender_exe,
                 "video_backend": video_backend,
                 "asset_manager_projects": list(self._asset_manager_projects),
                 "shortcuts": self.settings_page.shortcut_overrides(),
@@ -1027,6 +1036,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._use_file_association = bool(use_assoc)
         self._show_splash_screen = bool(show_splash_screen)
         self._houdini_exe = houdini_exe
+        self._blender_exe = blender_exe
         self._video_backend_pref = video_backend
 
         self.apply_projects_dir(resolved_projects_dir, persist=False, sync_settings_field=False)
@@ -1098,6 +1108,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
             "template_hip": self.settings_template_hip.text().strip(),
             "use_file_association": self.settings_use_assoc.isChecked(),
             "houdini_exe": normalize_houdini_exe(self.settings_houdini_exe.text()),
+            "blender_exe": normalize_blender_exe(self.settings_blender_exe.text()),
         }
         issues = settings_startup_issues(snapshot)
         if issues:
@@ -1149,6 +1160,16 @@ class LauncherWindow(QtWidgets.QMainWindow):
         )
         if path:
             self.settings_houdini_exe.setText(path)
+
+    def _browse_settings_blender_exe(self) -> None:
+        path, _selected = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select blender.exe",
+            self.settings_blender_exe.text().strip() or r"C:\Program Files\Blender Foundation",
+            "Executable (blender.exe);;Executable Files (*.exe);;All Files (*.*)",
+        )
+        if path:
+            self.settings_blender_exe.setText(path)
 
     def add_selected_project_to_asset_manager(self) -> None:
         item = self.project_grid.currentItem()
