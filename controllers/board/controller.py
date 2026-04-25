@@ -21,7 +21,7 @@ from core.board_edit.workers import UiBridge
 from core.board_preview import PreviewRuntimeState
 from core.board_edit.session import EditSessionState
 from core.board_apply_runtime import BoardApplyRuntime
-from core.board_io import backup_board_payload, board_path, load_board_payload, save_board_payload
+from core.board_io import board_path, load_board_payload, save_board_payload
 from core.board_media_cache import BoardMediaCache
 from controllers.board.edit_focus_controller import BoardEditFocusController
 from controllers.board.edit_panel_controller import BoardEditPanelController
@@ -691,7 +691,7 @@ class BoardController:
         path = board_path(self._project_root)
         existing_payload = load_board_payload(self._project_root)
         if self._should_block_empty_board_save(existing_payload):
-            backup_board_payload(self._project_root, existing_payload, "blocked-empty-save")
+            logger.warning("Blocked suspicious empty board save for %s", path)
             print(f"[BOARD] Skipped suspicious empty save: {path}")
             self._notify(
                 "Skipped board save to avoid overwriting an existing board with an empty scene."
