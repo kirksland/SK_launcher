@@ -8,8 +8,8 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.dcc import detect_dcc_for_path
-from core.fs import find_projects, open_hip, open_with_file_association
+from core.dcc import DccOpenContext, default_scene_filename, open_scene_with_dcc
+from core.fs import find_projects
 from core.houdini_env import build_houdini_env
 from core.project_catalog import (
     filter_and_sort_projects,
@@ -153,7 +153,10 @@ class ProjectsController:
         self.refresh_projects()
 
     def _resolve_new_hip_name(self, project_name: str) -> str:
-        return resolve_new_hip_name(self.w._new_hip_pattern, project_name)
+        pattern = str(getattr(self.w, "_new_hip_pattern", "") or "").strip()
+        if pattern:
+            return resolve_new_hip_name(pattern, project_name)
+        return default_scene_filename(project_name, "houdini")
 
     def _resolve_template_hip(self) -> Optional[Path]:
         return resolve_template_hip(
@@ -204,17 +207,16 @@ class ProjectsController:
             self.w._warn(f"Failed to open: {scene_file}\n{exc}")
 
     def _open_scene_file(self, scene_file: Path, project_path: Path) -> None:
-        descriptor = detect_dcc_for_path(scene_file)
-        if descriptor is None:
-            raise RuntimeError(f"Unsupported scene file: {scene_file.name}")
-        if descriptor.id == "houdini":
-            if self.w._use_file_association or not self.w._houdini_exe:
-                open_with_file_association(scene_file)
-                return
-            self._ensure_job_scripts_if_needed(project_path)
-            self._launch_houdini(scene_file, project_path)
-            return
-        open_with_file_association(scene_file)
+        self._ensure_job_scripts_if_needed(project_path)
+        open_scene_with_dcc(
+            scene_file,
+            DccOpenContext(
+                project_path=project_path,
+                launcher_root=Path(__file__).resolve().parents[1],
+                use_file_association=bool(self.w._use_file_association),
+                executable=str(getattr(self.w, "_houdini_exe", "") or "").strip(),
+            ),
+        )
 
     def on_card_selection_changed(self, card: ProjectCard) -> None:
         item = self.w._card_to_item.get(card)
