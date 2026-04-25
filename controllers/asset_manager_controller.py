@@ -8,22 +8,29 @@ from typing import List, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.asset_detection import DetectedProjectLayout, detect_project_layout
+from core.asset_selection import (
+    build_active_asset_selection,
+    choose_best_context_for_selection,
+    resolve_entity_record_for_path,
+    resolve_entity_type_for_path,
+)
 from core.asset_details import (
     build_asset_meta_text,
     normalize_list_context,
     pick_best_context,
     read_history_note,
 )
-from core.asset_inventory import GEOMETRY_SOURCE_EXTS, build_entity_inventory, collect_library_source_files
+from core.asset_inventory import build_entity_inventory
 from core.asset_browser import (
     entity_prefixes,
     filter_entity_dirs,
     resolved_filter_choice,
 )
 from core.asset_layout import EntityRecord, ResolvedAssetLayout, resolve_asset_layout
-from core.asset_schema import entity_root_candidates, entity_sources_for_role
+from core.asset_schema import entity_root_candidates
 from core.fs import find_projects
 from core.metadata import load_metadata
+from core.pipeline.processes import plan_asset_manager_process_execution
 from core.settings import normalize_asset_schema, save_settings
 from core.watchers import update_watcher_paths
 from ui.utils.thumbnails import build_thumbnail_pixmap, load_media_pixmap
@@ -409,177 +416,151 @@ class AssetManagerController:
 
     def _rebuild_asset_entity_lists(self, target: str) -> None:
         self._entity_icon_request_id += 1
-        entity_icon_request_id = self._entity_icon_request_id
         layout = getattr(self.w, "_asset_resolved_layout", None)
-        if layout is None:
-            shots: list[EntityRecord] = []
-            assets: list[EntityRecord] = []
-            library_assets: list[EntityRecord] = []
-        else:
-            shots = layout.entities_by_role("shot")
-            assets = layout.entities_by_role("pipeline_asset")
-            library_assets = layout.entities_by_role("library_asset")
-
-        # Build filter options from prefixes
-        shot_paths = [item.source_path for item in shots]
-        asset_paths = [item.source_path for item in assets]
-        library_paths = [item.source_path for item in library_assets]
-        shot_prefixes = entity_prefixes(shot_paths)
-        asset_prefixes = entity_prefixes(asset_paths)
-        library_prefixes = entity_prefixes(library_paths)
-
-        prev_shot_filter = self.w.asset_shots_filter.currentText() if self.w.asset_shots_filter.count() else "All"
-        prev_asset_filter = self.w.asset_assets_filter.currentText() if self.w.asset_assets_filter.count() else "All"
-        prev_library_filter = self.w.asset_library_filter.currentText() if self.w.asset_library_filter.count() else "All"
-
-        self.w.asset_shots_filter.blockSignals(True)
-        self.w.asset_shots_filter.clear()
-        self.w.asset_shots_filter.addItem("All")
-        for p in shot_prefixes:
-            self.w.asset_shots_filter.addItem(p)
-        self.w.asset_shots_filter.setCurrentText(
-            resolved_filter_choice(prev_shot_filter, ["All", *shot_prefixes])
-        )
-        self.w.asset_shots_filter.blockSignals(False)
-
-        self.w.asset_assets_filter.blockSignals(True)
-        self.w.asset_assets_filter.clear()
-        self.w.asset_assets_filter.addItem("All")
-        for p in asset_prefixes:
-            self.w.asset_assets_filter.addItem(p)
-        self.w.asset_assets_filter.setCurrentText(
-            resolved_filter_choice(prev_asset_filter, ["All", *asset_prefixes])
-        )
-        self.w.asset_assets_filter.blockSignals(False)
-
-        self.w.asset_library_filter.blockSignals(True)
-        self.w.asset_library_filter.clear()
-        self.w.asset_library_filter.addItem("All")
-        for p in library_prefixes:
-            self.w.asset_library_filter.addItem(p)
-        self.w.asset_library_filter.setCurrentText(
-            resolved_filter_choice(prev_library_filter, ["All", *library_prefixes])
-        )
-        self.w.asset_library_filter.blockSignals(False)
-
-        # Apply filters
-        shot_filter = self.w.asset_shots_filter.currentText()
-        asset_filter = self.w.asset_assets_filter.currentText()
-        library_filter = self.w.asset_library_filter.currentText()
+        paths_by_target = self._entity_paths_by_target(layout)
+        self._sync_entity_filter_combos(paths_by_target)
         search_text = self.w.asset_entity_search.text().strip().lower()
         active_tab = self.w.asset_work_tabs.currentIndex()
-
-        shot_icon_size = self.w.asset_shots_list.iconSize()
-        asset_icon_size = self.w.asset_assets_list.iconSize()
-
-        if target in ("both", "shots"):
-            self.w.asset_shots_list.setUpdatesEnabled(False)
-            self.w.asset_shots_list.clear()
-            visible_shots = filter_entity_dirs(
-                shot_paths,
-                prefix_filter=shot_filter,
-                search_text=search_text if active_tab == 0 else "",
+        targets = ("shots", "assets", "library") if target == "both" else (target,)
+        for current_target in targets:
+            self._rebuild_entity_list_target(
+                current_target,
+                layout=layout,
+                entity_paths=paths_by_target[current_target],
+                search_text=search_text,
+                active_tab=active_tab,
             )
-            for shot_dir in visible_shots:
-                shot_item = QtWidgets.QListWidgetItem(shot_dir.name)
-                shot_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(shot_dir))
-                shot_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "shot")
-                preview = layout.preview_path(self._entity_record_for_path(shot_dir)) if layout else None
-                shot_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
-                initial_pix = (
-                    self._get_scaled_preview_pixmap(Path(str(preview)), shot_dir, shot_icon_size)
-                    if preview
-                    else self._get_placeholder_pixmap(shot_dir, shot_icon_size)
-                )
-                shot_item.setIcon(QtGui.QIcon(initial_pix))
-                self.w.asset_shots_list.addItem(shot_item)
-            if not visible_shots:
-                self._add_empty_entity_item(
-                    self.w.asset_shots_list,
-                    "No shots found",
-                    self._empty_reason(
-                        total=len(shot_paths),
-                        search_text=search_text if active_tab == 0 else "",
-                        prefix_filter=shot_filter,
-                        role_label="shot",
-                    ),
-                )
-            self.w.asset_shots_list.setUpdatesEnabled(True)
-            self._restore_entity_selection(self.w.asset_shots_list)
-
-        if target in ("both", "assets"):
-            self.w.asset_assets_list.setUpdatesEnabled(False)
-            self.w.asset_assets_list.clear()
-            visible_assets = filter_entity_dirs(
-                asset_paths,
-                prefix_filter=asset_filter,
-                search_text=search_text if active_tab == 1 else "",
-            )
-            for asset_dir in visible_assets:
-                asset_item = QtWidgets.QListWidgetItem(asset_dir.name)
-                asset_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(asset_dir))
-                asset_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "asset")
-                preview = layout.preview_path(self._entity_record_for_path(asset_dir)) if layout else None
-                asset_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
-                initial_pix = (
-                    self._get_scaled_preview_pixmap(Path(str(preview)), asset_dir, asset_icon_size)
-                    if preview
-                    else self._get_placeholder_pixmap(asset_dir, asset_icon_size)
-                )
-                asset_item.setIcon(QtGui.QIcon(initial_pix))
-                self.w.asset_assets_list.addItem(asset_item)
-            if not visible_assets:
-                self._add_empty_entity_item(
-                    self.w.asset_assets_list,
-                    "No pipeline assets found",
-                    self._empty_reason(
-                        total=len(asset_paths),
-                        search_text=search_text if active_tab == 1 else "",
-                        prefix_filter=asset_filter,
-                        role_label="pipeline asset",
-                    ),
-                )
-            self.w.asset_assets_list.setUpdatesEnabled(True)
-            self._restore_entity_selection(self.w.asset_assets_list)
-
-        if target in ("both", "library"):
-            self.w.asset_library_list.setUpdatesEnabled(False)
-            self.w.asset_library_list.clear()
-            visible_library_assets = filter_entity_dirs(
-                library_paths,
-                prefix_filter=library_filter,
-                search_text=search_text if active_tab == 2 else "",
-            )
-            for library_dir in visible_library_assets:
-                library_item = QtWidgets.QListWidgetItem(library_dir.name)
-                library_item.setData(QtCore.Qt.ItemDataRole.UserRole, str(library_dir))
-                library_item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "asset")
-                preview = layout.preview_path(self._entity_record_for_path(library_dir)) if layout else None
-                library_item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
-                initial_pix = (
-                    self._get_scaled_preview_pixmap(Path(str(preview)), library_dir, asset_icon_size)
-                    if preview
-                    else self._get_placeholder_pixmap(library_dir, asset_icon_size)
-                )
-                library_item.setIcon(QtGui.QIcon(initial_pix))
-                self.w.asset_library_list.addItem(library_item)
-            if not visible_library_assets:
-                self._add_empty_entity_item(
-                    self.w.asset_library_list,
-                    "No library assets found",
-                    self._empty_reason(
-                        total=len(library_paths),
-                        search_text=search_text if active_tab == 2 else "",
-                        prefix_filter=library_filter,
-                        role_label="library asset",
-                    ),
-                )
-            self.w.asset_library_list.setUpdatesEnabled(True)
-            self._restore_entity_selection(self.w.asset_library_list)
         # These entity cards should stay visually stable while the user scrolls,
         # hovers, or resizes the window. We now resolve the best preview
         # synchronously during list construction, so we intentionally avoid a
         # second async hydration pass here.
+
+    def _entity_paths_by_target(self, layout: ResolvedAssetLayout | None) -> dict[str, list[Path]]:
+        if layout is None:
+            return {"shots": [], "assets": [], "library": []}
+        return {
+            "shots": [item.source_path for item in layout.entities_by_role("shot")],
+            "assets": [item.source_path for item in layout.entities_by_role("pipeline_asset")],
+            "library": [item.source_path for item in layout.entities_by_role("library_asset")],
+        }
+
+    def _sync_entity_filter_combos(self, paths_by_target: dict[str, list[Path]]) -> None:
+        target_widgets = {
+            "shots": self.w.asset_shots_filter,
+            "assets": self.w.asset_assets_filter,
+            "library": self.w.asset_library_filter,
+        }
+        for target, combo in target_widgets.items():
+            prefixes = entity_prefixes(paths_by_target[target])
+            previous = combo.currentText() if combo.count() else "All"
+            self._populate_entity_filter_combo(combo, prefixes, previous)
+
+    @staticmethod
+    def _populate_entity_filter_combo(
+        combo: QtWidgets.QComboBox,
+        prefixes: list[str],
+        previous_value: str,
+    ) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All")
+        for prefix in prefixes:
+            combo.addItem(prefix)
+        combo.setCurrentText(resolved_filter_choice(previous_value, ["All", *prefixes]))
+        combo.blockSignals(False)
+
+    def _rebuild_entity_list_target(
+        self,
+        target: str,
+        *,
+        layout: ResolvedAssetLayout | None,
+        entity_paths: list[Path],
+        search_text: str,
+        active_tab: int,
+    ) -> None:
+        spec = self._entity_target_spec(target)
+        prefix_filter = spec["filter_widget"].currentText()
+        scoped_search = search_text if active_tab == spec["tab_index"] else ""
+        visible_paths = filter_entity_dirs(
+            entity_paths,
+            prefix_filter=prefix_filter,
+            search_text=scoped_search,
+        )
+        list_widget = spec["list_widget"]
+        list_widget.setUpdatesEnabled(False)
+        list_widget.clear()
+        for entity_dir in visible_paths:
+            list_widget.addItem(
+                self._build_entity_list_item(
+                    entity_dir,
+                    entity_type=spec["entity_type"],
+                    icon_size=list_widget.iconSize(),
+                    layout=layout,
+                )
+            )
+        if not visible_paths:
+            self._add_empty_entity_item(
+                list_widget,
+                spec["empty_title"],
+                self._empty_reason(
+                    total=len(entity_paths),
+                    search_text=scoped_search,
+                    prefix_filter=prefix_filter,
+                    role_label=spec["role_label"],
+                ),
+            )
+        list_widget.setUpdatesEnabled(True)
+        self._restore_entity_selection(list_widget)
+
+    def _build_entity_list_item(
+        self,
+        entity_dir: Path,
+        *,
+        entity_type: str,
+        icon_size: QtCore.QSize,
+        layout: ResolvedAssetLayout | None,
+    ) -> QtWidgets.QListWidgetItem:
+        item = QtWidgets.QListWidgetItem(entity_dir.name)
+        item.setData(QtCore.Qt.ItemDataRole.UserRole, str(entity_dir))
+        item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, entity_type)
+        preview = layout.preview_path(self._entity_record_for_path(entity_dir)) if layout else None
+        item.setData(QtCore.Qt.ItemDataRole.UserRole + 2, str(preview) if preview else "")
+        initial_pix = (
+            self._get_scaled_preview_pixmap(Path(str(preview)), entity_dir, icon_size)
+            if preview
+            else self._get_placeholder_pixmap(entity_dir, icon_size)
+        )
+        item.setIcon(QtGui.QIcon(initial_pix))
+        return item
+
+    def _entity_target_spec(self, target: str) -> dict[str, object]:
+        specs = {
+            "shots": {
+                "list_widget": self.w.asset_shots_list,
+                "filter_widget": self.w.asset_shots_filter,
+                "tab_index": 0,
+                "entity_type": "shot",
+                "empty_title": "No shots found",
+                "role_label": "shot",
+            },
+            "assets": {
+                "list_widget": self.w.asset_assets_list,
+                "filter_widget": self.w.asset_assets_filter,
+                "tab_index": 1,
+                "entity_type": "asset",
+                "empty_title": "No pipeline assets found",
+                "role_label": "pipeline asset",
+            },
+            "library": {
+                "list_widget": self.w.asset_library_list,
+                "filter_widget": self.w.asset_library_filter,
+                "tab_index": 2,
+                "entity_type": "asset",
+                "empty_title": "No library assets found",
+                "role_label": "library asset",
+            },
+        }
+        return specs[target]
 
     def _schedule_entity_icon_hydration(self, target: str, request_id: int) -> None:
         QtCore.QTimer.singleShot(
@@ -837,14 +818,22 @@ class AssetManagerController:
     def _load_entity_details(self, entity_dir: Path, entity_type: Optional[str] = None) -> None:
         self._asset_detail_request_id += 1
         request_id = self._asset_detail_request_id
-        self.w._asset_current_entity = entity_dir
-        self.w._asset_current_entity_type = entity_type or self._entity_type_for_path(entity_dir)
-        project_root = getattr(self.w, "_asset_current_project_root", entity_dir.parent.parent)
-        tab_label = "Shots" if self.w._asset_current_entity_type == "shot" else "Assets"
-        self.w.asset_path_label.setText(f"{Path(project_root).name} / {tab_label} / {entity_dir.name}")
-        self._set_asset_selection_summary(f"{entity_dir.name} [{self.w._asset_current_entity_type.upper()}]")
-        record = self._entity_record_for_path(entity_dir)
         layout = getattr(self.w, "_asset_resolved_layout", None)
+        selection = build_active_asset_selection(
+            entity_dir,
+            layout=layout,
+            schema=getattr(self.w, "_asset_active_schema", self.w._asset_schema),
+            active_tab_index=self.w.asset_work_tabs.currentIndex(),
+            explicit_entity_type=entity_type,
+        )
+        self.w._asset_current_entity = entity_dir
+        self.w._asset_current_entity_type = selection.entity_type
+        project_root = getattr(self.w, "_asset_current_project_root", entity_dir.parent.parent)
+        self.w.asset_path_label.setText(
+            f"{Path(project_root).name} / {selection.tab_label} / {entity_dir.name}"
+        )
+        self._set_asset_selection_summary(selection.selection_summary)
+        record = selection.record
         self.w._preview_images = (
             layout.representation_paths(record, "preview_image") if layout and record is not None else []
         )
@@ -876,9 +865,16 @@ class AssetManagerController:
             return
         if getattr(self.w, "_asset_current_entity", None) != entity_dir:
             return
-        self.w._asset_current_entity_type = entity_type or self._entity_type_for_path(entity_dir)
         layout = getattr(self.w, "_asset_resolved_layout", None)
-        record = self._entity_record_for_path(entity_dir)
+        selection = build_active_asset_selection(
+            entity_dir,
+            layout=layout,
+            schema=getattr(self.w, "_asset_active_schema", self.w._asset_schema),
+            active_tab_index=self.w.asset_work_tabs.currentIndex(),
+            explicit_entity_type=entity_type,
+        )
+        self.w._asset_current_entity_type = selection.entity_type
+        record = selection.record
         if self.w._preview_images:
             preview = self.w._preview_images[self.w._preview_index]
             preview_size = self._asset_preview_target_size()
@@ -904,7 +900,7 @@ class AssetManagerController:
         owner = meta.get("owner", "Unknown")
         status = meta.get("status", "WIP")
         context = self.w.asset_context_combo.currentText()
-        if self.w._asset_current_entity_type == "shot":
+        if selection.entity_type == "shot":
             context = self._pick_best_context(entity_dir, context)
         list_context = normalize_list_context(context)
         self.w.asset_meta.setText(build_asset_meta_text(owner, status, context, entity_dir.name))
@@ -959,103 +955,48 @@ class AssetManagerController:
             return
 
     def _resolve_pipeline_process_parameters(self, process_id: str) -> dict[str, object] | None:
-        if process_id == "publish.asset.usd":
-            return self._resolve_publish_asset_usd_parameters(ensure_dirs=True)
-        self.set_asset_status(f"{process_id} is not executable from the Asset Manager yet.")
-        self._set_asset_pipeline_run_summary(
-            f"{process_id} is visible in the inspector, but its execution planner is not wired yet."
-        )
-        return None
+        plan = self._plan_pipeline_process_execution(process_id, ensure_dirs=True)
+        if not plan.is_ready:
+            if plan.run_summary:
+                self._set_asset_pipeline_run_summary(plan.run_summary)
+            if plan.status_message:
+                self.set_asset_status(plan.status_message)
+            return None
+        return dict(plan.parameters)
 
     def _resolve_publish_asset_usd_parameters(self, *, ensure_dirs: bool) -> dict[str, object] | None:
-        entity = getattr(self.w, "_asset_current_entity", None)
-        if not entity:
-            self.set_asset_status("No entity selected.")
+        plan = self._plan_pipeline_process_execution("publish.asset.usd", ensure_dirs=ensure_dirs)
+        if not plan.is_ready:
+            if plan.run_summary:
+                self._set_asset_pipeline_run_summary(plan.run_summary)
+            if plan.status_message:
+                self.set_asset_status(plan.status_message)
             return None
-        entity_dir = Path(entity)
-        source_path = self._resolve_publish_source_path(entity_dir)
-        if source_path is None:
-            self._set_asset_pipeline_run_summary(
-                "No supported geometry source was found for this selection."
-            )
-            self.set_asset_status("No geometry source found for publish.asset.usd.")
-            return None
-        context = self._effective_pipeline_context()
-        output_path = self._resolve_publish_output_path(entity_dir, context)
-        if ensure_dirs:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-        return {
-            "source": source_path.as_posix(),
-            "output": output_path.as_posix(),
-            "context": context,
-        }
+        return dict(plan.parameters)
 
-    def _resolve_publish_source_path(self, entity_dir: Path) -> Optional[Path]:
+    def _current_asset_inventory_path(self) -> Optional[Path]:
         current_item = self.w.asset_inventory_list.currentItem()
         if current_item is not None:
             current_path = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
             if current_path:
-                candidate = Path(str(current_path))
-                if candidate.exists() and candidate.suffix.lower() in GEOMETRY_SOURCE_EXTS:
-                    return candidate
-        record = self._entity_record_for_path(entity_dir)
-        if record is not None and record.role == "library_asset":
-            for file in collect_library_source_files(entity_dir):
-                if file.path.suffix.lower() in GEOMETRY_SOURCE_EXTS:
-                    return file.path
-        try:
-            candidates = sorted(
-                (
-                    path
-                    for path in entity_dir.rglob("*")
-                    if path.is_file() and path.suffix.lower() in GEOMETRY_SOURCE_EXTS
-                ),
-                key=lambda path: (len(path.parts), path.as_posix().lower()),
-            )
-        except OSError:
-            candidates = []
-        return candidates[0] if candidates else None
+                return Path(str(current_path))
+        return None
 
-    def _resolve_publish_output_path(self, entity_dir: Path, context: str) -> Path:
-        record = self._entity_record_for_path(entity_dir)
+    def _plan_pipeline_process_execution(self, process_id: object, *, ensure_dirs: bool) -> object:
+        entity = getattr(self.w, "_asset_current_entity", None)
+        entity_dir = Path(entity) if entity else None
+        record = self._entity_record_for_path(entity_dir) if entity_dir is not None else None
         layout = getattr(self.w, "_asset_resolved_layout", None)
-        if layout is not None and record is not None:
-            if record.role == "library_asset":
-                managed_dir = self._resolve_managed_asset_dir(record, layout)
-                return managed_dir / "publish" / context / f"{record.name}.usdnc"
-            existing = layout.representation_paths(record, "usd", context=context)
-            if existing:
-                return existing[0]
-        return entity_dir / "publish" / context / f"{entity_dir.name}.usdnc"
-
-    def _resolve_managed_asset_dir(self, record: EntityRecord, layout: ResolvedAssetLayout) -> Path:
-        for candidate in layout.entities_by_role("pipeline_asset"):
-            if candidate.name.strip().lower() == record.name.strip().lower():
-                return candidate.source_path
-
-        pipeline_sources = entity_sources_for_role(layout.schema, "pipeline_asset")
-        for source in pipeline_sources:
-            if str(source.get("entity_type", "")).strip().lower() != "asset":
-                continue
-            root_name = str(source.get("path", "")).strip()
-            if root_name:
-                return layout.project_root.joinpath(*[part for part in root_name.split("/") if part]) / record.name
-
-        for root_name in entity_root_candidates(layout.schema, "asset"):
-            if root_name:
-                return layout.project_root.joinpath(*[part for part in root_name.split("/") if part]) / record.name
-
-        return layout.project_root / "assets" / record.name
-
-    def _effective_pipeline_context(self) -> str:
-        current = str(self.w.asset_context_combo.currentText() or "").strip().lower()
-        if current and current != "all":
-            return current
-        for value in getattr(self.w, "_asset_active_schema", {}).get("contexts", []):
-            text = str(value or "").strip().lower()
-            if text:
-                return text
-        return "modeling"
+        return plan_asset_manager_process_execution(
+            process_id,
+            entity_dir=entity_dir,
+            current_inventory_path=self._current_asset_inventory_path(),
+            record=record,
+            layout=layout,
+            current_context=self.w.asset_context_combo.currentText(),
+            schema_contexts=tuple(getattr(self.w, "_asset_active_schema", {}).get("contexts", ())),
+            ensure_dirs=ensure_dirs,
+        )
 
     def _reset_asset_pipeline_run_feedback(self) -> None:
         self._set_asset_pipeline_run_summary(self._DEFAULT_RUN_SUMMARY)
@@ -1216,21 +1157,20 @@ class AssetManagerController:
             self._load_entity_details(Path(entity))
 
     def _pick_best_context(self, entity_dir: Path, current: str) -> str:
-        def has_content(ctx: str) -> bool:
-            record = self._entity_record_for_path(entity_dir)
-            layout = getattr(self.w, "_asset_resolved_layout", None)
-            if layout and record and layout.representation_paths(record, "usd", context=ctx):
-                return True
-            if layout and record and layout.representation_paths(record, "review_video", context=ctx):
-                return True
-            return False
-
+        layout = getattr(self.w, "_asset_resolved_layout", None)
+        selection = build_active_asset_selection(
+            entity_dir,
+            layout=layout,
+            schema=getattr(self.w, "_asset_active_schema", self.w._asset_schema),
+            active_tab_index=self.w.asset_work_tabs.currentIndex(),
+            explicit_entity_type=getattr(self.w, "_asset_current_entity_type", None),
+        )
         contexts = [self.w.asset_context_combo.itemText(i) for i in range(self.w.asset_context_combo.count())]
-        chosen = pick_best_context(
-            entity_type=self.w._asset_current_entity_type,
+        chosen = choose_best_context_for_selection(
+            selection,
+            layout=layout,
             current=current,
             contexts=contexts,
-            has_content=has_content,
         )
         if chosen != current:
             self.w.asset_context_combo.blockSignals(True)
@@ -1568,24 +1508,15 @@ class AssetManagerController:
         self.w.asset_context_combo.blockSignals(False)
 
     def _entity_type_for_path(self, entity_dir: Path) -> str:
-        layout = getattr(self.w, "_asset_resolved_layout", None)
-        if layout is not None:
-            return layout.entity_type_for_path(entity_dir)
-        schema = getattr(self.w, "_asset_active_schema", self.w._asset_schema)
-        for root_name in entity_root_candidates(schema, "shot"):
-            if all(part in entity_dir.parts for part in root_name.split("/")):
-                return "shot"
-        for root_name in entity_root_candidates(schema, "asset"):
-            if all(part in entity_dir.parts for part in root_name.split("/")):
-                return "asset"
-        return "shot" if self.w.asset_work_tabs.currentIndex() == 0 else "asset"
+        return resolve_entity_type_for_path(
+            entity_dir,
+            layout=getattr(self.w, "_asset_resolved_layout", None),
+            schema=getattr(self.w, "_asset_active_schema", self.w._asset_schema),
+            active_tab_index=self.w.asset_work_tabs.currentIndex(),
+        )
 
     def _entity_record_for_path(self, entity_dir: Path) -> Optional[EntityRecord]:
-        layout = getattr(self.w, "_asset_resolved_layout", None)
-        if layout is None:
-            return None
-        entity_type = layout.entity_type_for_path(entity_dir)
-        for record in layout.entities(entity_type):
-            if record.source_path == entity_dir:
-                return record
-        return None
+        return resolve_entity_record_for_path(
+            entity_dir,
+            layout=getattr(self.w, "_asset_resolved_layout", None),
+        )
