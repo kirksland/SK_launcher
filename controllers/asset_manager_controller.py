@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.asset_detection import DetectedProjectLayout
 from core.asset_selection import resolve_entity_record_for_path, resolve_entity_type_for_path
 from core.asset_layout import EntityRecord, ResolvedAssetLayout
-from core.asset_schema import entity_root_candidates
 from core.pipeline.processes import plan_asset_manager_process_execution
-from core.watchers import update_watcher_paths
 from controllers.asset_browser_panel_controller import AssetBrowserPanelController
 from controllers.asset_details_panel_controller import AssetDetailsPanelController
 from controllers.asset_project_context_controller import AssetProjectContextController
+from controllers.asset_refresh_controller import AssetRefreshController
 from ui.utils.thumbnails import build_thumbnail_pixmap, load_media_pixmap
 from ui.widgets.asset_version_row import AssetVersionRow
 
@@ -36,6 +35,7 @@ class AssetManagerController:
         self._browser_panel = AssetBrowserPanelController(self)
         self._details_panel = AssetDetailsPanelController(self)
         self._project_context_controller = AssetProjectContextController(self)
+        self._refresh_controller = AssetRefreshController(self)
         self._context_refresh_timer = QtCore.QTimer(self.w)
         self._context_refresh_timer.setSingleShot(True)
         self._context_refresh_timer.setInterval(80)
@@ -592,81 +592,29 @@ class AssetManagerController:
         self._details_panel.asset_placeholder_action()
 
     def setup_asset_auto_refresh(self) -> None:
-        self._asset_refresh_timer = QtCore.QTimer(self.w)
-        self._asset_refresh_timer.setInterval(60000)
-        self._asset_refresh_timer.timeout.connect(self.refresh_asset_manager)
-        if self.w.asset_auto_refresh.isChecked():
-            self._asset_refresh_timer.start()
+        self._refresh_controller.setup_asset_auto_refresh()
 
     def toggle_asset_auto_refresh(self, checked: bool) -> None:
-        if not hasattr(self, "_asset_refresh_timer"):
-            return
-        if checked:
-            self._asset_refresh_timer.start()
-            self.w._asset_watch_enabled = True
-            self._refresh_asset_watch_paths()
-        else:
-            self._asset_refresh_timer.stop()
-            self.w._asset_watch_enabled = False
-            self._refresh_asset_watch_paths()
+        self._refresh_controller.toggle_asset_auto_refresh(checked)
 
     def setup_asset_watcher(self) -> None:
-        self._asset_watcher = QtCore.QFileSystemWatcher(self.w)
-        self._asset_watcher.directoryChanged.connect(self._queue_asset_refresh)
-        self._asset_refresh_watch_timer = QtCore.QTimer(self.w)
-        self._asset_refresh_watch_timer.setSingleShot(True)
-        self._asset_refresh_watch_timer.setInterval(500)
-        self._asset_refresh_watch_timer.timeout.connect(self._run_asset_refresh)
-        self._refresh_asset_watch_paths()
+        self._refresh_controller.setup_asset_watcher()
 
     def _queue_asset_refresh(self, changed_path: str) -> None:
-        if not getattr(self.w, "_asset_watch_enabled", True):
-            return
-        if self._is_ignored_asset_watch_path(changed_path):
-            return
-        print(f"[ASSET_WATCH] queued refresh from: {changed_path}")
-        if not self._asset_refresh_watch_timer.isActive():
-            self._asset_refresh_watch_timer.start()
+        self._refresh_controller.queue_asset_refresh(changed_path)
 
     def _run_asset_refresh(self) -> None:
-        print("[ASSET_WATCH] running asset manager refresh")
-        self._refresh_asset_watch_paths()
-        self.refresh_asset_manager()
+        self._refresh_controller.run_asset_refresh()
 
     def _refresh_asset_watch_paths(self) -> None:
-        if not getattr(self.w, "_asset_watch_enabled", True):
-            if hasattr(self, "_asset_watcher"):
-                self._asset_watcher.removePaths(self._asset_watcher.directories())
-            return
-        if not hasattr(self, "_asset_watcher"):
-            return
-        paths: List[Path] = []
-        project_paths = find_projects(self.w.projects_dir)
-        current_project = getattr(self.w, "_asset_current_project_root", None)
-        if current_project is not None:
-            current_project_path = Path(current_project)
-            if current_project_path.exists() and current_project_path not in project_paths:
-                project_paths.append(current_project_path)
-        for project_path in project_paths:
-            if project_path.exists():
-                project_schema = self._effective_project_schema(project_path)
-                for root_name in entity_root_candidates(project_schema, "shot"):
-                    shots_root = project_path / root_name
-                    if shots_root.exists():
-                        paths.append(shots_root)
-                for root_name in entity_root_candidates(project_schema, "asset"):
-                    assets_root = project_path / root_name
-                    if assets_root.exists():
-                        paths.append(assets_root)
-        update_watcher_paths(self._asset_watcher, paths)
+        self._refresh_controller.refresh_asset_watch_paths()
 
     @staticmethod
     def _is_ignored_asset_watch_path(path_text: str) -> bool:
-        normalized = path_text.replace("\\", "/").lower()
-        return "/.skyforge_cache" in normalized or normalized.endswith("/.skyforge_cache")
+        return AssetRefreshController.is_ignored_asset_watch_path(path_text)
 
     def refresh_asset_watch_paths(self) -> None:
-        self._refresh_asset_watch_paths()
+        self._refresh_controller.refresh_asset_watch_paths()
 
     def open_asset_project_folder(self) -> None:
         project_root = getattr(self.w, "_asset_current_project_root", None)
