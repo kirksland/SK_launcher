@@ -30,6 +30,7 @@ from core.settings import (
     settings_startup_issues,
 )
 from core.houdini_env import build_houdini_env
+from core.project_storage import prune_local_runtime_cache
 from controllers.asset_manager_controller import AssetManagerController
 from controllers.asset_pipeline_panel_controller import AssetPipelinePanelController
 from controllers.app_command_controller import AppCommandController
@@ -898,6 +899,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._refresh_settings_validation()
         self._startup_status("Finishing startup...")
         QtCore.QTimer.singleShot(0, self._handle_startup_configuration)
+        QtCore.QTimer.singleShot(0, self._prune_runtime_cache_startup)
 
     def apply_initial_window_geometry(self) -> None:
         screen = QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
@@ -1071,6 +1073,20 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 f"Please review Settings: {issue_list}"
             )
         self.settings_page.set_startup_context(True, message)
+
+    def _prune_runtime_cache_startup(self) -> None:
+        try:
+            result = prune_local_runtime_cache(self.settings)
+        except Exception as exc:
+            APP_LOG_BUS.append("WARN", f"[CACHE] Runtime cache cleanup failed: {exc}")
+            return
+        removed = int(result.get("removed_projects", 0))
+        freed = int(result.get("freed_bytes", 0))
+        if removed or freed:
+            APP_LOG_BUS.append(
+                "INFO",
+                f"[CACHE] Runtime cache cleanup removed {removed} project cache(s), freed {freed // (1024 * 1024)} MB.",
+            )
         self._refresh_settings_validation()
         APP_LOG_BUS.append("warning", message)
         QtWidgets.QMessageBox.information(self, APP_TITLE, message)
