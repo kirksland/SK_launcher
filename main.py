@@ -590,6 +590,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.browse_btn = self.projects_page.browse_btn
         self.refresh_btn = self.projects_page.refresh_btn
         self.new_btn = self.projects_page.new_btn
+        self.add_scene_btn = self.projects_page.add_scene_btn
         self.search_input = self.projects_page.search_input
         self.sort_combo = self.projects_page.sort_combo
         self.project_grid = self.projects_page.project_grid
@@ -779,6 +780,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.browse_btn.clicked.connect(self.project_controller.browse_projects_dir)
         self.refresh_btn.clicked.connect(self.project_controller.refresh_projects)
         self.new_btn.clicked.connect(self.project_controller.create_project)
+        self.add_scene_btn.clicked.connect(self.project_controller.add_scene_to_selected_project)
         self.search_input.textChanged.connect(self.project_controller.refresh_projects)
         self.sort_combo.currentIndexChanged.connect(self.project_controller.refresh_projects)
         self.project_grid.itemDoubleClicked.connect(self.project_controller.open_selected_project)

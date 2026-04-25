@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.dcc import DccCreateContext, DccCreateResult, DccDescriptor, DccHandler, DccOpenContext, get_dcc
-from core.houdini_env import build_houdini_env
-from core.project_runtime import ensure_job_scripts, ensure_template_hip
+from core.houdini_env import build_houdini_env, resolve_hython_executable
 
 
 @dataclass(frozen=True)
@@ -24,17 +23,56 @@ class HoudiniDccHandler(DccHandler):
             return f"{project_name}_001{self.descriptor.extensions[0]}"
 
     def create_scene(self, context: DccCreateContext) -> DccCreateResult:
-        target, error = ensure_template_hip(
-            context.project_path,
-            pattern=context.filename_pattern or self.descriptor.default_filename,
-            custom_template=context.template_path,
-            default_template=context.default_template_path,
+        filename = Path(
+            str(context.filename_pattern or self.default_scene_filename(context.project_path.name)).strip()
+        ).name
+        if not filename:
+            return DccCreateResult(None, "Scene name cannot be empty.")
+        target = context.project_path / filename
+        if target.exists():
+            return DccCreateResult(target, "")
+
+        hython_executable = resolve_hython_executable(context.executable)
+        if not hython_executable:
+            return DccCreateResult(
+                None,
+                "Could not resolve a valid hython executable. Configure Houdini in Settings before creating a Houdini scene.",
+            )
+
+        env = build_houdini_env(
+            base_env=os.environ,
+            project_path=context.project_path,
             launcher_root=context.launcher_root,
         )
-        if error:
-            return DccCreateResult(None, error)
-        if target is not None and context.ensure_runtime_scripts:
-            ensure_job_scripts(context.project_path)
+        command = [
+            hython_executable,
+            "-c",
+            (
+                "import hou, sys; "
+                "target = sys.argv[1]; "
+                "hou.hipFile.clear(suppress_save_prompt=True); "
+                "hou.hipFile.save(file_name=target)"
+            ),
+            str(target),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(context.launcher_root),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as exc:
+            return DccCreateResult(None, f"Failed to launch hython for scene creation:\n{exc}")
+        if completed.returncode != 0:
+            message = str(completed.stderr or completed.stdout or "").strip()
+            if not message:
+                message = f"hython exited with code {completed.returncode}."
+            return DccCreateResult(None, f"Failed to create Houdini scene:\n{message}")
+        if not target.exists():
+            return DccCreateResult(None, "Houdini scene creation completed, but no scene file was written.")
         return DccCreateResult(target, "")
 
     def open_scene(self, scene_path: Path, context: DccOpenContext) -> None:

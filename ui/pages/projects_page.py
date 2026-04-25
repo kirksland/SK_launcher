@@ -132,7 +132,10 @@ class ProjectsPage(QtWidgets.QWidget):
         footer = QtWidgets.QHBoxLayout()
         layout.addLayout(footer)
 
-        self.open_btn = QtWidgets.QPushButton("Open Project Hip")
+        self.add_scene_btn = QtWidgets.QPushButton("Add Scene")
+        footer.addWidget(self.add_scene_btn)
+
+        self.open_btn = QtWidgets.QPushButton("Open Selected Scene")
         footer.addWidget(self.open_btn)
 
         self.add_asset_btn = QtWidgets.QPushButton("Add to Asset Manager")

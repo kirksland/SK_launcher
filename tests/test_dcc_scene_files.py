@@ -73,26 +73,49 @@ class DccSceneFileTests(unittest.TestCase):
         root = self._make_case_dir("dcc_houdini_scene")
         project = root / "Demo"
         project.mkdir()
-        template = root / "template.hipnc"
-        template.write_text("hip", encoding="utf-8")
 
-        result = create_scene_with_dcc(
-            "houdini",
-            DccCreateContext(
-                project_path=project,
-                launcher_root=root,
-                template_path=template,
-                filename_pattern="{projectName}_layout.hipnc",
-                ensure_runtime_scripts=True,
-            ),
-        )
+        def _fake_run(command, **_kwargs):
+            Path(command[-1]).write_text("hip", encoding="utf-8")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("core.dcc_handlers.houdini.resolve_hython_executable", return_value="C:/Houdini/bin/hython.exe"):
+            with mock.patch("subprocess.run", side_effect=_fake_run) as run_mock:
+                result = create_scene_with_dcc(
+                    "houdini",
+                    DccCreateContext(
+                        project_path=project,
+                        launcher_root=root,
+                        executable="C:/Houdini/bin/houdini.exe",
+                        filename_pattern="Demo_layout.hipnc",
+                        ensure_runtime_scripts=True,
+                    ),
+                )
 
         self.assertEqual(result.error, "")
         self.assertEqual(result.scene_path, project / "Demo_layout.hipnc")
         self.assertTrue((project / "Demo_layout.hipnc").exists())
-        self.assertTrue((project / "scripts" / "123.py").exists())
-        self.assertTrue((project / "scripts" / "456.py").exists())
-        self.assertFalse((project / ".skyforge_job_init").exists())
+        self.assertFalse((project / "scripts" / "123.py").exists())
+        self.assertFalse((project / "scripts" / "456.py").exists())
+        run_mock.assert_called_once()
+
+    def test_create_scene_with_houdini_reports_missing_hython(self) -> None:
+        root = self._make_case_dir("dcc_houdini_missing_hython")
+        project = root / "Demo"
+        project.mkdir()
+
+        with mock.patch("core.dcc_handlers.houdini.resolve_hython_executable", return_value=""):
+            result = create_scene_with_dcc(
+                "houdini",
+                DccCreateContext(
+                    project_path=project,
+                    launcher_root=root,
+                    executable="",
+                    filename_pattern="Demo_layout.hipnc",
+                ),
+            )
+
+        self.assertIsNone(result.scene_path)
+        self.assertIn("Could not resolve a valid hython executable", result.error)
 
     def test_create_scene_with_blender_without_template_returns_helpful_error(self) -> None:
         root = self._make_case_dir("dcc_blender_scene")
