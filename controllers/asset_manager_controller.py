@@ -1,24 +1,21 @@
 from __future__ import annotations
 
 import os
-from copy import deepcopy
 from pathlib import Path
 from typing import List, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.asset_detection import DetectedProjectLayout, detect_project_layout
+from core.asset_detection import DetectedProjectLayout
 from core.asset_selection import resolve_entity_record_for_path, resolve_entity_type_for_path
-from core.asset_layout import EntityRecord, ResolvedAssetLayout, resolve_asset_layout
+from core.asset_layout import EntityRecord, ResolvedAssetLayout
 from core.asset_schema import entity_root_candidates
-from core.fs import find_projects
 from core.pipeline.processes import plan_asset_manager_process_execution
-from core.settings import normalize_asset_schema, save_settings
 from core.watchers import update_watcher_paths
 from controllers.asset_browser_panel_controller import AssetBrowserPanelController
 from controllers.asset_details_panel_controller import AssetDetailsPanelController
+from controllers.asset_project_context_controller import AssetProjectContextController
 from ui.utils.thumbnails import build_thumbnail_pixmap, load_media_pixmap
-from ui.dialogs.asset_layout_mapper_dialog import AssetLayoutMapperDialog
 from ui.widgets.asset_version_row import AssetVersionRow
 
 
@@ -38,6 +35,7 @@ class AssetManagerController:
         self._pending_project_context: Optional[Path] = None
         self._browser_panel = AssetBrowserPanelController(self)
         self._details_panel = AssetDetailsPanelController(self)
+        self._project_context_controller = AssetProjectContextController(self)
         self._context_refresh_timer = QtCore.QTimer(self.w)
         self._context_refresh_timer.setSingleShot(True)
         self._context_refresh_timer.setInterval(80)
@@ -72,143 +70,25 @@ class AssetManagerController:
         self._refresh_asset_watch_paths()
 
     def queue_project_context(self, project_path: Optional[Path]) -> None:
-        self._pending_project_context = project_path
-        if not self._asset_page_is_active():
-            if project_path is None:
-                self._clear_asset_browser_state("Select a project in Projects to browse its assets.")
-            else:
-                self.w._asset_current_project_root = project_path
-                self.w.asset_details_title.setText(project_path.name)
-                self.w.asset_path_label.setText(f"{project_path.name} / Inventory will load when opened")
-                self.set_asset_status("Asset Manager will load when opened.")
-            return
-        self._context_refresh_timer.start()
+        self._project_context_controller.queue_project_context(project_path)
 
     def ensure_project_context_loaded(self) -> None:
-        if self._pending_project_context is not None:
-            self._apply_queued_project_context()
-            return
-        current_item = self.w.project_grid.currentItem()
-        if current_item is None:
-            self.set_project_context(None)
-            return
-        path_text = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
-        project_path = Path(str(path_text)) if path_text else None
-        if self._project_context_is_current(project_path):
-            return
-        self.set_project_context(project_path)
+        self._project_context_controller.ensure_project_context_loaded()
 
     def _apply_queued_project_context(self) -> None:
-        project_path = self._pending_project_context
-        self._pending_project_context = None
-        self.set_project_context(project_path)
+        self._project_context_controller.apply_queued_project_context()
 
     def _asset_page_is_active(self) -> bool:
-        pages = getattr(self.w, "pages", None)
-        if pages is None:
-            return False
-        try:
-            return int(pages.currentIndex()) == 1
-        except Exception:
-            return False
+        return self._project_context_controller.asset_page_is_active()
 
     def _project_context_is_current(self, project_path: Optional[Path]) -> bool:
-        current_root = getattr(self.w, "_asset_current_project_root", None)
-        if project_path is None:
-            return current_root is None
-        if current_root != project_path:
-            return False
-        return getattr(self.w, "_asset_resolved_layout", None) is not None or self.w.asset_onboarding_card.isVisible()
+        return self._project_context_controller.project_context_is_current(project_path)
 
     def _clear_asset_browser_state(self, message: str) -> None:
-        self._clear_asset_detail_lists(self.w)
-        self.w._asset_current_project_root = None
-        self.w._asset_current_entity = None
-        self.w._asset_current_entity_type = None
-        self.w._asset_active_schema = dict(self.w._asset_schema)
-        self.w._asset_resolved_layout = None
-        self.w.asset_details_title.setText("No project selected")
-        self.w.asset_path_label.setText(message)
-        self.w.asset_meta.setText(message)
-        self._set_asset_pipeline_panel_state(
-            summary_text="No pipeline inspection available.",
-            pipeline_item_text="No entity selected",
-            process_item_text="No entity selected",
-        )
-        self._asset_pipeline_inspection = None
-        self._set_asset_detail_placeholder_state(
-            inventory_text="No entity selected",
-            history_text="No entity selected",
-        )
-        self._set_asset_selection_summary("No entity selected")
-        self._set_asset_onboarding_visible(False)
-        if hasattr(self.w, "asset_layout_btn"):
-            self.w.asset_layout_btn.setEnabled(False)
+        self._project_context_controller.clear_asset_browser_state(message)
 
     def set_project_context(self, project_path: Optional[Path]) -> None:
-        available_projects = find_projects(self.w.projects_dir)
-        self.w.project_controller.prune_cache(available_projects, self.w._asset_cache)
-        if project_path is None:
-            self._clear_asset_browser_state("Select a project in Projects to browse its assets.")
-            self.set_asset_status("No project selected.")
-            return
-        if not project_path.exists():
-            self._clear_asset_browser_state(f"{project_path.name} does not exist anymore.")
-            self.set_asset_status("Selected project is missing.")
-            return
-        if hasattr(self.w, "asset_layout_btn"):
-            self.w.asset_layout_btn.setEnabled(True)
-        self.w.asset_path_label.setText(f"{project_path.name} / Loading inventory...")
-        self.set_asset_status("Scanning project layout...")
-        active_schema = self._effective_project_schema(project_path)
-        self.w._asset_detected_layout = detect_project_layout(project_path, base_schema=active_schema)
-        has_override = str(project_path) in self.w._asset_project_schemas
-        if not has_override:
-            self._set_asset_onboarding(project_path, self.w._asset_detected_layout)
-            self._clear_asset_detail_lists(self.w)
-            self.w._asset_current_entity = None
-            self.w._asset_current_entity_type = None
-            self.w._asset_current_project_root = project_path
-            self.w.asset_details_title.setText(project_path.name)
-            self.w.asset_path_label.setText(f"{project_path.name} / Confirm asset layout")
-            self.w.asset_meta.setText("Confirm the detected asset layout before browsing entities.")
-            self._set_asset_pipeline_panel_state(
-                summary_text="Pipeline inspection will be available after layout confirmation.",
-                pipeline_item_text="Layout setup required",
-                process_item_text="Layout setup required",
-                process_summary_text="Confirm the layout before preparing process requests.",
-            )
-            self._asset_pipeline_inspection = None
-            self._set_asset_detail_placeholder_state(
-                inventory_text="Layout setup required",
-                history_text="Layout setup required",
-            )
-            self.set_asset_status("Confirm the detected layout or use the default layout.")
-            return
-        self._set_asset_onboarding_visible(False)
-        self.w._asset_active_schema = active_schema
-        self.w._asset_resolved_layout = resolve_asset_layout(project_path, active_schema)
-        self.w.asset_details_title.setText(project_path.name)
-        self.w.asset_path_label.setText(f"{project_path.name} / Select a shot or asset")
-        self._set_asset_selection_summary(f"{project_path.name} / No entity selected")
-        self.w._asset_current_project_root = project_path
-        self._clear_asset_detail_lists(self.w)
-        self.w.asset_preview.clear()
-        self.w.asset_meta.setText("Select a shot or asset to view details.")
-        self._set_asset_pipeline_panel_state(
-            summary_text="Select a shot or asset to inspect pipeline status.",
-            pipeline_item_text="No entity selected",
-            process_item_text="No entity selected",
-        )
-        self._asset_pipeline_inspection = None
-        self._set_asset_detail_placeholder_state(
-            inventory_text="No entity selected",
-            history_text="No entity selected",
-        )
-        self._sync_asset_contexts(active_schema)
-        self._rebuild_asset_entity_lists(target="both")
-        self._update_layout_status_summary(self.w._asset_resolved_layout)
-        self.set_asset_status(f"Asset Manager ready for {project_path.name}.")
+        self._project_context_controller.set_project_context(project_path)
 
     @staticmethod
     def _clear_asset_detail_lists(window: QtWidgets.QMainWindow) -> None:
@@ -797,197 +677,44 @@ class AssetManagerController:
         os.startfile(str(project_root))  # type: ignore[attr-defined]
 
     def accept_detected_layout(self) -> None:
-        project_root = getattr(self.w, "_asset_current_project_root", None)
-        detected = getattr(self.w, "_asset_detected_layout", None)
-        if project_root is None or not isinstance(detected, DetectedProjectLayout):
-            return
-        self._save_project_schema(project_root, detected.schema)
-        self.set_project_context(Path(project_root))
+        self._project_context_controller.accept_detected_layout()
 
     def accept_default_layout(self) -> None:
-        project_root = getattr(self.w, "_asset_current_project_root", None)
-        if project_root is None:
-            return
-        self._save_project_schema(Path(project_root), self.w._asset_schema)
-        self.set_project_context(Path(project_root))
+        self._project_context_controller.accept_default_layout()
 
     def open_manual_layout_mapper(self) -> None:
-        project_root = getattr(self.w, "_asset_current_project_root", None)
-        if project_root is None:
-            current_item = self.w.project_grid.currentItem()
-            if current_item is not None:
-                path_text = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
-                if path_text:
-                    project_root = Path(str(path_text))
-        if project_root is None or not Path(project_root).exists():
-            self.set_asset_status("Select a project first before creating a manual layout.")
-            return
-
-        project_path = Path(project_root)
-        detected = getattr(self.w, "_asset_detected_layout", None)
-        seed_schema = (
-            deepcopy(detected.schema)
-            if isinstance(detected, DetectedProjectLayout) and detected.project_root == project_path
-            else deepcopy(self._effective_project_schema(project_path))
-        )
-
-        dialog = AssetLayoutMapperDialog(project_path, seed_schema, parent=self.w)
-        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
-        schema = dialog.schema()
-        if schema is None:
-            return
-        self._save_project_schema(project_path, schema)
-        self.set_project_context(project_path)
-        self.set_asset_status("Manual asset layout saved.")
+        self._project_context_controller.open_manual_layout_mapper()
 
     def accept_detected_layout_with_library_merged(self) -> None:
-        project_root = getattr(self.w, "_asset_current_project_root", None)
-        detected = getattr(self.w, "_asset_detected_layout", None)
-        if project_root is None or not isinstance(detected, DetectedProjectLayout):
-            return
-        schema = deepcopy(detected.schema)
-        for source in schema.get("entity_sources", []):
-            if isinstance(source, dict) and source.get("role") == "library_asset":
-                source["role"] = "pipeline_asset"
-                source["evidence"] = list(source.get("evidence", [])) + ["user merged library into assets"]
-        self._save_project_schema(Path(project_root), schema)
-        self.set_project_context(Path(project_root))
-        self.set_asset_status("Layout saved with library sources merged into Assets.")
+        self._project_context_controller.accept_detected_layout_with_library_merged()
 
     def redetect_layout(self) -> None:
-        project_root = getattr(self.w, "_asset_current_project_root", None)
-        if project_root is None:
-            return
-        self.set_project_context(Path(project_root))
+        self._project_context_controller.redetect_layout()
 
     def reopen_layout_setup(self) -> None:
-        project_root = getattr(self.w, "_asset_current_project_root", None)
-        if project_root is None:
-            self.set_asset_status("Select a tracked project first to review its asset layout.")
-            return
-        project_path = Path(project_root)
-        detected = detect_project_layout(project_path, base_schema=self._effective_project_schema(project_path))
-        self.w._asset_detected_layout = detected
-        self.w._asset_current_project_root = project_path
-        self.w.asset_details_title.setText(project_path.name)
-        self.w.asset_path_label.setText(f"{project_path.name} / Review asset layout")
-        self.w.asset_meta.setText("Review the detected layout and confirm a replacement if needed.")
-        self._clear_asset_detail_lists(self.w)
-        self.w.asset_inventory_list.addItem("Layout review in progress")
-        self.w.asset_history_list.addItem("Layout review in progress")
-        self._set_asset_onboarding(project_path, detected)
-        self.set_asset_status("Asset layout review reopened. Your saved layout stays unchanged until you confirm a new one.")
+        self._project_context_controller.reopen_layout_setup()
 
     def _save_project_schema(self, project_root: Path, schema: object) -> None:
-        normalized = normalize_asset_schema(schema)
-        self.w._asset_project_schemas[str(project_root)] = normalized
-        self.w.settings["asset_project_schemas"] = dict(self.w._asset_project_schemas)
-        save_settings(self.w.settings)
+        self._project_context_controller.save_project_schema(project_root, schema)
 
     def _effective_project_schema(self, project_root: Path) -> dict:
-        override = self.w._asset_project_schemas.get(str(project_root))
-        if override:
-            return normalize_asset_schema(override)
-        return normalize_asset_schema(self.w._asset_schema)
+        return self._project_context_controller.effective_project_schema(project_root)
 
     def _set_asset_onboarding(self, project_root: Path, detected: DetectedProjectLayout) -> None:
-        roots = []
-        shot_roots = detected.schema.get("entity_roots", {}).get("shot", [])
-        asset_roots = detected.schema.get("entity_roots", {}).get("asset", [])
-        if shot_roots:
-            roots.append(f"Shots: {', '.join(shot_roots)}")
-        if asset_roots:
-            roots.append(f"Assets: {', '.join(asset_roots)}")
-        reps = []
-        usd_folders = detected.schema.get("representations", {}).get("usd", {}).get("folders", [])
-        video_folders = detected.schema.get("representations", {}).get("review_video", {}).get("folders", [])
-        image_folders = detected.schema.get("representations", {}).get("preview_image", {}).get("folders", [])
-        if usd_folders:
-            reps.append(f"USD: {', '.join(usd_folders)}")
-        if video_folders:
-            reps.append(f"Review: {', '.join(video_folders)}")
-        if image_folders:
-            reps.append(f"Preview: {', '.join(image_folders)}")
-        sources = self._format_detected_sources(detected)
-        library_count = sum(
-            1
-            for source in detected.schema.get("entity_sources", [])
-            if isinstance(source, dict) and source.get("role") == "library_asset"
-        )
-        summary = (
-            f"{project_root.name} layout review. "
-            f"Confidence: {detected.confidence.upper()}. "
-            "Choose the detected layout if this map matches how you work."
-        )
-        details = "\n".join(part for part in [
-            "Detected roots: " + " / ".join(roots) if roots else "Detected roots: none yet",
-            "Representations: " + " / ".join(reps) if reps else "Representations: no publish or preview folders confirmed",
-            f"Contexts: {', '.join(detected.schema.get('contexts', []))}" if detected.schema.get("contexts") else "",
-            "Why: " + " | ".join(sources[:5]) if sources else "Why: no strong source evidence found",
-            f"Warnings: {'; '.join(detected.warnings)}" if detected.warnings else "",
-            f"Needs review: {'; '.join(detected.unresolved)}" if detected.unresolved else "",
-            "Correction: use Merge Library into Assets if source files should appear in the main Assets tab."
-            if library_count
-            else "",
-        ] if part)
-        self.w.asset_onboarding_summary.setText(summary)
-        self.w.asset_onboarding_details.setText(details)
-        if hasattr(self.w, "asset_onboarding_merge_library_btn"):
-            self.w.asset_onboarding_merge_library_btn.setVisible(library_count > 0)
-        self._set_asset_onboarding_visible(True)
+        self._project_context_controller.set_asset_onboarding(project_root, detected)
 
     def _set_asset_onboarding_visible(self, visible: bool) -> None:
-        self.w.asset_onboarding_card.setVisible(visible)
-        self.w.asset_main_split.setVisible(not visible)
+        self._project_context_controller.set_asset_onboarding_visible(visible)
 
     @staticmethod
     def _format_detected_sources(detected: DetectedProjectLayout) -> list[str]:
-        labels = {
-            "shot": "Shots",
-            "pipeline_asset": "Assets",
-            "library_asset": "Library",
-            "unknown_asset": "Unknown",
-            "representation_source": "Publish source",
-        }
-        formatted: list[str] = []
-        for source in detected.schema.get("entity_sources", []):
-            if not isinstance(source, dict):
-                continue
-            path = str(source.get("path", "")).strip()
-            if not path:
-                continue
-            role = labels.get(str(source.get("role", "")), str(source.get("role", "Source")))
-            confidence = str(source.get("confidence", "unknown")).upper()
-            evidence = ", ".join(str(item) for item in source.get("evidence", [])[:2])
-            formatted.append(f"{path} -> {role} ({confidence}{'; ' + evidence if evidence else ''})")
-        return formatted
+        return AssetProjectContextController.format_detected_sources(detected)
 
     def _update_layout_status_summary(self, layout: object) -> None:
-        if layout is None:
-            return
-        shots = len(layout.entities_by_role("shot")) if hasattr(layout, "entities_by_role") else 0
-        assets = len(layout.entities_by_role("pipeline_asset")) if hasattr(layout, "entities_by_role") else 0
-        library = len(layout.entities_by_role("library_asset")) if hasattr(layout, "entities_by_role") else 0
-        if hasattr(self.w.asset_page, "asset_selection_summary"):
-            self.w.asset_page.asset_selection_summary.setText(
-                f"Detected: {shots} shot(s), {assets} asset(s), {library} library item(s)"
-            )
+        self._project_context_controller.update_layout_status_summary(layout)
 
     def _sync_asset_contexts(self, schema: dict) -> None:
-        contexts = schema.get("contexts", [])
-        if not isinstance(contexts, list) or not contexts:
-            contexts = ["modeling", "lookdev", "layout", "animation", "vfx", "lighting"]
-        current = self.w.asset_context_combo.currentText() or "All"
-        self.w.asset_context_combo.blockSignals(True)
-        self.w.asset_context_combo.clear()
-        self.w.asset_context_combo.addItem("All")
-        for context in contexts:
-            self.w.asset_context_combo.addItem(str(context))
-        if current not in ["All", *[str(c) for c in contexts]]:
-            current = "All"
-        self.w.asset_context_combo.setCurrentText(current)
-        self.w.asset_context_combo.blockSignals(False)
+        self._project_context_controller.sync_asset_contexts(schema)
 
     def _entity_type_for_path(self, entity_dir: Path) -> str:
         return resolve_entity_type_for_path(
