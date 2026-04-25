@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtWidgets
 
 from core.asset_details import build_asset_meta_text, normalize_list_context, read_history_note
 from core.asset_inventory import build_entity_inventory
+from core.project_storage import asset_exr_thumb_dir
 from core.asset_selection import build_active_asset_selection, choose_best_context_for_selection
 from core.metadata import load_metadata
 from ui.utils.thumbnails import build_thumbnail_pixmap, load_media_pixmap
@@ -289,7 +290,8 @@ class AssetDetailsPanelController:
 
     def asset_preview_cache_root(self) -> Optional[Path]:
         project_root = getattr(self.w, "_asset_current_project_root", None)
-        return Path(project_root) if project_root else None
+        project_path = Path(project_root) if project_root else None
+        return asset_exr_thumb_dir(project_path, getattr(self.w, "settings", None))
 
     def asset_preview_target_size(self) -> QtCore.QSize:
         size = self.w.asset_preview.size()

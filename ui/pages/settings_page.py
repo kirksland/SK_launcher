@@ -54,6 +54,9 @@ class SettingsPage(QtWidgets.QWidget):
         use_file_association: bool,
         show_splash_screen: bool,
         houdini_exe: str,
+        runtime_cache_location: str,
+        runtime_cache_max_gb: int,
+        runtime_cache_max_days: int,
         shortcut_commands: Sequence[AppCommand] = (),
         shortcut_overrides: Mapping[str, object] | None = None,
         parent: QtWidgets.QWidget | None = None,
@@ -178,7 +181,15 @@ class SettingsPage(QtWidgets.QWidget):
         self.settings_stack.addWidget(self.houdini_page)
         self.settings_stack.addWidget(self.shortcuts_page)
 
-        self._build_workspace_fields(projects_dir, server_repo_dir, template_hip, new_hip_pattern)
+        self._build_workspace_fields(
+            projects_dir,
+            server_repo_dir,
+            template_hip,
+            new_hip_pattern,
+            runtime_cache_location,
+            runtime_cache_max_gb,
+            runtime_cache_max_days,
+        )
         self._build_launch_fields(video_backend_pref, use_file_association, show_splash_screen)
         self._build_houdini_fields(houdini_exe)
         self._build_shortcut_fields()
@@ -295,6 +306,9 @@ class SettingsPage(QtWidgets.QWidget):
         server_repo_dir: Path,
         template_hip: Path,
         new_hip_pattern: str,
+        runtime_cache_location: str,
+        runtime_cache_max_gb: int,
+        runtime_cache_max_days: int,
     ) -> None:
         locations_form = self._build_card(
             self.workspace_page,
@@ -324,6 +338,34 @@ class SettingsPage(QtWidgets.QWidget):
         self.settings_pattern = QtWidgets.QLineEdit(new_hip_pattern)
         self.settings_pattern.setPlaceholderText("{projectName}_001")
         template_form.addRow("New Hip Pattern", self.settings_pattern)
+
+        runtime_form = self._build_card(
+            self.workspace_page,
+            "Internal Runtime Storage",
+            "Choose where Skyforge keeps rebuildable runtime caches such as EXR thumbnails. "
+            "Project storage is simpler to inspect; Local AppData keeps project folders cleaner.",
+        )
+        self.settings_runtime_cache_location = QtWidgets.QComboBox()
+        self.settings_runtime_cache_location.addItem("Local AppData (Recommended)", "local_appdata")
+        self.settings_runtime_cache_location.addItem("Inside Project Folder", "project")
+        current_location = str(runtime_cache_location or "local_appdata").strip().lower()
+        for index in range(self.settings_runtime_cache_location.count()):
+            if self.settings_runtime_cache_location.itemData(index) == current_location:
+                self.settings_runtime_cache_location.setCurrentIndex(index)
+                break
+        runtime_form.addRow("Cache Location", self.settings_runtime_cache_location)
+
+        self.settings_runtime_cache_max_gb = QtWidgets.QSpinBox()
+        self.settings_runtime_cache_max_gb.setRange(1, 1024)
+        self.settings_runtime_cache_max_gb.setValue(max(1, int(runtime_cache_max_gb)))
+        self.settings_runtime_cache_max_gb.setSuffix(" GB")
+        runtime_form.addRow("Max Cache Size", self.settings_runtime_cache_max_gb)
+
+        self.settings_runtime_cache_max_days = QtWidgets.QSpinBox()
+        self.settings_runtime_cache_max_days.setRange(1, 3650)
+        self.settings_runtime_cache_max_days.setValue(max(1, int(runtime_cache_max_days)))
+        self.settings_runtime_cache_max_days.setSuffix(" days")
+        runtime_form.addRow("Retention Window", self.settings_runtime_cache_max_days)
 
     def _build_launch_fields(
         self,

@@ -30,6 +30,7 @@ from core.settings import (
     settings_startup_issues,
 )
 from core.houdini_env import build_houdini_env
+from core.project_storage import prune_local_runtime_cache
 from controllers.asset_manager_controller import AssetManagerController
 from controllers.asset_pipeline_panel_controller import AssetPipelinePanelController
 from controllers.app_command_controller import AppCommandController
@@ -451,6 +452,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self._use_file_association,
             self._show_splash_screen,
             self._houdini_exe,
+            str(self.settings.get("runtime_cache_location", "local_appdata")),
+            int(self.settings.get("runtime_cache_max_gb", 5)),
+            int(self.settings.get("runtime_cache_max_days", 30)),
             shortcut_commands=self.command_controller.registry.list(),
             shortcut_overrides=self.settings.get("shortcuts", {}),
         )
@@ -895,6 +899,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._refresh_settings_validation()
         self._startup_status("Finishing startup...")
         QtCore.QTimer.singleShot(0, self._handle_startup_configuration)
+        QtCore.QTimer.singleShot(0, self._prune_runtime_cache_startup)
 
     def apply_initial_window_geometry(self) -> None:
         screen = QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
@@ -978,6 +983,11 @@ class LauncherWindow(QtWidgets.QMainWindow):
         use_assoc = self.settings_use_assoc.isChecked()
         show_splash_screen = self.settings_show_splash.isChecked()
         houdini_exe = normalize_houdini_exe(self.settings_houdini_exe.text())
+        runtime_cache_location = str(
+            self.settings_page.settings_runtime_cache_location.currentData() or "local_appdata"
+        )
+        runtime_cache_max_gb = int(self.settings_page.settings_runtime_cache_max_gb.value())
+        runtime_cache_max_days = int(self.settings_page.settings_runtime_cache_max_days.value())
         resolved_projects_dir = Path(projects_dir) if projects_dir else DEFAULT_PROJECTS_DIR
         backend_label = self.settings_video_backend.currentText().strip().lower()
         if backend_label == "opencv":
@@ -1001,6 +1011,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 "video_backend": video_backend,
                 "asset_manager_projects": list(self._asset_manager_projects),
                 "shortcuts": self.settings_page.shortcut_overrides(),
+                "runtime_cache_location": runtime_cache_location,
+                "runtime_cache_max_gb": runtime_cache_max_gb,
+                "runtime_cache_max_days": runtime_cache_max_days,
             }
         )
         save_settings(self.settings)
@@ -1060,6 +1073,20 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 f"Please review Settings: {issue_list}"
             )
         self.settings_page.set_startup_context(True, message)
+
+    def _prune_runtime_cache_startup(self) -> None:
+        try:
+            result = prune_local_runtime_cache(self.settings)
+        except Exception as exc:
+            APP_LOG_BUS.append("WARN", f"[CACHE] Runtime cache cleanup failed: {exc}")
+            return
+        removed = int(result.get("removed_projects", 0))
+        freed = int(result.get("freed_bytes", 0))
+        if removed or freed:
+            APP_LOG_BUS.append(
+                "INFO",
+                f"[CACHE] Runtime cache cleanup removed {removed} project cache(s), freed {freed // (1024 * 1024)} MB.",
+            )
         self._refresh_settings_validation()
         APP_LOG_BUS.append("warning", message)
         QtWidgets.QMessageBox.information(self, APP_TITLE, message)

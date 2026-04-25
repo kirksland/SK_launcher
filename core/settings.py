@@ -39,6 +39,9 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "asset_schema": default_asset_schema(),
     "asset_project_schemas": {},
     "shortcuts": {},
+    "runtime_cache_location": "local_appdata",
+    "runtime_cache_max_gb": 5,
+    "runtime_cache_max_days": 30,
 }
 
 
@@ -105,6 +108,15 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
     if isinstance(data.get("asset_project_schemas"), dict):
         merged["asset_project_schemas"] = normalize_asset_project_schemas(data["asset_project_schemas"])
     merged["shortcuts"] = normalize_shortcuts(data.get("shortcuts"))
+    merged["runtime_cache_location"] = normalize_runtime_cache_location(data.get("runtime_cache_location"))
+    merged["runtime_cache_max_gb"] = _coerce_positive_int(
+        data.get("runtime_cache_max_gb"),
+        int(DEFAULT_SETTINGS["runtime_cache_max_gb"]),
+    )
+    merged["runtime_cache_max_days"] = _coerce_positive_int(
+        data.get("runtime_cache_max_days"),
+        int(DEFAULT_SETTINGS["runtime_cache_max_days"]),
+    )
     # If settings predate houdini_exe storage, default to latest install.
     if "houdini_exe" not in data:
         installs = discover_houdini_installations()
@@ -127,6 +139,17 @@ def save_settings(settings: Dict[str, object], settings_path: Optional[Path] = N
         serializable.get("asset_project_schemas")
     )
     serializable["shortcuts"] = normalize_shortcuts(serializable.get("shortcuts"))
+    serializable["runtime_cache_location"] = normalize_runtime_cache_location(
+        serializable.get("runtime_cache_location")
+    )
+    serializable["runtime_cache_max_gb"] = _coerce_positive_int(
+        serializable.get("runtime_cache_max_gb"),
+        int(DEFAULT_SETTINGS["runtime_cache_max_gb"]),
+    )
+    serializable["runtime_cache_max_days"] = _coerce_positive_int(
+        serializable.get("runtime_cache_max_days"),
+        int(DEFAULT_SETTINGS["runtime_cache_max_days"]),
+    )
     resolved_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
 
 
@@ -199,6 +222,21 @@ def normalize_shortcuts(raw: object) -> Dict[str, List[str]]:
         normalized = [sequence.strip() for sequence in sequence_list if isinstance(sequence, str) and sequence.strip()]
         cleaned[command_id.strip()] = normalized
     return cleaned
+
+
+def normalize_runtime_cache_location(raw: object) -> str:
+    text = str(raw or "").strip().lower()
+    if text == "project":
+        return "project"
+    return "local_appdata"
+
+
+def _coerce_positive_int(raw: object, default: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+    return value if value > 0 else int(default)
 
 def normalize_houdini_exe(path_text: str) -> str:
     path_text = path_text.strip().strip('"')

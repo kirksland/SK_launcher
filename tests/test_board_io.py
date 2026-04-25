@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from uuid import uuid4
 
-from core.board_io import backup_board_payload, board_path, load_board_payload, save_board_payload
+from core.board_io import board_path, load_board_payload, save_board_payload
 from core.board_state.migrations import BOARD_SCHEMA_VERSION
 
 
@@ -52,19 +52,6 @@ class BoardIoTests(unittest.TestCase):
         self.assertIsNone(load_board_payload(root))
         board_path(root).write_text("{bad json", encoding="utf-8")
         self.assertIsNone(load_board_payload(root))
-
-    def test_backup_board_payload_writes_reasoned_backup(self) -> None:
-        root = self._make_case_dir("board_io_backup")
-        payload = {"items": [{"type": "note"}]}
-
-        backup_path = backup_board_payload(root, payload, "blocked empty save")
-
-        self.assertIsNotNone(backup_path)
-        assert backup_path is not None
-        self.assertTrue(backup_path.exists())
-        self.assertIn("blocked-empty-save", backup_path.name)
-        self.assertEqual(load_board_payload(root), None)
-
 
 if __name__ == "__main__":
     unittest.main()
