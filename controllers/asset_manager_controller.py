@@ -941,166 +941,22 @@ class AssetManagerController:
         record: EntityRecord | None,
         context: str,
     ) -> None:
-        if not hasattr(self.w.asset_page, "asset_pipeline_summary"):
+        panel_controller = getattr(self.w, "asset_pipeline_panel_controller", None)
+        if panel_controller is not None:
+            panel_controller.update_inspection(layout, record, context=context)
             return
-        process_controller = getattr(self.w, "process_controller", None)
-        inspection = (
-            process_controller.inspect_entity(
-                layout,
-                record,
-                context=normalize_list_context(context),
-            )
-            if process_controller is not None
-            else None
-        )
-        summary_label = self.w.asset_page.asset_pipeline_summary
-        list_widget = self.w.asset_page.asset_pipeline_list
-        process_list = self.w.asset_page.asset_pipeline_process_list
-        list_widget.clear()
-        process_list.clear()
-        self._reset_asset_pipeline_run_feedback()
-        if inspection is None:
-            summary_label.setText("No pipeline inspection available.")
-            list_widget.addItem("No pipeline data")
-            process_list.addItem("No process definitions")
-            self._set_asset_pipeline_process_summary(self._DEFAULT_PROCESS_SUMMARY, run_enabled=False)
-            self._asset_pipeline_inspection = None
-            return
-        self._asset_pipeline_inspection = inspection
-        freshness_label = inspection.freshness.replace("_", " ").title()
-        downstream_count = len(inspection.downstream)
-        summary_label.setText(
-            f"Freshness: {freshness_label}\nDownstream items: {downstream_count}"
-        )
-        if not inspection.downstream:
-            list_widget.addItem("No downstream outputs tracked yet")
-        else:
-            for record in inspection.downstream[:6]:
-                list_widget.addItem(self._build_downstream_list_item(record))
-        if not inspection.available_processes:
-            process_list.addItem("No process definitions")
-            self._set_asset_pipeline_process_summary(
-                "No process definitions are registered for this entity yet.",
-                run_enabled=False,
-            )
-            return
-        for process in inspection.available_processes:
-            item = QtWidgets.QListWidgetItem(f"{process.label} [{process.family}]")
-            item.setData(QtCore.Qt.ItemDataRole.UserRole, process.id)
-            if process.description:
-                item.setToolTip(process.description)
-            process_list.addItem(item)
-        process_list.setCurrentRow(0)
-        self.on_asset_pipeline_process_selected()
 
     def on_asset_pipeline_process_selected(self) -> None:
-        if not hasattr(self.w.asset_page, "asset_pipeline_process_summary"):
+        panel_controller = getattr(self.w, "asset_pipeline_panel_controller", None)
+        if panel_controller is not None:
+            panel_controller.on_process_selected()
             return
-        process_list = self.w.asset_page.asset_pipeline_process_list
-        item = process_list.currentItem()
-        if item is None:
-            self._set_asset_pipeline_process_summary(self._DEFAULT_PROCESS_SUMMARY, run_enabled=False)
-            return
-        process_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        process_controller = getattr(self.w, "process_controller", None)
-        prepared = (
-            process_controller.prepare_request(self._asset_pipeline_inspection, process_id)
-            if process_controller is not None
-            else None
-        )
-        runtime_request = (
-            process_controller.build_runtime_request(self._asset_pipeline_inspection, process_id)
-            if process_controller is not None
-            else None
-        )
-        if prepared is None:
-            self._set_asset_pipeline_process_summary(
-                "This process cannot be prepared for the current selection.",
-                run_enabled=False,
-            )
-            return
-        capability_text = ", ".join(prepared.required_capabilities) if prepared.required_capabilities else "No special capabilities"
-        outputs_text = ", ".join(prepared.outputs) if prepared.outputs else "No declared outputs"
-        remote_text = "Remote-capable" if prepared.supports_remote else "Local-only"
-        review_text = "Review required" if prepared.review_required else "No review gate declared"
-        runtime_text = "Runtime handoff unavailable"
-        if runtime_request is not None:
-            target_text = f"{runtime_request.execution_target.label} [{runtime_request.execution_target.kind}]"
-            if runtime_request.capability_gaps:
-                if runtime_request.execution_target.id == "local":
-                    runtime_text = (
-                        f"Runtime target: {target_text}\n"
-                        "Runtime handoff: ready, target capabilities still need formal resolution"
-                    )
-                else:
-                    gaps = ", ".join(runtime_request.capability_gaps)
-                    runtime_text = f"Runtime target: {target_text}\nMissing target capabilities: {gaps}"
-            else:
-                runtime_text = f"Runtime target: {target_text}\nRuntime handoff: ready"
-        preview_text = ""
-        if prepared.process_id == "publish.asset.usd":
-            preview_parameters = self._resolve_publish_asset_usd_parameters(ensure_dirs=False)
-            if preview_parameters is not None:
-                preview_text = (
-                    f"\nResolved source: {preview_parameters['source']}\n"
-                    f"Resolved output: {preview_parameters['output']}\n"
-                    f"Resolved context: {preview_parameters['context']}"
-                )
-        self._set_asset_pipeline_process_summary(
-            f"{prepared.process_label}\n"
-            f"Target: {prepared.entity_label} [{prepared.entity_kind}]\n"
-            f"Requires: {capability_text}\n"
-            f"Outputs: {outputs_text}\n"
-            f"Mode: {remote_text} / {review_text}\n"
-            f"{runtime_text}"
-            f"{preview_text}",
-            run_enabled=runtime_request is not None and prepared.process_id == "publish.asset.usd",
-        )
 
     def run_selected_asset_pipeline_process(self) -> None:
-        process_list = getattr(self.w.asset_page, "asset_pipeline_process_list", None)
-        if process_list is None:
+        panel_controller = getattr(self.w, "asset_pipeline_panel_controller", None)
+        if panel_controller is not None:
+            panel_controller.run_selected_process()
             return
-        item = process_list.currentItem()
-        if item is None:
-            self.set_asset_status("Select a pipeline process first.")
-            return
-        process_id = str(item.data(QtCore.Qt.ItemDataRole.UserRole) or "").strip()
-        if not process_id:
-            self.set_asset_status("Selected pipeline process has no identifier.")
-            return
-        process_controller = getattr(self.w, "process_controller", None)
-        if process_controller is None or self._asset_pipeline_inspection is None:
-            self.set_asset_status("No pipeline inspection is available for this selection.")
-            return
-        parameters = self._resolve_pipeline_process_parameters(process_id)
-        if parameters is None:
-            return
-        self._log_pipeline_run_start(process_id, parameters)
-        self._set_asset_pipeline_run_summary(f"Running {process_id}...")
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
-        try:
-            runtime_result = process_controller.execute_houdini_request(
-                self._asset_pipeline_inspection,
-                process_id,
-                parameters=parameters,
-            )
-        finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
-        if runtime_result is None:
-            self._set_asset_pipeline_run_summary("Process execution could not be prepared.")
-            self.set_asset_status("Pipeline execution could not be prepared.")
-            return
-        self._update_asset_pipeline_run_feedback(runtime_result)
-        self._log_pipeline_run_result(runtime_result)
-        if runtime_result.execution.status == "succeeded":
-            self.set_asset_status(f"{runtime_result.request.process_id} completed.")
-            entity = getattr(self.w, "_asset_current_entity", None)
-            entity_type = getattr(self.w, "_asset_current_entity_type", None)
-            if entity:
-                self._load_entity_details(Path(entity), entity_type)
-        else:
-            self.set_asset_status(runtime_result.execution.message or "Pipeline execution failed.")
 
     def _resolve_pipeline_process_parameters(self, process_id: str) -> dict[str, object] | None:
         if process_id == "publish.asset.usd":
