@@ -20,6 +20,12 @@ PROJECT_SUBDIRS = (
 JOB_INIT_MARKER = ".skyforge_job_init"
 
 
+def create_project_structure(project_path: Path, subdirs: Sequence[str] = PROJECT_SUBDIRS) -> None:
+    project_path.mkdir(parents=True, exist_ok=False)
+    for subdir in subdirs:
+        (project_path / subdir).mkdir(parents=False, exist_ok=True)
+
+
 def resolve_new_hip_name(pattern: str, project_name: str) -> str:
     normalized = pattern.strip() or "{projectName}_001.hipnc"
     try:

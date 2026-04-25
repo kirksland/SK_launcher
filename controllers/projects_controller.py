@@ -8,7 +8,14 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.dcc import DccOpenContext, default_scene_filename, open_scene_with_dcc
+from core.dcc import (
+    DEFAULT_NEW_PROJECT_DCC,
+    DccCreateContext,
+    DccOpenContext,
+    create_scene_with_dcc,
+    default_scene_filename,
+    open_scene_with_dcc,
+)
 from core.fs import find_projects
 from core.houdini_env import build_houdini_env
 from core.project_catalog import (
@@ -18,8 +25,9 @@ from core.project_catalog import (
     scan_project_scene_files,
 )
 from core.project_runtime import (
-    JOB_INIT_MARKER,
     PROJECT_SUBDIRS,
+    JOB_INIT_MARKER,
+    create_project_structure,
     ensure_job_scripts_if_needed,
     ensure_template_hip,
     resolve_new_hip_name,
@@ -141,11 +149,8 @@ class ProjectsController:
             return
 
         try:
-            project_path.mkdir(parents=True, exist_ok=False)
-            for subdir in PROJECT_SUBDIRS:
-                (project_path / subdir).mkdir(parents=False, exist_ok=True)
-            self._ensure_template_hip(project_path)
-            (project_path / JOB_INIT_MARKER).write_text("init_job", encoding="utf-8")
+            create_project_structure(project_path, PROJECT_SUBDIRS)
+            self._create_initial_project_scene(project_path)
         except Exception as exc:  # pragma: no cover - filesystem errors
             self.w._warn(f"Failed to create project:\n{exc}")
             return
@@ -179,6 +184,22 @@ class ProjectsController:
 
     def _ensure_job_scripts_if_needed(self, project_path: Path) -> None:
         ensure_job_scripts_if_needed(project_path, marker_name=JOB_INIT_MARKER)
+
+    def _create_initial_project_scene(self, project_path: Path) -> Optional[Path]:
+        result = create_scene_with_dcc(
+            DEFAULT_NEW_PROJECT_DCC,
+            DccCreateContext(
+                project_path=project_path,
+                launcher_root=Path(__file__).resolve().parents[1],
+                template_path=self.w._template_hip,
+                default_template_path=DEFAULT_TEMPLATE_HIP,
+                filename_pattern=str(getattr(self.w, "_new_hip_pattern", "") or "").strip(),
+                ensure_runtime_scripts=True,
+            ),
+        )
+        if result.error:
+            self.w._warn(result.error)
+        return result.scene_path
 
     def open_selected_project(self) -> None:
         item = self.w.project_grid.currentItem()

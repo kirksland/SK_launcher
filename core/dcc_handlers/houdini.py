@@ -5,8 +5,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.dcc import DccDescriptor, DccHandler, DccOpenContext, get_dcc
+from core.dcc import DccCreateContext, DccCreateResult, DccDescriptor, DccHandler, DccOpenContext, get_dcc
 from core.houdini_env import build_houdini_env
+from core.project_runtime import ensure_job_scripts, ensure_template_hip
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,20 @@ class HoudiniDccHandler(DccHandler):
             return self.descriptor.default_filename.format(projectName=project_name)
         except Exception:
             return f"{project_name}_001{self.descriptor.extensions[0]}"
+
+    def create_scene(self, context: DccCreateContext) -> DccCreateResult:
+        target, error = ensure_template_hip(
+            context.project_path,
+            pattern=context.filename_pattern or self.descriptor.default_filename,
+            custom_template=context.template_path,
+            default_template=context.default_template_path,
+            launcher_root=context.launcher_root,
+        )
+        if error:
+            return DccCreateResult(None, error)
+        if target is not None and context.ensure_runtime_scripts:
+            ensure_job_scripts(context.project_path)
+        return DccCreateResult(target, "")
 
     def open_scene(self, scene_path: Path, context: DccOpenContext) -> None:
         if context.use_file_association or not context.executable:
@@ -39,4 +54,3 @@ def build_houdini_handler() -> HoudiniDccHandler:
     if descriptor is None:
         raise RuntimeError("Houdini DCC descriptor is not registered.")
     return HoudiniDccHandler(descriptor)
-

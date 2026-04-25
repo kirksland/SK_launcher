@@ -21,12 +21,30 @@ class DccOpenContext:
     executable: str = ""
 
 
+@dataclass(frozen=True)
+class DccCreateContext:
+    project_path: Path
+    launcher_root: Path
+    template_path: Optional[Path] = None
+    default_template_path: Optional[Path] = None
+    filename_pattern: str = ""
+    ensure_runtime_scripts: bool = False
+
+
+@dataclass(frozen=True)
+class DccCreateResult:
+    scene_path: Optional[Path]
+    error: str = ""
+
+
 class DccHandler(Protocol):
     descriptor: DccDescriptor
 
     def supports_path(self, path: Path) -> bool: ...
 
     def default_scene_filename(self, project_name: str) -> str: ...
+
+    def create_scene(self, context: DccCreateContext) -> DccCreateResult: ...
 
     def open_scene(self, scene_path: Path, context: DccOpenContext) -> None: ...
 
@@ -136,3 +154,9 @@ def open_scene_with_dcc(scene_path: Path, context: DccOpenContext) -> None:
         raise RuntimeError(f"Unsupported scene file: {scene_path.name}")
     handler.open_scene(scene_path, context)
 
+
+def create_scene_with_dcc(dcc_id: str, context: DccCreateContext) -> DccCreateResult:
+    handler = get_dcc_handler(dcc_id)
+    if handler is None:
+        return DccCreateResult(None, f"No DCC handler is registered for '{dcc_id}'.")
+    return handler.create_scene(context)
