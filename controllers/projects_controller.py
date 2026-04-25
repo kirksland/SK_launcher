@@ -28,12 +28,8 @@ from core.project_catalog import (
 )
 from core.project_runtime import (
     PROJECT_SUBDIRS,
-    JOB_INIT_MARKER,
     create_project_structure,
-    ensure_job_scripts_if_needed,
-    ensure_template_hip,
 )
-from core.settings import DEFAULT_TEMPLATE_HIP
 from core.watchers import update_watcher_paths
 from ui.widgets.project_card import ProjectCard
 
@@ -165,21 +161,6 @@ class ProjectsController:
             return
         self._create_scene_for_project(project_path)
 
-    def _ensure_template_hip(self, project_path: Path) -> Optional[Path]:
-        target, error = ensure_template_hip(
-            project_path,
-            pattern=self.w._new_hip_pattern,
-            custom_template=self.w._template_hip,
-            default_template=DEFAULT_TEMPLATE_HIP,
-            launcher_root=Path(__file__).resolve().parents[1],
-        )
-        if error:
-            self.w._warn(error)
-        return target
-
-    def _ensure_job_scripts_if_needed(self, project_path: Path) -> None:
-        ensure_job_scripts_if_needed(project_path, marker_name=JOB_INIT_MARKER)
-
     def _selected_project_path(self) -> Optional[Path]:
         item = self.w.project_grid.currentItem()
         if item is None:
@@ -267,9 +248,7 @@ class ProjectsController:
                 launcher_root=Path(__file__).resolve().parents[1],
                 executable=str(getattr(self.w, "_houdini_exe", "") or "").strip(),
                 template_path=self.w._template_hip,
-                default_template_path=DEFAULT_TEMPLATE_HIP,
                 filename_pattern=filename,
-                ensure_runtime_scripts=True,
             ),
         )
         if result.error:
@@ -293,8 +272,6 @@ class ProjectsController:
             scene_file = card.selected_scene_file()
         else:
             scene_file = None
-        if scene_file is None and (project_path / JOB_INIT_MARKER).exists():
-            scene_file = self._ensure_template_hip(project_path)
         if scene_file is None:
             self.w._warn(f"No supported scene file found in {project_path.name}.")
             return
@@ -305,7 +282,6 @@ class ProjectsController:
             self.w._warn(f"Failed to open: {scene_file}\n{exc}")
 
     def _open_scene_file(self, scene_file: Path, project_path: Path) -> None:
-        self._ensure_job_scripts_if_needed(project_path)
         open_scene_with_dcc(
             scene_file,
             DccOpenContext(
