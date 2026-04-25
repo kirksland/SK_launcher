@@ -34,6 +34,9 @@ from ui.widgets.asset_version_row import AssetVersionRow
 
 class AssetManagerController:
     _EMPTY_ENTITY_ROLE = QtCore.Qt.ItemDataRole.UserRole + 98
+    _DEFAULT_PROCESS_SUMMARY = "Select a process to inspect what it would prepare."
+    _DEFAULT_RUN_SUMMARY = "No process execution yet."
+    _DEFAULT_ARTIFACT_PLACEHOLDER = "No produced artifacts yet"
 
     def __init__(self, window: QtWidgets.QMainWindow) -> None:
         self.w = window
@@ -135,26 +138,17 @@ class AssetManagerController:
         self.w.asset_details_title.setText("No project selected")
         self.w.asset_path_label.setText(message)
         self.w.asset_meta.setText(message)
-        if hasattr(self.w.asset_page, "asset_pipeline_summary"):
-            self.w.asset_page.asset_pipeline_summary.setText("No pipeline inspection available.")
-            self.w.asset_page.asset_pipeline_list.clear()
-            self.w.asset_page.asset_pipeline_list.addItem("No entity selected")
-            self.w.asset_page.asset_pipeline_process_list.clear()
-            self.w.asset_page.asset_pipeline_process_list.addItem("No entity selected")
-            self.w.asset_page.asset_pipeline_process_summary.setText(
-                "Select a process to inspect what it would prepare."
-            )
-            self.w.asset_page.asset_pipeline_run_summary.setText("No process execution yet.")
-            self.w.asset_page.asset_pipeline_run_btn.setEnabled(False)
-            self.w.asset_page.asset_pipeline_artifact_list.clear()
-            self.w.asset_page.asset_pipeline_artifact_list.addItem("No produced artifacts yet")
+        self._set_asset_pipeline_panel_state(
+            summary_text="No pipeline inspection available.",
+            pipeline_item_text="No entity selected",
+            process_item_text="No entity selected",
+        )
         self._asset_pipeline_inspection = None
-        self.w.asset_inventory_list.clear()
-        self.w.asset_inventory_list.addItem("No entity selected")
-        self.w.asset_history_list.clear()
-        self.w.asset_history_list.addItem("No entity selected")
-        if hasattr(self.w.asset_page, "asset_selection_summary"):
-            self.w.asset_page.asset_selection_summary.setText("No entity selected")
+        self._set_asset_detail_placeholder_state(
+            inventory_text="No entity selected",
+            history_text="No entity selected",
+        )
+        self._set_asset_selection_summary("No entity selected")
         self._set_asset_onboarding_visible(False)
         if hasattr(self.w, "asset_layout_btn"):
             self.w.asset_layout_btn.setEnabled(False)
@@ -186,22 +180,17 @@ class AssetManagerController:
             self.w.asset_details_title.setText(project_path.name)
             self.w.asset_path_label.setText(f"{project_path.name} / Confirm asset layout")
             self.w.asset_meta.setText("Confirm the detected asset layout before browsing entities.")
-            if hasattr(self.w.asset_page, "asset_pipeline_summary"):
-                self.w.asset_page.asset_pipeline_summary.setText("Pipeline inspection will be available after layout confirmation.")
-                self.w.asset_page.asset_pipeline_list.clear()
-                self.w.asset_page.asset_pipeline_list.addItem("Layout setup required")
-                self.w.asset_page.asset_pipeline_process_list.clear()
-                self.w.asset_page.asset_pipeline_process_list.addItem("Layout setup required")
-                self.w.asset_page.asset_pipeline_process_summary.setText(
-                    "Confirm the layout before preparing process requests."
-                )
-                self.w.asset_page.asset_pipeline_run_summary.setText("No process execution yet.")
-                self.w.asset_page.asset_pipeline_run_btn.setEnabled(False)
-                self.w.asset_page.asset_pipeline_artifact_list.clear()
-                self.w.asset_page.asset_pipeline_artifact_list.addItem("No produced artifacts yet")
+            self._set_asset_pipeline_panel_state(
+                summary_text="Pipeline inspection will be available after layout confirmation.",
+                pipeline_item_text="Layout setup required",
+                process_item_text="Layout setup required",
+                process_summary_text="Confirm the layout before preparing process requests.",
+            )
             self._asset_pipeline_inspection = None
-            self.w.asset_inventory_list.addItem("Layout setup required")
-            self.w.asset_history_list.addItem("Layout setup required")
+            self._set_asset_detail_placeholder_state(
+                inventory_text="Layout setup required",
+                history_text="Layout setup required",
+            )
             self.set_asset_status("Confirm the detected layout or use the default layout.")
             return
         self._set_asset_onboarding_visible(False)
@@ -209,28 +198,21 @@ class AssetManagerController:
         self.w._asset_resolved_layout = resolve_asset_layout(project_path, active_schema)
         self.w.asset_details_title.setText(project_path.name)
         self.w.asset_path_label.setText(f"{project_path.name} / Select a shot or asset")
-        if hasattr(self.w.asset_page, "asset_selection_summary"):
-            self.w.asset_page.asset_selection_summary.setText(f"{project_path.name} / No entity selected")
+        self._set_asset_selection_summary(f"{project_path.name} / No entity selected")
         self.w._asset_current_project_root = project_path
         self._clear_asset_detail_lists(self.w)
         self.w.asset_preview.clear()
         self.w.asset_meta.setText("Select a shot or asset to view details.")
-        if hasattr(self.w.asset_page, "asset_pipeline_summary"):
-            self.w.asset_page.asset_pipeline_summary.setText("Select a shot or asset to inspect pipeline status.")
-            self.w.asset_page.asset_pipeline_list.clear()
-            self.w.asset_page.asset_pipeline_list.addItem("No entity selected")
-            self.w.asset_page.asset_pipeline_process_list.clear()
-            self.w.asset_page.asset_pipeline_process_list.addItem("No entity selected")
-            self.w.asset_page.asset_pipeline_process_summary.setText(
-                "Select a process to inspect what it would prepare."
-            )
-            self.w.asset_page.asset_pipeline_run_summary.setText("No process execution yet.")
-            self.w.asset_page.asset_pipeline_run_btn.setEnabled(False)
-            self.w.asset_page.asset_pipeline_artifact_list.clear()
-            self.w.asset_page.asset_pipeline_artifact_list.addItem("No produced artifacts yet")
+        self._set_asset_pipeline_panel_state(
+            summary_text="Select a shot or asset to inspect pipeline status.",
+            pipeline_item_text="No entity selected",
+            process_item_text="No entity selected",
+        )
         self._asset_pipeline_inspection = None
-        self.w.asset_inventory_list.addItem("No entity selected")
-        self.w.asset_history_list.addItem("No entity selected")
+        self._set_asset_detail_placeholder_state(
+            inventory_text="No entity selected",
+            history_text="No entity selected",
+        )
         self._sync_asset_contexts(active_schema)
         self._rebuild_asset_entity_lists(target="both")
         self._update_layout_status_summary(self.w._asset_resolved_layout)
@@ -243,6 +225,117 @@ class AssetManagerController:
         window.asset_library_list.clear()
         window.asset_inventory_list.clear()
         window.asset_history_list.clear()
+
+    def _set_asset_selection_summary(self, text: str) -> None:
+        if hasattr(self.w.asset_page, "asset_selection_summary"):
+            self.w.asset_page.asset_selection_summary.setText(text)
+
+    def _set_asset_detail_placeholder_state(self, *, inventory_text: str, history_text: str) -> None:
+        self.w.asset_inventory_list.clear()
+        self.w.asset_inventory_list.addItem(inventory_text)
+        self.w.asset_history_list.clear()
+        self.w.asset_history_list.addItem(history_text)
+
+    def _set_asset_pipeline_panel_state(
+        self,
+        *,
+        summary_text: str,
+        pipeline_item_text: str,
+        process_item_text: str,
+        process_summary_text: str | None = None,
+        run_summary_text: str | None = None,
+        artifact_item_text: str | None = None,
+        run_enabled: bool = False,
+    ) -> None:
+        if not hasattr(self.w.asset_page, "asset_pipeline_summary"):
+            return
+        self.w.asset_page.asset_pipeline_summary.setText(summary_text)
+        self.w.asset_page.asset_pipeline_list.clear()
+        self.w.asset_page.asset_pipeline_list.addItem(pipeline_item_text)
+        self.w.asset_page.asset_pipeline_process_list.clear()
+        self.w.asset_page.asset_pipeline_process_list.addItem(process_item_text)
+        self.w.asset_page.asset_pipeline_process_summary.setText(
+            process_summary_text or self._DEFAULT_PROCESS_SUMMARY
+        )
+        self.w.asset_page.asset_pipeline_run_summary.setText(
+            run_summary_text or self._DEFAULT_RUN_SUMMARY
+        )
+        self.w.asset_page.asset_pipeline_run_btn.setEnabled(run_enabled)
+        self.w.asset_page.asset_pipeline_artifact_list.clear()
+        self.w.asset_page.asset_pipeline_artifact_list.addItem(
+            artifact_item_text or self._DEFAULT_ARTIFACT_PLACEHOLDER
+        )
+
+    def _set_asset_pipeline_process_summary(
+        self,
+        text: str,
+        *,
+        run_enabled: bool = False,
+    ) -> None:
+        if not hasattr(self.w.asset_page, "asset_pipeline_process_summary"):
+            return
+        self.w.asset_page.asset_pipeline_process_summary.setText(text)
+        run_btn = getattr(self.w.asset_page, "asset_pipeline_run_btn", None)
+        if run_btn is not None:
+            run_btn.setEnabled(run_enabled)
+
+    def _set_asset_pipeline_run_summary(self, text: str) -> None:
+        if hasattr(self.w.asset_page, "asset_pipeline_run_summary"):
+            self.w.asset_page.asset_pipeline_run_summary.setText(text)
+
+    @staticmethod
+    def _format_pipeline_kind_label(kind: object) -> str:
+        text = str(kind or "").strip().replace("_", " ")
+        return text.title() if text else "Unknown"
+
+    def _build_downstream_list_item(self, record: object) -> QtWidgets.QListWidgetItem:
+        entity = getattr(record, "entity", None)
+        freshness = str(getattr(record, "freshness", "") or "").strip().replace("_", " ").title()
+        kind_label = self._format_pipeline_kind_label(getattr(entity, "kind", ""))
+        label = str(getattr(entity, "label", "") or getattr(entity, "id", "") or "").strip() or "Unnamed artifact"
+        text = f"{freshness} | {kind_label} | {label}"
+        item = QtWidgets.QListWidgetItem(text)
+        path_text = str(getattr(entity, "path", "") or "").strip()
+        via = tuple(getattr(record, "via", ()) or ())
+        tooltip_lines = [f"Freshness: {freshness}", f"Kind: {kind_label}"]
+        if path_text:
+            tooltip_lines.append(f"Path: {path_text}")
+        if via:
+            edge = via[-1]
+            tooltip_lines.append(f"Relation: {str(getattr(edge, 'kind', '')).replace('_', ' ')}")
+        item.setToolTip("\n".join(tooltip_lines))
+        return item
+
+    def _build_artifact_list_item(self, artifact: object) -> QtWidgets.QListWidgetItem:
+        kind_label = self._format_pipeline_kind_label(getattr(artifact, "kind", ""))
+        label = str(getattr(artifact, "label", "") or Path(str(getattr(artifact, "path", "") or "")).name or "").strip()
+        process_id = str(getattr(artifact, "process_id", "") or "").strip()
+        execution_mode = str(getattr(artifact, "execution_mode", "") or "").strip().replace("_", " ")
+        source_refs = tuple(getattr(artifact, "source_artifacts", ()) or ())
+        source_label = ""
+        if source_refs:
+            first = source_refs[0]
+            source_label = str(getattr(first, "label", "") or Path(str(getattr(first, "path", "") or "")).name or "").strip()
+        text_parts = [kind_label, label]
+        if source_label:
+            text_parts.append(f"from {source_label}")
+        item = QtWidgets.QListWidgetItem(" | ".join(part for part in text_parts if part))
+        tooltip_lines = []
+        path_text = str(getattr(artifact, "path", "") or "").strip()
+        if path_text:
+            tooltip_lines.append(f"Path: {path_text}")
+        if process_id:
+            tooltip_lines.append(f"Process: {process_id}")
+        if execution_mode:
+            tooltip_lines.append(f"Execution: {execution_mode}")
+        if source_refs:
+            tooltip_lines.append("Sources:")
+            for source_ref in source_refs[:4]:
+                ref_path = str(getattr(source_ref, "path", "") or "").strip()
+                ref_label = str(getattr(source_ref, "label", "") or Path(ref_path).name or "").strip()
+                tooltip_lines.append(f"- {ref_label}: {ref_path}")
+        item.setToolTip("\n".join(line for line in tooltip_lines if line))
+        return item
 
     def open_asset_details(self, item: QtWidgets.QListWidgetItem) -> None:
         project_path = Path(str(item.data(QtCore.Qt.ItemDataRole.UserRole)))
@@ -749,10 +842,7 @@ class AssetManagerController:
         project_root = getattr(self.w, "_asset_current_project_root", entity_dir.parent.parent)
         tab_label = "Shots" if self.w._asset_current_entity_type == "shot" else "Assets"
         self.w.asset_path_label.setText(f"{Path(project_root).name} / {tab_label} / {entity_dir.name}")
-        if hasattr(self.w.asset_page, "asset_selection_summary"):
-            self.w.asset_page.asset_selection_summary.setText(
-                f"{entity_dir.name} [{self.w._asset_current_entity_type.upper()}]"
-            )
+        self._set_asset_selection_summary(f"{entity_dir.name} [{self.w._asset_current_entity_type.upper()}]")
         record = self._entity_record_for_path(entity_dir)
         layout = getattr(self.w, "_asset_resolved_layout", None)
         self.w._preview_images = (
@@ -764,18 +854,17 @@ class AssetManagerController:
         self.w.asset_preview.setPixmap(build_thumbnail_pixmap(entity_dir, preview_size))
         self._update_preview_label()
 
-        self.w.asset_inventory_list.clear()
-        self.w.asset_inventory_list.addItem("Loading inventory...")
-        if hasattr(self.w.asset_page, "asset_pipeline_summary"):
-            self.w.asset_page.asset_pipeline_summary.setText("Loading pipeline inspection...")
-            self.w.asset_page.asset_pipeline_list.clear()
-            self.w.asset_page.asset_pipeline_list.addItem("Loading pipeline inspection...")
-            self.w.asset_page.asset_pipeline_process_list.clear()
-            self.w.asset_page.asset_pipeline_process_list.addItem("Loading processes...")
-            self.w.asset_page.asset_pipeline_process_summary.setText("Preparing process request preview...")
-
-        self.w.asset_history_list.clear()
-        self.w.asset_history_list.addItem("Loading history...")
+        self._set_asset_detail_placeholder_state(
+            inventory_text="Loading inventory...",
+            history_text="Loading history...",
+        )
+        self._set_asset_pipeline_panel_state(
+            summary_text="Loading pipeline inspection...",
+            pipeline_item_text="Loading pipeline inspection...",
+            process_item_text="Loading processes...",
+            process_summary_text="Preparing process request preview...",
+            artifact_item_text=self._DEFAULT_ARTIFACT_PLACEHOLDER,
+        )
 
         QtCore.QTimer.singleShot(
             0,
@@ -867,7 +956,6 @@ class AssetManagerController:
         summary_label = self.w.asset_page.asset_pipeline_summary
         list_widget = self.w.asset_page.asset_pipeline_list
         process_list = self.w.asset_page.asset_pipeline_process_list
-        run_btn = getattr(self.w.asset_page, "asset_pipeline_run_btn", None)
         list_widget.clear()
         process_list.clear()
         self._reset_asset_pipeline_run_feedback()
@@ -875,11 +963,7 @@ class AssetManagerController:
             summary_label.setText("No pipeline inspection available.")
             list_widget.addItem("No pipeline data")
             process_list.addItem("No process definitions")
-            self.w.asset_page.asset_pipeline_process_summary.setText(
-                "Select a process to inspect what it would prepare."
-            )
-            if run_btn is not None:
-                run_btn.setEnabled(False)
+            self._set_asset_pipeline_process_summary(self._DEFAULT_PROCESS_SUMMARY, run_enabled=False)
             self._asset_pipeline_inspection = None
             return
         self._asset_pipeline_inspection = inspection
@@ -892,19 +976,13 @@ class AssetManagerController:
             list_widget.addItem("No downstream outputs tracked yet")
         else:
             for record in inspection.downstream[:6]:
-                item = QtWidgets.QListWidgetItem(
-                    f"{record.freshness.replace('_', ' ').title()} - {record.entity.label or record.entity.id}"
-                )
-                if record.entity.path:
-                    item.setToolTip(record.entity.path)
-                list_widget.addItem(item)
+                list_widget.addItem(self._build_downstream_list_item(record))
         if not inspection.available_processes:
             process_list.addItem("No process definitions")
-            self.w.asset_page.asset_pipeline_process_summary.setText(
-                "No process definitions are registered for this entity yet."
+            self._set_asset_pipeline_process_summary(
+                "No process definitions are registered for this entity yet.",
+                run_enabled=False,
             )
-            if run_btn is not None:
-                run_btn.setEnabled(False)
             return
         for process in inspection.available_processes:
             item = QtWidgets.QListWidgetItem(f"{process.label} [{process.family}]")
@@ -919,14 +997,9 @@ class AssetManagerController:
         if not hasattr(self.w.asset_page, "asset_pipeline_process_summary"):
             return
         process_list = self.w.asset_page.asset_pipeline_process_list
-        run_btn = getattr(self.w.asset_page, "asset_pipeline_run_btn", None)
         item = process_list.currentItem()
         if item is None:
-            self.w.asset_page.asset_pipeline_process_summary.setText(
-                "Select a process to inspect what it would prepare."
-            )
-            if run_btn is not None:
-                run_btn.setEnabled(False)
+            self._set_asset_pipeline_process_summary(self._DEFAULT_PROCESS_SUMMARY, run_enabled=False)
             return
         process_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
         process_controller = getattr(self.w, "process_controller", None)
@@ -941,11 +1014,10 @@ class AssetManagerController:
             else None
         )
         if prepared is None:
-            self.w.asset_page.asset_pipeline_process_summary.setText(
-                "This process cannot be prepared for the current selection."
+            self._set_asset_pipeline_process_summary(
+                "This process cannot be prepared for the current selection.",
+                run_enabled=False,
             )
-            if run_btn is not None:
-                run_btn.setEnabled(False)
             return
         capability_text = ", ".join(prepared.required_capabilities) if prepared.required_capabilities else "No special capabilities"
         outputs_text = ", ".join(prepared.outputs) if prepared.outputs else "No declared outputs"
@@ -974,17 +1046,16 @@ class AssetManagerController:
                     f"Resolved output: {preview_parameters['output']}\n"
                     f"Resolved context: {preview_parameters['context']}"
                 )
-        self.w.asset_page.asset_pipeline_process_summary.setText(
+        self._set_asset_pipeline_process_summary(
             f"{prepared.process_label}\n"
             f"Target: {prepared.entity_label} [{prepared.entity_kind}]\n"
             f"Requires: {capability_text}\n"
             f"Outputs: {outputs_text}\n"
             f"Mode: {remote_text} / {review_text}\n"
             f"{runtime_text}"
-            f"{preview_text}"
+            f"{preview_text}",
+            run_enabled=runtime_request is not None and prepared.process_id == "publish.asset.usd",
         )
-        if run_btn is not None:
-            run_btn.setEnabled(runtime_request is not None and prepared.process_id == "publish.asset.usd")
 
     def run_selected_asset_pipeline_process(self) -> None:
         process_list = getattr(self.w.asset_page, "asset_pipeline_process_list", None)
@@ -1006,9 +1077,7 @@ class AssetManagerController:
         if parameters is None:
             return
         self._log_pipeline_run_start(process_id, parameters)
-        self.w.asset_page.asset_pipeline_run_summary.setText(
-            f"Running {process_id}..."
-        )
+        self._set_asset_pipeline_run_summary(f"Running {process_id}...")
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
         try:
             runtime_result = process_controller.execute_houdini_request(
@@ -1019,9 +1088,7 @@ class AssetManagerController:
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         if runtime_result is None:
-            self.w.asset_page.asset_pipeline_run_summary.setText(
-                "Process execution could not be prepared."
-            )
+            self._set_asset_pipeline_run_summary("Process execution could not be prepared.")
             self.set_asset_status("Pipeline execution could not be prepared.")
             return
         self._update_asset_pipeline_run_feedback(runtime_result)
@@ -1039,7 +1106,7 @@ class AssetManagerController:
         if process_id == "publish.asset.usd":
             return self._resolve_publish_asset_usd_parameters(ensure_dirs=True)
         self.set_asset_status(f"{process_id} is not executable from the Asset Manager yet.")
-        self.w.asset_page.asset_pipeline_run_summary.setText(
+        self._set_asset_pipeline_run_summary(
             f"{process_id} is visible in the inspector, but its execution planner is not wired yet."
         )
         return None
@@ -1052,7 +1119,7 @@ class AssetManagerController:
         entity_dir = Path(entity)
         source_path = self._resolve_publish_source_path(entity_dir)
         if source_path is None:
-            self.w.asset_page.asset_pipeline_run_summary.setText(
+            self._set_asset_pipeline_run_summary(
                 "No supported geometry source was found for this selection."
             )
             self.set_asset_status("No geometry source found for publish.asset.usd.")
@@ -1135,11 +1202,10 @@ class AssetManagerController:
         return "modeling"
 
     def _reset_asset_pipeline_run_feedback(self) -> None:
-        if hasattr(self.w.asset_page, "asset_pipeline_run_summary"):
-            self.w.asset_page.asset_pipeline_run_summary.setText("No process execution yet.")
+        self._set_asset_pipeline_run_summary(self._DEFAULT_RUN_SUMMARY)
         if hasattr(self.w.asset_page, "asset_pipeline_artifact_list"):
             self.w.asset_page.asset_pipeline_artifact_list.clear()
-            self.w.asset_page.asset_pipeline_artifact_list.addItem("No produced artifacts yet")
+            self.w.asset_page.asset_pipeline_artifact_list.addItem(self._DEFAULT_ARTIFACT_PLACEHOLDER)
 
     def _update_asset_pipeline_run_feedback(self, runtime_result: object) -> None:
         execution = getattr(runtime_result, "execution", None)
@@ -1161,7 +1227,7 @@ class AssetManagerController:
         )
         if output_lines:
             summary += "\nOutputs: " + ", ".join(output_lines)
-        self.w.asset_page.asset_pipeline_run_summary.setText(summary)
+        self._set_asset_pipeline_run_summary(summary)
 
         artifact_list = getattr(self.w.asset_page, "asset_pipeline_artifact_list", None)
         if artifact_list is None:
@@ -1173,13 +1239,7 @@ class AssetManagerController:
             artifact_list.addItem("No produced artifacts were registered")
             return
         for artifact in artifacts[:8]:
-            source_labels = [src.label or Path(src.path).name for src in artifact.source_artifacts[:2]]
-            text = f"{artifact.kind.upper()} - {artifact.label or Path(artifact.path).name}"
-            if source_labels:
-                text += f" <- {', '.join(source_labels)}"
-            item = QtWidgets.QListWidgetItem(text)
-            item.setToolTip(artifact.path)
-            artifact_list.addItem(item)
+            artifact_list.addItem(self._build_artifact_list_item(artifact))
 
     @staticmethod
     def _log_pipeline_run_start(process_id: str, parameters: dict[str, object]) -> None:

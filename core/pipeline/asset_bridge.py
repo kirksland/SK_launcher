@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from core.asset_layout import EntityRecord, ResolvedAssetLayout
 from core.pipeline.entities.models import EntityRef, FreshnessState
 from core.pipeline.graph import DependencyEdge, DependencyGraph, impacted_downstream_entities, summarize_freshness
 from core.pipeline.processes.registry import available_processes_for_entity_kind
+
+if TYPE_CHECKING:
+    from core.pipeline.provenance.models import ProducedArtifactRecord
 
 
 def _clean_token(value: object) -> str:
@@ -63,6 +67,7 @@ def build_entity_dependency_graph(
     record: EntityRecord | None,
     *,
     context: str | None = None,
+    produced_artifacts: tuple[ProducedArtifactRecord, ...] = (),
 ) -> DependencyGraph:
     if layout is None or record is None:
         return DependencyGraph()
@@ -116,7 +121,55 @@ def build_entity_dependency_graph(
                     freshness=freshness,
                 )
             )
+    edges.extend(_provenance_edges_for_entity(source, layout.project_root.name, produced_artifacts))
     return DependencyGraph(tuple(edges))
+
+
+def _provenance_edges_for_entity(
+    source: EntityRef,
+    project_name: str,
+    produced_artifacts: tuple[ProducedArtifactRecord, ...],
+) -> tuple[DependencyEdge, ...]:
+    if not produced_artifacts:
+        return ()
+    normalized_source_path = str(source.path or "").strip().replace("\\", "/").lower()
+    edges: list[DependencyEdge] = []
+    seen_paths: set[str] = set()
+    for artifact in produced_artifacts:
+        matched = False
+        for source_artifact in artifact.source_artifacts:
+            artifact_entity_id = _clean_token(source_artifact.entity_id)
+            artifact_source_path = str(source_artifact.path or "").strip().replace("\\", "/").lower()
+            if artifact_entity_id and artifact_entity_id == source.id:
+                matched = True
+                break
+            if normalized_source_path and artifact_source_path and artifact_source_path.startswith(normalized_source_path):
+                matched = True
+                break
+        if not matched:
+            continue
+        artifact_path = str(artifact.path or "").strip()
+        dedupe_key = artifact_path.lower()
+        if not artifact_path or dedupe_key in seen_paths:
+            continue
+        seen_paths.add(dedupe_key)
+        downstream_kind = "publish" if artifact.kind == "usd" else "review_media"
+        downstream = EntityRef(
+            id=f"{source.id}:artifact:{_clean_token(artifact.id)}",
+            kind=downstream_kind,
+            project_id=project_name,
+            label=artifact.label or Path(artifact.path).name,
+            path=artifact.path,
+        )
+        edges.append(
+            DependencyEdge(
+                upstream=source,
+                downstream=downstream,
+                kind="publishes_from",
+                freshness=FreshnessState.UP_TO_DATE,
+            )
+        )
+    return tuple(edges)
 
 
 def inspect_entity_pipeline(
@@ -124,11 +177,17 @@ def inspect_entity_pipeline(
     record: EntityRecord | None,
     *,
     context: str | None = None,
+    produced_artifacts: tuple[ProducedArtifactRecord, ...] = (),
 ) -> PipelineEntityInspection | None:
     if layout is None or record is None:
         return None
     source = entity_ref_for_record(layout.project_root, record)
-    graph = build_entity_dependency_graph(layout, record, context=context)
+    graph = build_entity_dependency_graph(
+        layout,
+        record,
+        context=context,
+        produced_artifacts=produced_artifacts,
+    )
     downstream = impacted_downstream_entities(graph, source.id)
     summary = summarize_freshness(downstream)
     freshness = FreshnessState.UP_TO_DATE

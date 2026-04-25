@@ -32,7 +32,12 @@ class ProcessController:
         *,
         context: str | None = None,
     ) -> PipelineEntityInspection | None:
-        return inspect_entity_pipeline(layout, record, context=context)
+        return inspect_entity_pipeline(
+            layout,
+            record,
+            context=context,
+            produced_artifacts=self._runtime.artifact_records(),
+        )
 
     def prepare_request(
         self,
@@ -105,6 +110,9 @@ class ProcessController:
 
     def latest_artifacts(self) -> tuple[ProducedArtifactRecord, ...]:
         return self._runtime.latest_artifacts()
+
+    def produced_artifacts(self) -> tuple[ProducedArtifactRecord, ...]:
+        return self._runtime.artifact_records()
 
     def _houdini_runner_executable(self) -> str:
         configured = str(getattr(self.w, "_houdini_exe", "") or "").strip()

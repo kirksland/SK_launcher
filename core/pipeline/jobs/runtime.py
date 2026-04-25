@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from core.pipeline.execution.result import ExecutionResult, ExecutionStatus
-from core.pipeline.provenance import ProducedArtifactRecord, build_artifact_records
+from core.pipeline.provenance.models import ProducedArtifactRecord
+from core.pipeline.provenance.registry import build_artifact_records
 
 from .models import JobRecord, JobState
 from .requests import RuntimeProcessRequest
@@ -150,3 +151,9 @@ class LocalJobRuntime:
             return ()
         latest = self._jobs[-1]
         return self._artifacts.get(latest.id, ())
+
+    def artifact_records(self) -> tuple[ProducedArtifactRecord, ...]:
+        records: list[ProducedArtifactRecord] = []
+        for artifacts in self._artifacts.values():
+            records.extend(artifacts)
+        return tuple(records)

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-
-from core.pipeline.execution.result import ExecutionResult
-from core.pipeline.jobs.models import JobRecord
-from core.pipeline.jobs.requests import RuntimeProcessRequest
+from typing import TYPE_CHECKING
 
 from .models import ProducedArtifactRecord, SourceArtifactRef
+
+if TYPE_CHECKING:
+    from core.pipeline.execution.result import ExecutionResult
+    from core.pipeline.jobs.models import JobRecord
+    from core.pipeline.jobs.requests import RuntimeProcessRequest
 
 
 def _clean_token(value: object) -> str:
