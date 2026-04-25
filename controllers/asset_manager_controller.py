@@ -8,30 +8,17 @@ from typing import List, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.asset_detection import DetectedProjectLayout, detect_project_layout
-from core.asset_selection import (
-    build_active_asset_selection,
-    choose_best_context_for_selection,
-    resolve_entity_record_for_path,
-    resolve_entity_type_for_path,
-)
-from core.asset_details import (
-    build_asset_meta_text,
-    normalize_list_context,
-    pick_best_context,
-    read_history_note,
-)
-from core.asset_inventory import build_entity_inventory
+from core.asset_selection import resolve_entity_record_for_path, resolve_entity_type_for_path
 from core.asset_layout import EntityRecord, ResolvedAssetLayout, resolve_asset_layout
 from core.asset_schema import entity_root_candidates
 from core.fs import find_projects
-from core.metadata import load_metadata
 from core.pipeline.processes import plan_asset_manager_process_execution
 from core.settings import normalize_asset_schema, save_settings
 from core.watchers import update_watcher_paths
 from controllers.asset_browser_panel_controller import AssetBrowserPanelController
+from controllers.asset_details_panel_controller import AssetDetailsPanelController
 from ui.utils.thumbnails import build_thumbnail_pixmap, load_media_pixmap
 from ui.dialogs.asset_layout_mapper_dialog import AssetLayoutMapperDialog
-from ui.widgets.asset_inventory_renderer import AssetInventoryRenderer
 from ui.widgets.asset_version_row import AssetVersionRow
 
 
@@ -50,6 +37,7 @@ class AssetManagerController:
         self._asset_pipeline_inspection = None
         self._pending_project_context: Optional[Path] = None
         self._browser_panel = AssetBrowserPanelController(self)
+        self._details_panel = AssetDetailsPanelController(self)
         self._context_refresh_timer = QtCore.QTimer(self.w)
         self._context_refresh_timer.setSingleShot(True)
         self._context_refresh_timer.setInterval(80)
@@ -546,120 +534,10 @@ class AssetManagerController:
         self._browser_panel.on_asset_tab_changed(index)
 
     def _load_entity_details(self, entity_dir: Path, entity_type: Optional[str] = None) -> None:
-        self._asset_detail_request_id += 1
-        request_id = self._asset_detail_request_id
-        layout = getattr(self.w, "_asset_resolved_layout", None)
-        selection = build_active_asset_selection(
-            entity_dir,
-            layout=layout,
-            schema=getattr(self.w, "_asset_active_schema", self.w._asset_schema),
-            active_tab_index=self.w.asset_work_tabs.currentIndex(),
-            explicit_entity_type=entity_type,
-        )
-        self.w._asset_current_entity = entity_dir
-        self.w._asset_current_entity_type = selection.entity_type
-        project_root = getattr(self.w, "_asset_current_project_root", entity_dir.parent.parent)
-        self.w.asset_path_label.setText(
-            f"{Path(project_root).name} / {selection.tab_label} / {entity_dir.name}"
-        )
-        self._set_asset_selection_summary(selection.selection_summary)
-        record = selection.record
-        self.w._preview_images = (
-            layout.representation_paths(record, "preview_image") if layout and record is not None else []
-        )
-        self.w._preview_index = 0
-        self.w._asset_inventory_preview_path = None
-        preview_size = self._asset_preview_target_size()
-        self.w.asset_preview.setPixmap(build_thumbnail_pixmap(entity_dir, preview_size))
-        self._update_preview_label()
-
-        self._set_asset_detail_placeholder_state(
-            inventory_text="Loading inventory...",
-            history_text="Loading history...",
-        )
-        self._set_asset_pipeline_panel_state(
-            summary_text="Loading pipeline inspection...",
-            pipeline_item_text="Loading pipeline inspection...",
-            process_item_text="Loading processes...",
-            process_summary_text="Preparing process request preview...",
-            artifact_item_text=self._DEFAULT_ARTIFACT_PLACEHOLDER,
-        )
-
-        QtCore.QTimer.singleShot(
-            0,
-            lambda rid=request_id, path=Path(entity_dir), kind=self.w._asset_current_entity_type: self._hydrate_entity_details(rid, path, kind),
-        )
+        self._details_panel.load_entity_details(entity_dir, entity_type)
 
     def _hydrate_entity_details(self, request_id: int, entity_dir: Path, entity_type: Optional[str]) -> None:
-        if request_id != self._asset_detail_request_id:
-            return
-        if getattr(self.w, "_asset_current_entity", None) != entity_dir:
-            return
-        layout = getattr(self.w, "_asset_resolved_layout", None)
-        selection = build_active_asset_selection(
-            entity_dir,
-            layout=layout,
-            schema=getattr(self.w, "_asset_active_schema", self.w._asset_schema),
-            active_tab_index=self.w.asset_work_tabs.currentIndex(),
-            explicit_entity_type=entity_type,
-        )
-        self.w._asset_current_entity_type = selection.entity_type
-        record = selection.record
-        if self.w._preview_images:
-            preview = self.w._preview_images[self.w._preview_index]
-            preview_size = self._asset_preview_target_size()
-            pixmap = load_media_pixmap(
-                preview,
-                preview_size,
-                cache_root=self._asset_preview_cache_root(),
-                allow_sync_exr=True,
-            )
-            if not pixmap.isNull():
-                self.w.asset_preview.setPixmap(
-                    pixmap
-                )
-                self.w.asset_video_controller.show_image(pixmap)
-            else:
-                self.w.asset_preview.setPixmap(build_thumbnail_pixmap(entity_dir, preview_size))
-            self._update_preview_label()
-        else:
-            self.w.asset_preview.setPixmap(build_thumbnail_pixmap(entity_dir, QtCore.QSize(420, 200)))
-            self._update_preview_label()
-
-        meta = load_metadata(entity_dir)
-        owner = meta.get("owner", "Unknown")
-        status = meta.get("status", "WIP")
-        context = self.w.asset_context_combo.currentText()
-        if selection.entity_type == "shot":
-            context = self._pick_best_context(entity_dir, context)
-        list_context = normalize_list_context(context)
-        self.w.asset_meta.setText(build_asset_meta_text(owner, status, context, entity_dir.name))
-        self._update_asset_pipeline_inspection(layout, record, context)
-
-        self.w.asset_inventory_list.clear()
-        inventory = build_entity_inventory(
-            entity_dir=entity_dir,
-            entity_type=self.w._asset_current_entity_type,
-            record=record,
-            layout=layout,
-            context=list_context,
-            context_label=context,
-        )
-        inventory_renderer = AssetInventoryRenderer(
-            self.w.asset_inventory_list,
-            self.w.asset_page.asset_inventory_hint if hasattr(self.w.asset_page, "asset_inventory_hint") else None,
-            cache_root=self._asset_preview_cache_root(),
-        )
-        first_video = inventory_renderer.render(
-            inventory,
-            on_selected_path=self._sync_asset_inventory_preview,
-        )
-
-        if not self.w._preview_images and first_video is not None:
-            self.w.asset_video_controller.preview_first_frame(first_video)
-
-        self.w.asset_history_list.clear()
-        self.w.asset_history_list.addItem(read_history_note(entity_dir))
+        self._details_panel.hydrate_entity_details(request_id, entity_dir, entity_type)
 
     def _update_asset_pipeline_inspection(
         self,
@@ -792,172 +670,46 @@ class AssetManagerController:
                 print(f"[PIPELINE]   output: {path}")
 
     def _update_preview_label(self) -> None:
-        total = len(getattr(self.w, "_preview_images", []))
-        index = getattr(self.w, "_preview_index", 0) + 1 if total else 0
-        self.w.asset_preview_label.setText(f"{index}/{total}")
-        self.w.asset_prev_btn.setEnabled(total > 1)
-        self.w.asset_next_btn.setEnabled(total > 1)
+        self._details_panel.update_preview_label()
 
     def _show_preview_at(self, index: int) -> None:
-        if not getattr(self.w, "_preview_images", []):
-            return
-        total = len(self.w._preview_images)
-        self.w._preview_index = index % total
-        preview = self.w._preview_images[self.w._preview_index]
-        self.w._asset_inventory_preview_path = None
-        preview_size = self._asset_preview_target_size()
-        entity = getattr(self.w, "_asset_current_entity", None)
-        if entity:
-            self.w.asset_preview.setPixmap(build_thumbnail_pixmap(Path(entity), preview_size))
-        self._asset_preview_request_id += 1
-        request_id = self._asset_preview_request_id
-        QtCore.QTimer.singleShot(
-            0,
-            lambda rid=request_id, path=Path(preview): self._render_asset_preview_request(rid, path),
-        )
-        self._update_preview_label()
+        self._details_panel.show_preview_at(index)
 
     def _render_asset_preview_request(self, request_id: int, path: Path) -> None:
-        if request_id != self._asset_preview_request_id:
-            return
-        if not path.exists():
-            return
-        preview_size = self._asset_preview_target_size()
-        pixmap = load_media_pixmap(
-            path,
-            preview_size,
-            cache_root=self._asset_preview_cache_root(),
-            allow_sync_exr=True,
-        )
-        if not pixmap.isNull():
-            self.w.asset_preview.setPixmap(
-                pixmap
-            )
-            self.w.asset_video_controller.show_image(pixmap)
+        self._details_panel.render_asset_preview_request(request_id, path)
 
     def prev_preview_image(self) -> None:
-        self._show_preview_at(getattr(self.w, "_preview_index", 0) - 1)
+        self._details_panel.prev_preview_image()
 
     def next_preview_image(self) -> None:
-        self._show_preview_at(getattr(self.w, "_preview_index", 0) + 1)
+        self._details_panel.next_preview_image()
 
     def toggle_asset_video_fullscreen(self) -> None:
-        if self.w._asset_video_fullscreen_dialog and self.w._asset_video_fullscreen_dialog.isVisible():
-            self.w._asset_video_fullscreen_dialog.close()
-            return
-
-        dialog = QtWidgets.QDialog(self.w)
-        dialog.setWindowTitle("Video Preview")
-        dialog.setWindowFlag(QtCore.Qt.WindowType.Window, True)
-        dialog.setModal(False)
-        layout = QtWidgets.QVBoxLayout(dialog)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        self.w._asset_video_original_layout = self.w.asset_video_layout
-        if self.w._asset_video_original_layout is not None:
-            self.w._asset_video_original_layout.removeWidget(self.w.asset_video)
-        layout.addWidget(self.w.asset_video)
-        dialog.finished.connect(self._restore_asset_video_from_fullscreen)
-        self.w._asset_video_fullscreen_dialog = dialog
-        dialog.showFullScreen()
+        self._details_panel.toggle_asset_video_fullscreen()
 
     def _restore_asset_video_from_fullscreen(self) -> None:
-        if self.w._asset_video_original_layout is not None:
-            self.w._asset_video_original_layout.insertWidget(0, self.w.asset_video, 1)
-        if self.w._asset_video_fullscreen_dialog is not None:
-            self.w._asset_video_fullscreen_dialog.deleteLater()
-        self.w._asset_video_fullscreen_dialog = None
+        self._details_panel.restore_asset_video_from_fullscreen()
 
     def update_asset_context(self, context: str) -> None:
-        current = self.w.asset_meta.text().splitlines()
-        rebuilt = []
-        replaced = False
-        for line in current:
-            if line.startswith("Context:"):
-                rebuilt.append(f"Context: {context}")
-                replaced = True
-            else:
-                rebuilt.append(line)
-        if not replaced:
-            rebuilt.insert(2, f"Context: {context}")
-        self.w.asset_meta.setText("\n".join(rebuilt))
-        entity = getattr(self.w, "_asset_current_entity", None)
-        if entity:
-            self._load_entity_details(Path(entity))
+        self._details_panel.update_asset_context(context)
 
     def _pick_best_context(self, entity_dir: Path, current: str) -> str:
-        layout = getattr(self.w, "_asset_resolved_layout", None)
-        selection = build_active_asset_selection(
-            entity_dir,
-            layout=layout,
-            schema=getattr(self.w, "_asset_active_schema", self.w._asset_schema),
-            active_tab_index=self.w.asset_work_tabs.currentIndex(),
-            explicit_entity_type=getattr(self.w, "_asset_current_entity_type", None),
-        )
-        contexts = [self.w.asset_context_combo.itemText(i) for i in range(self.w.asset_context_combo.count())]
-        chosen = choose_best_context_for_selection(
-            selection,
-            layout=layout,
-            current=current,
-            contexts=contexts,
-        )
-        if chosen != current:
-            self.w.asset_context_combo.blockSignals(True)
-            self.w.asset_context_combo.setCurrentText(chosen)
-            self.w.asset_context_combo.blockSignals(False)
-        return chosen
+        return self._details_panel.pick_best_context(entity_dir, current)
 
     def on_asset_inventory_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
-        kind = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
-        path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        if not path_text:
-            return
-        path = Path(str(path_text))
-        if kind == "video" and path.exists():
-            self.w.asset_video_controller.play_path(path)
-            return
-        if kind == "source" and path.exists():
-            self.set_asset_status(f"Selected source file: {self.w._to_houdini_path(str(path))}")
-            return
-        if path.exists():
-            self._sync_asset_inventory_preview(path, kind)
+        self._details_panel.on_asset_inventory_clicked(item)
 
     def _sync_asset_inventory_preview(self, path: Path, kind: Optional[str]) -> None:
-        if not path.exists():
-            return
-        if kind == "video":
-            self.w.asset_video_controller.preview_first_frame(path)
-            return
-        if kind == "image":
-            images = getattr(self.w, "_preview_images", [])
-            if images and path in images:
-                self._show_preview_at(images.index(path))
-                return
-            self.w._asset_inventory_preview_path = path
-            preview_size = self._asset_preview_target_size()
-            entity = getattr(self.w, "_asset_current_entity", None)
-            if entity:
-                self.w.asset_preview.setPixmap(build_thumbnail_pixmap(Path(entity), preview_size))
-            self._asset_preview_request_id += 1
-            request_id = self._asset_preview_request_id
-            QtCore.QTimer.singleShot(
-                0,
-                lambda rid=request_id, preview_path=Path(path): self._render_asset_preview_request(rid, preview_path),
-            )
+        self._details_panel.sync_asset_inventory_preview(path, kind)
 
     def _asset_preview_cache_root(self) -> Optional[Path]:
-        project_root = getattr(self.w, "_asset_current_project_root", None)
-        return Path(project_root) if project_root else None
+        return self._details_panel.asset_preview_cache_root()
 
     def _asset_preview_target_size(self) -> QtCore.QSize:
-        size = self.w.asset_preview.size()
-        if size.width() <= 0 or size.height() <= 0:
-            return QtCore.QSize(420, 200)
-        return size
+        return self._details_panel.asset_preview_target_size()
 
     def asset_placeholder_action(self) -> None:
-        self.set_asset_status("Git actions are intentionally disabled for now. We should redesign this flow before wiring commit, push and fetch.")
+        self._details_panel.asset_placeholder_action()
 
     def setup_asset_auto_refresh(self) -> None:
         self._asset_refresh_timer = QtCore.QTimer(self.w)
