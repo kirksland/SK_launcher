@@ -17,6 +17,8 @@ class BoardCommandDispatcher:
             return self._execute(command_id, "fit_view")
         if command_id == "board.view.toggle_grid":
             return self._toggle_grid(command_id)
+        if command_id == "board.group.toggle":
+            return self._execute(command_id, "toggle_group_selection")
         if command_id == "board.group.create":
             return self._execute(command_id, "add_group")
         if command_id == "board.group.ungroup":

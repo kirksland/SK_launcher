@@ -17,7 +17,7 @@ DEFAULT_APP_COMMANDS: tuple[AppCommand, ...] = (
         label="Auto Layout",
         domain="board",
         scope="board",
-        default_shortcuts=("L",),
+        default_shortcuts=("I",),
     ),
     AppCommand(
         id="board.view.fit",
@@ -29,6 +29,13 @@ DEFAULT_APP_COMMANDS: tuple[AppCommand, ...] = (
     AppCommand(
         id="board.view.toggle_grid",
         label="Toggle Board Grid",
+        domain="board",
+        scope="board",
+        default_shortcuts=(),
+    ),
+    AppCommand(
+        id="board.group.toggle",
+        label="Group Or Ungroup Selection",
         domain="board",
         scope="board",
         default_shortcuts=("G",),

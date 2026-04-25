@@ -170,7 +170,7 @@ shortcut
 
 Le board declarera des commandes comme `board.layout.auto`, mais le meme systeme doit pouvoir gerer les projets, l'asset manager, le client sync, les settings et les futurs outils.
 
-La cible detaillee vit dans `docs/app_commands_shortcuts_plan.md`.
+La cible detaillee vit dans `docs/04_app_commands_shortcuts_plan.md`.
 
 ## Ce Qui Ne Doit Pas Etre Trop Generique
 
@@ -323,7 +323,7 @@ On est deja sur une bonne base:
 - `core.board_preview.PreviewRequest` pour identifier les previews
 - `core.board_preview.PreviewRuntimeState` pour active/pending/cancel des previews
 - migrations explicites de payload board via `core.board_state.migrations`
-- contrat save/load documente dans `docs/board_state_contract.md`
+- contrat save/load documente dans `docs/02_board_state_contract.md`
 - commandes/raccourcis globaux via `core.commands`
 - widgets board extraits
 - chrome, controls actuels et preview stack du panneau edit extraits dans `ui.widgets.board_edit_panel`

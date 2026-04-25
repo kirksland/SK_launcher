@@ -36,8 +36,9 @@ class AppCommandTests(unittest.TestCase):
     def test_default_command_registry_declares_initial_board_commands(self) -> None:
         registry = create_default_command_registry()
 
-        self.assertEqual("L", registry.require("board.layout.auto").default_shortcuts[0])
+        self.assertEqual("I", registry.require("board.layout.auto").default_shortcuts[0])
         self.assertEqual("F", registry.require("board.view.fit").default_shortcuts[0])
+        self.assertEqual("G", registry.require("board.group.toggle").default_shortcuts[0])
         self.assertEqual("Ctrl+G", registry.require("board.group.create").default_shortcuts[0])
         self.assertEqual("Ctrl+Shift+G", registry.require("board.group.ungroup").default_shortcuts[0])
         self.assertEqual("Escape", registry.require("board.focus.exit").default_shortcuts[0])
@@ -154,12 +155,14 @@ class AppCommandTests(unittest.TestCase):
         board = _FakeBoardController()
         dispatcher = BoardCommandDispatcher(board)
 
+        toggle_result = dispatcher.execute_command("board.group.toggle")
         group_result = dispatcher.execute_command("board.group.create")
         ungroup_result = dispatcher.execute_command("board.group.ungroup")
 
+        self.assertTrue(toggle_result.handled)
         self.assertTrue(group_result.handled)
         self.assertTrue(ungroup_result.handled)
-        self.assertEqual(["group", "ungroup"], board.calls)
+        self.assertEqual(["toggle_group", "group", "ungroup"], board.calls)
 
     def test_app_command_controller_reports_missing_dispatcher(self) -> None:
         controller = AppCommandController()
@@ -207,6 +210,9 @@ class _FakeBoardController:
 
     def add_group(self) -> None:
         self.calls.append("group")
+
+    def toggle_group_selection(self) -> None:
+        self.calls.append("toggle_group")
 
     def ungroup_selected(self) -> None:
         self.calls.append("ungroup")

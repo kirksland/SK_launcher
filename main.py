@@ -31,10 +31,12 @@ from core.settings import (
 )
 from core.houdini_env import build_houdini_env
 from controllers.asset_manager_controller import AssetManagerController
+from controllers.asset_pipeline_panel_controller import AssetPipelinePanelController
 from controllers.app_command_controller import AppCommandController
 from controllers.app_shortcuts_controller import AppShortcutsController
 from controllers.projects_controller import ProjectsController
 from controllers.client_controller import ClientController
+from controllers.process_controller import ProcessController
 from controllers.board.command_dispatcher import BoardCommandDispatcher
 from controllers.board.controller import BoardController
 from ui.widgets.project_card import ProjectCard
@@ -671,6 +673,34 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.client_conflict_keep_both_btn = self.client_page.client_conflict_keep_both_btn
 
         self.asset_controller = AssetManagerController(self)
+        self.process_controller = ProcessController(self)
+        self.asset_pipeline_panel_controller = AssetPipelinePanelController(
+            self,
+            default_process_summary=self.asset_controller._DEFAULT_PROCESS_SUMMARY,
+            default_run_summary=self.asset_controller._DEFAULT_RUN_SUMMARY,
+            default_artifact_placeholder=self.asset_controller._DEFAULT_ARTIFACT_PLACEHOLDER,
+            get_pipeline_inspection=lambda: self.asset_controller._asset_pipeline_inspection,
+            set_pipeline_inspection=lambda inspection: setattr(
+                self.asset_controller, "_asset_pipeline_inspection", inspection
+            ),
+            format_pipeline_kind_label=self.asset_controller._format_pipeline_kind_label,
+            set_process_summary=self.asset_controller._set_asset_pipeline_process_summary,
+            set_run_summary=self.asset_controller._set_asset_pipeline_run_summary,
+            reset_run_feedback=self.asset_controller._reset_asset_pipeline_run_feedback,
+            update_run_feedback=self.asset_controller._update_asset_pipeline_run_feedback,
+            resolve_publish_parameters=self.asset_controller._resolve_publish_asset_usd_parameters,
+            log_pipeline_run_start=self.asset_controller._log_pipeline_run_start,
+            log_pipeline_run_result=self.asset_controller._log_pipeline_run_result,
+            set_status=self.asset_controller.set_asset_status,
+            reload_current_entity=lambda: (
+                self.asset_controller._load_entity_details(
+                    Path(entity),
+                    getattr(self, "_asset_current_entity_type", None),
+                )
+                if (entity := getattr(self, "_asset_current_entity", None))
+                else None
+            ),
+        )
         self.project_controller = ProjectsController(self)
         self.client_controller = ClientController(self)
         self.board_controller = BoardController(self)
@@ -780,6 +810,12 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_inventory_list.itemClicked.connect(self.asset_controller.on_asset_inventory_clicked)
         self.asset_inventory_list.customContextMenuRequested.connect(
             self.asset_controller.show_asset_inventory_context_menu
+        )
+        self.asset_page.asset_pipeline_process_list.currentItemChanged.connect(
+            lambda _current, _previous: self.asset_pipeline_panel_controller.on_process_selected()
+        )
+        self.asset_page.asset_pipeline_run_btn.clicked.connect(
+            self.asset_pipeline_panel_controller.run_selected_process
         )
         self.asset_commit_btn.clicked.connect(self.asset_controller.asset_placeholder_action)
         self.asset_push_btn.clicked.connect(self.asset_controller.asset_placeholder_action)

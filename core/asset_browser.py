@@ -90,3 +90,32 @@ def filter_entity_dirs(
             continue
         filtered.append(entity_dir)
     return filtered
+
+
+def count_visible_entity_dirs(
+    entity_dirs: Sequence[Path],
+    *,
+    prefix_filter: str,
+    search_text: str,
+) -> int:
+    return len(
+        filter_entity_dirs(
+            entity_dirs,
+            prefix_filter=prefix_filter,
+            search_text=search_text,
+        )
+    )
+
+
+def entity_empty_reason(
+    *,
+    total: int,
+    search_text: str,
+    prefix_filter: str,
+    role_label: str,
+) -> str:
+    if total > 0 and search_text:
+        return "Try clearing the search field or changing the current group filter."
+    if total > 0 and prefix_filter and prefix_filter != "All":
+        return "Try switching Group back to All."
+    return f"The current layout did not classify any folder as a {role_label}."

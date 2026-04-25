@@ -726,6 +726,7 @@
       ]
     }
   },
+  "shortcuts": {},
   "project_tree_batch_size": 20,
   "project_tree_batch_delay_ms": 24,
   "client_sync_roots": {

@@ -62,6 +62,13 @@ class BoardGroupActionsController:
             update_groups=True,
         )
 
+    def toggle_group_selection(self) -> None:
+        selected = list(self.board._scene.selectedItems())
+        if any(isinstance(item, BoardGroupItem) for item in selected):
+            self.ungroup_selected()
+            return
+        self.add_group()
+
     def try_add_item_to_group(
         self, item: QtWidgets.QGraphicsItem, scene_pos: Optional[QtCore.QPointF]
     ) -> None:

@@ -619,6 +619,9 @@ class BoardController:
     def add_group(self) -> None:
         self._group_actions.add_group()
 
+    def toggle_group_selection(self) -> None:
+        self._group_actions.toggle_group_selection()
+
     def ungroup_selected(self) -> None:
         self._group_actions.ungroup_selected()
 
@@ -772,11 +775,6 @@ class BoardController:
 
     def _start_apply_payload(self, payload: dict) -> None:
         payload = self._set_board_state(payload)
-        total = payload_item_count(payload)
-        self.w.board_page.set_loading_overlay(
-            True,
-            f"Rebuilding {total} board item(s)...",
-        )
         self._scene.blockSignals(True)
         self._scene.clear()
         self._image_exr_display_overrides = prepare_apply_state(
@@ -784,69 +782,85 @@ class BoardController:
             payload,
             parse_overrides=self._parse_image_display_overrides,
         )
+        total = len(self._apply_state.queue) + len(self._apply_state.pending_groups)
+        self.w.board_page.set_loading_overlay(
+            True,
+            f"Rebuilding {total} board item(s)...",
+        )
         print(f"[BOARD] Apply payload start: {len(self._apply_state.queue)} items")
         self._apply_runtime.start(total)
 
     def _apply_payload_batch(self) -> None:
         if not self._apply_runtime.is_current():
             return
-        batch_size = 20
-        count = 0
-        assets_dir = self._project_root / ".skyforge_board_assets" if self._project_root else None
-        if self._apply_runtime.total:
-            self.w.board_page.set_loading_overlay(
-                True,
-                f"Rebuilding board items... {self._apply_runtime.done_count()}/{self._apply_runtime.total}",
-            )
-        while self._apply_state.queue and count < batch_size:
-            entry = self._apply_state.queue.popleft()
-            count += 1
-            built = build_scene_item_from_entry(
-                entry,
-                controller=self,
-                assets_dir=assets_dir,
-                resolve_project_path=self._resolve_project_path,
-            )
-            if built is None:
-                continue
-            kind, payload_or_item = built
-            if kind == "group":
-                self._apply_state.pending_groups.append(entry)
-                continue
-            item = payload_or_item
-            self._scene.addItem(item)
-            register_built_item(
+        try:
+            batch_size = 20
+            count = 0
+            assets_dir = self._project_root / ".skyforge_board_assets" if self._project_root else None
+            if self._apply_runtime.total:
+                self.w.board_page.set_loading_overlay(
+                    True,
+                    f"Rebuilding board items... {self._apply_runtime.done_count()}/{self._apply_runtime.total}",
+                )
+            while self._apply_state.queue and count < batch_size:
+                entry = self._apply_state.queue.popleft()
+                count += 1
+                built = build_scene_item_from_entry(
+                    entry,
+                    controller=self,
+                    assets_dir=assets_dir,
+                    resolve_project_path=self._resolve_project_path,
+                )
+                if built is None:
+                    continue
+                kind, payload_or_item = built
+                if kind == "group":
+                    self._apply_state.pending_groups.append(entry)
+                    continue
+                item = payload_or_item
+                self._scene.addItem(item)
+                register_built_item(
+                    self._apply_state,
+                    entry,
+                    kind,
+                    item,
+                    image_overrides=self._image_exr_display_overrides,
+                    apply_image_override=self._apply_override_to_image_item,
+                    apply_video_override=self._apply_override_to_video_item,
+                )
+
+            if self._apply_state.queue:
+                self._apply_runtime.schedule_next(10)
+                return
+
+            apply_pending_groups_to_scene(
                 self._apply_state,
-                entry,
-                kind,
-                item,
-                image_overrides=self._image_exr_display_overrides,
-                apply_image_override=self._apply_override_to_image_item,
-                apply_video_override=self._apply_override_to_video_item,
+                self._scene,
+                build_group_item=build_group_item,
             )
+            self._scene.blockSignals(False)
+            self._dirty = False
+            self._loading = False
+            applied_state = self._sync_board_state_from_scene()
+            self._refresh_scene_workspace()
+            self._update_view_quality()
+            self.update_visible_items()
+            self._reset_history(applied_state)
+            if self._apply_state.base_label:
+                self.w.board_page.project_label.setText(self._apply_state.base_label)
+            self.w.board_page.set_loading_overlay(False)
+            QtCore.QTimer.singleShot(0, self._fit_view_after_load)
+            self._schedule_post_load_reapply()
+        except Exception:
+            self._fail_apply_payload("Failed to rebuild board items.")
 
-        if self._apply_state.queue:
-            self._apply_runtime.schedule_next(10)
-            return
-
-        apply_pending_groups_to_scene(
-            self._apply_state,
-            self._scene,
-            build_group_item=build_group_item,
-        )
+    def _fail_apply_payload(self, message: str) -> None:
+        logger.exception(message)
+        self._apply_runtime.cancel()
         self._scene.blockSignals(False)
-        self._dirty = False
         self._loading = False
-        applied_state = self._sync_board_state_from_scene()
-        self._refresh_scene_workspace()
-        self._update_view_quality()
-        self.update_visible_items()
-        self._reset_history(applied_state)
-        if self._apply_state.base_label:
-            self.w.board_page.project_label.setText(self._apply_state.base_label)
         self.w.board_page.set_loading_overlay(False)
-        QtCore.QTimer.singleShot(0, self._fit_view_after_load)
-        self._schedule_post_load_reapply()
+        self._notify(message)
 
     def _apply_override_to_image_item(self, item: BoardImageItem, override: dict[str, object]) -> None:
         apply_image_override_to_item(
