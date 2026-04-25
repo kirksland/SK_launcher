@@ -22,6 +22,8 @@ from core.asset_details import (
 )
 from core.asset_inventory import build_entity_inventory
 from core.asset_browser import (
+    count_visible_entity_dirs,
+    entity_empty_reason,
     entity_prefixes,
     filter_entity_dirs,
     resolved_filter_choice,
@@ -713,23 +715,12 @@ class AssetManagerController:
     def _apply_entity_filters(self, target: str) -> None:
         active_tab = self.w.asset_work_tabs.currentIndex()
         search_text = self.w.asset_entity_search.text().strip().lower()
-        filter_by_target = {
-            "shots": self.w.asset_shots_filter.currentText(),
-            "assets": self.w.asset_assets_filter.currentText(),
-            "library": self.w.asset_library_filter.currentText(),
-        }
-        list_by_target = {
-            "shots": self.w.asset_shots_list,
-            "assets": self.w.asset_assets_list,
-            "library": self.w.asset_library_list,
-        }
-        tab_index_by_target = {"shots": 0, "assets": 1, "library": 2}
-        targets = list(filter_by_target.keys()) if target == "both" else [target]
+        targets = ("shots", "assets", "library") if target == "both" else (target,)
         for current_target in targets:
-            list_widget = list_by_target[current_target]
-            prefix_filter = filter_by_target[current_target]
-            scoped_search = search_text if active_tab == tab_index_by_target[current_target] else ""
-            visible_count = 0
+            spec = self._entity_target_spec(current_target)
+            list_widget = spec["list_widget"]
+            prefix_filter = spec["filter_widget"].currentText()
+            scoped_search = search_text if active_tab == spec["tab_index"] else ""
             self._remove_empty_entity_items(list_widget)
             for row in range(list_widget.count()):
                 item = list_widget.item(row)
@@ -739,16 +730,17 @@ class AssetManagerController:
                 if not path_text:
                     continue
                 path = Path(str(path_text))
-                visible = bool(
-                    filter_entity_dirs(
-                        [path],
-                        prefix_filter=prefix_filter,
-                        search_text=scoped_search,
-                    )
-                )
+                visible = count_visible_entity_dirs(
+                    [path],
+                    prefix_filter=prefix_filter,
+                    search_text=scoped_search,
+                ) > 0
                 item.setHidden(not visible)
-                if visible:
-                    visible_count += 1
+            visible_count = count_visible_entity_dirs(
+                self._entity_paths_by_target(getattr(self.w, "_asset_resolved_layout", None))[current_target],
+                prefix_filter=prefix_filter,
+                search_text=scoped_search,
+            )
             if visible_count == 0:
                 total = sum(
                     1
@@ -758,30 +750,14 @@ class AssetManagerController:
                 )
                 self._add_empty_entity_item(
                     list_widget,
-                    self._empty_title_for_target(current_target),
-                    self._empty_reason(
+                    spec["empty_title"],
+                    entity_empty_reason(
                         total=total,
                         search_text=scoped_search,
                         prefix_filter=prefix_filter,
-                        role_label=self._role_label_for_target(current_target),
+                        role_label=spec["role_label"],
                     ),
                 )
-
-    @staticmethod
-    def _empty_title_for_target(target: str) -> str:
-        if target == "shots":
-            return "No shots found"
-        if target == "assets":
-            return "No pipeline assets found"
-        return "No library assets found"
-
-    @staticmethod
-    def _role_label_for_target(target: str) -> str:
-        if target == "shots":
-            return "shot"
-        if target == "assets":
-            return "pipeline asset"
-        return "library asset"
 
     def apply_asset_shots_size(self, label: str, refresh: bool = True) -> None:
         size = self.w._asset_shot_size_map.get(label, self.w._asset_shot_size_map["Medium"])

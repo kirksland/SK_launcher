@@ -150,9 +150,9 @@ class BoardSceneViewController:
             return
         board._low_quality = low_quality
         if low_quality:
-            view.setRenderHints(QtGui.QPainter.RenderHint.Antialiasing, False)
-            view.setRenderHints(QtGui.QPainter.RenderHint.SmoothPixmapTransform, False)
-            view.setRenderHints(QtGui.QPainter.RenderHint.TextAntialiasing, False)
+            view.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+            view.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, False)
+            view.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, False)
         else:
             view.setRenderHints(
                 QtGui.QPainter.RenderHint.Antialiasing
