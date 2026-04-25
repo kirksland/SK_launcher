@@ -451,6 +451,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
             self._use_file_association,
             self._show_splash_screen,
             self._houdini_exe,
+            str(self.settings.get("runtime_cache_location", "local_appdata")),
+            int(self.settings.get("runtime_cache_max_gb", 5)),
+            int(self.settings.get("runtime_cache_max_days", 30)),
             shortcut_commands=self.command_controller.registry.list(),
             shortcut_overrides=self.settings.get("shortcuts", {}),
         )
@@ -978,6 +981,11 @@ class LauncherWindow(QtWidgets.QMainWindow):
         use_assoc = self.settings_use_assoc.isChecked()
         show_splash_screen = self.settings_show_splash.isChecked()
         houdini_exe = normalize_houdini_exe(self.settings_houdini_exe.text())
+        runtime_cache_location = str(
+            self.settings_page.settings_runtime_cache_location.currentData() or "local_appdata"
+        )
+        runtime_cache_max_gb = int(self.settings_page.settings_runtime_cache_max_gb.value())
+        runtime_cache_max_days = int(self.settings_page.settings_runtime_cache_max_days.value())
         resolved_projects_dir = Path(projects_dir) if projects_dir else DEFAULT_PROJECTS_DIR
         backend_label = self.settings_video_backend.currentText().strip().lower()
         if backend_label == "opencv":
@@ -1001,6 +1009,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 "video_backend": video_backend,
                 "asset_manager_projects": list(self._asset_manager_projects),
                 "shortcuts": self.settings_page.shortcut_overrides(),
+                "runtime_cache_location": runtime_cache_location,
+                "runtime_cache_max_gb": runtime_cache_max_gb,
+                "runtime_cache_max_days": runtime_cache_max_days,
             }
         )
         save_settings(self.settings)

@@ -32,7 +32,12 @@ def is_exr_path(path: Path) -> bool:
 def asset_exr_thumb_cache_dir(project_root: Optional[Path]) -> Optional[Path]:
     if project_root is None:
         return None
-    cache_dir = project_root / ".skyforge_cache" / "asset_exr_thumbs"
+    if project_root.name == "asset_exr_thumbs":
+        cache_dir = project_root
+    elif project_root.name == ".skyforge_cache":
+        cache_dir = project_root / "asset_exr_thumbs"
+    else:
+        cache_dir = project_root / ".skyforge_cache" / "asset_exr_thumbs"
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except Exception:

@@ -82,7 +82,7 @@ class BoardController:
         self._saving = False
         self._last_save_ts = 0.0
         self._board_state: dict = {"items": [], "image_display_overrides": {}}
-        self._media_cache = BoardMediaCache(max_display_dim=2048)
+        self._media_cache = BoardMediaCache(max_display_dim=2048, settings=getattr(self.w, "settings", None))
         self._media_render = BoardMediaRenderController(self)
         self._scene_view = BoardSceneViewController(self)
         self._history: list[str] = []
