@@ -42,6 +42,8 @@ class ProjectsController:
         self._detail_pinned = False
         self._detail_project_path: Optional[Path] = None
         self._scan_token = 0.0
+        self._last_open_scene_path: Optional[Path] = None
+        self._last_open_scene_time = 0.0
         self._dir_cache: Dict[Path, list[tuple[str, bool]]] = {}
         self._fs_model = QtWidgets.QFileSystemModel(self.w)
         self._fs_model.setReadOnly(True)
@@ -284,10 +286,25 @@ class ProjectsController:
             self.w._warn(f"No supported scene file found in {project_path.name}.")
             return
         try:
+            if self._suppress_duplicate_scene_open(scene_file):
+                return
             self._open_scene_file(scene_file, project_path)
             self.w.status.setText(f"Opened: {scene_file.name}")
         except Exception as exc:  # pragma: no cover - UI error path
             self.w._warn(f"Failed to open: {scene_file}\n{exc}")
+
+    def _suppress_duplicate_scene_open(self, scene_file: Path) -> bool:
+        now = time.monotonic()
+        try:
+            scene_key = scene_file.resolve()
+        except Exception:
+            scene_key = scene_file
+        if self._last_open_scene_path == scene_key and (now - self._last_open_scene_time) < 1.5:
+            self.w.status.setText(f"Already opening: {scene_file.name}")
+            return True
+        self._last_open_scene_path = scene_key
+        self._last_open_scene_time = now
+        return False
 
     def _open_scene_file(self, scene_file: Path, project_path: Path) -> None:
         descriptor = next((entry for entry in iter_dccs() if scene_file.suffix.lower() in entry.extensions), None)
