@@ -72,7 +72,10 @@ class ProjectsController:
 
         self.w.project_grid.clear()
         if not self._detail_pinned:
-            self.w.project_detail_panel.setVisible(False)
+            if hasattr(self.w, "set_page_dock_visible"):
+                self.w.set_page_dock_visible("projects.detail", False)
+            else:
+                self.w.project_detail_panel.setVisible(False)
         self.w._card_to_item.clear()
         projects = find_projects(self.w.projects_dir)
         self._prune_cache(projects, self.w._project_cache)
@@ -371,7 +374,6 @@ class ProjectsController:
         os.startfile(str(project_path))  # type: ignore[attr-defined]
 
     def close_project_detail_panel(self) -> None:
-        self.w.project_detail_panel.setVisible(False)
         if hasattr(self.w, "set_page_dock_visible"):
             self.w.set_page_dock_visible("projects.detail", False)
         else:
@@ -387,7 +389,6 @@ class ProjectsController:
         self.w.project_detail_tree.setRootIndex(QtCore.QModelIndex())
 
     def _show_project_detail(self, project_path: Path) -> None:
-        self.w.project_detail_panel.setVisible(True)
         if hasattr(self.w, "set_page_dock_visible"):
             self.w.set_page_dock_visible("projects.detail", True)
         else:

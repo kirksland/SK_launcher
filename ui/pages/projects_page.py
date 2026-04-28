@@ -124,7 +124,6 @@ class ProjectsPage(QtWidgets.QWidget):
         self.detail_tree.setHeaderHidden(True)
         self.detail_tree.setUniformRowHeights(True)
         detail_layout.addWidget(self.detail_tree, 1)
-        self.detail_panel.setVisible(False)
         splitter.addWidget(self.detail_panel)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)

@@ -726,7 +726,11 @@
       ]
     }
   },
-  "shortcuts": {},
+  "shortcuts": {
+    "board.layout.auto": [
+      "l"
+    ]
+  },
   "runtime_cache_location": "local_appdata",
   "runtime_cache_max_gb": 5,
   "runtime_cache_max_days": 30,

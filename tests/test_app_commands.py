@@ -1,4 +1,9 @@
 import unittest
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.commands import (
     AppCommand,
@@ -11,7 +16,7 @@ from core.commands import (
 )
 from controllers.app_command_controller import AppCommandController
 from controllers.board.command_dispatcher import BoardCommandDispatcher
-from controllers.app_shortcuts_controller import should_block_shortcut_for_text_input
+from controllers.app_shortcuts_controller import AppShortcutsController, should_block_shortcut_for_text_input
 from core.commands.registry import validate_command
 from core.commands.shortcuts import normalize_shortcut_sequence
 from core.commands.scopes import scopes_overlap
@@ -171,6 +176,97 @@ class AppCommandTests(unittest.TestCase):
 
         self.assertFalse(result.handled)
         self.assertIn("No dispatcher", result.message)
+
+    def test_shortcut_controller_install_is_idempotent_until_settings_reload(self) -> None:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        _ = app
+        window = QtWidgets.QMainWindow()
+        pages = QtWidgets.QStackedWidget(window)
+        for _idx in range(6):
+            pages.addWidget(QtWidgets.QWidget())
+        pages.setCurrentIndex(2)
+        window.pages = pages  # type: ignore[attr-defined]
+        window.board_controller = _FakeBoardController()  # type: ignore[attr-defined]
+
+        command_controller = AppCommandController()
+        command_controller.register_dispatcher("board", BoardCommandDispatcher(window.board_controller))  # type: ignore[attr-defined]
+        shortcuts = AppShortcutsController(window, command_controller, {})
+
+        shortcuts.install()
+        first_count = len(shortcuts.shortcuts)
+        first_install_count = shortcuts.install_count
+        first_shortcuts = tuple(shortcuts.shortcuts)
+
+        shortcuts.install()
+
+        self.assertEqual(6, first_count)
+        self.assertEqual(first_install_count, shortcuts.install_count)
+        self.assertEqual(first_shortcuts, tuple(shortcuts.shortcuts))
+
+        shortcuts.reload_settings({"shortcuts": {"board.view.fit": ["Ctrl+F"]}})
+
+        self.assertEqual(first_install_count + 1, shortcuts.install_count)
+        self.assertEqual(6, len(shortcuts.shortcuts))
+        self.assertTrue(any(shortcut.key().toString() == "Ctrl+F" for shortcut in shortcuts.shortcuts))
+        shortcuts.clear()
+
+    def test_shortcut_controller_key_event_fallback_routes_active_board_shortcut(self) -> None:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        _ = app
+        window = QtWidgets.QMainWindow()
+        pages = QtWidgets.QStackedWidget(window)
+        for _idx in range(6):
+            pages.addWidget(QtWidgets.QWidget())
+        pages.setCurrentIndex(2)
+        window.pages = pages  # type: ignore[attr-defined]
+        window.board_controller = _FakeBoardController()  # type: ignore[attr-defined]
+
+        command_controller = AppCommandController()
+        command_controller.register_dispatcher("board", BoardCommandDispatcher(window.board_controller))  # type: ignore[attr-defined]
+        shortcuts = AppShortcutsController(window, command_controller, {})
+        shortcuts.install()
+
+        event = QtGui.QKeyEvent(
+            QtCore.QEvent.Type.KeyPress,
+            QtCore.Qt.Key.Key_F,
+            QtCore.Qt.KeyboardModifier.NoModifier,
+        )
+
+        self.assertTrue(shortcuts.handle_key_event(event))
+        self.assertEqual(["fit"], window.board_controller.calls)  # type: ignore[attr-defined]
+
+        event = QtGui.QKeyEvent(
+            QtCore.QEvent.Type.KeyPress,
+            QtCore.Qt.Key.Key_G,
+            QtCore.Qt.KeyboardModifier.ControlModifier | QtCore.Qt.KeyboardModifier.ShiftModifier,
+        )
+
+        self.assertTrue(shortcuts.handle_key_event(event))
+        self.assertEqual(["fit", "ungroup"], window.board_controller.calls)  # type: ignore[attr-defined]
+        shortcuts.clear()
+
+    def test_shortcut_controller_only_blocks_editable_combo_focus(self) -> None:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        window = QtWidgets.QMainWindow()
+        combo = QtWidgets.QComboBox(window)
+        combo.addItem("Current")
+        window.setCentralWidget(combo)
+        window.show()
+        combo.setFocus()
+        app.processEvents()
+
+        shortcuts = AppShortcutsController(window, AppCommandController(), {})
+
+        self.assertFalse(shortcuts._text_input_has_focus())
+
+        combo.setEditable(True)
+        line_edit = combo.lineEdit()
+        self.assertIsNotNone(line_edit)
+        line_edit.setFocus()
+        app.processEvents()
+
+        self.assertTrue(shortcuts._text_input_has_focus())
+        window.close()
 
 
 class _FakeGridToggle:

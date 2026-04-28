@@ -735,6 +735,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.board_page.set_controller(self.board_controller)
         self.board_controller.set_project(None)
         self._layout_overlay_panels()
+        self._install_runtime_connections_once()
 
     def _setup_page_docks(self) -> None:
         self.page_host.setDockOptions(
@@ -769,7 +770,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         *,
         initial_visible: bool,
     ) -> QtWidgets.QDockWidget:
-        widget.setVisible(True)
         if pane_id in self._page_docks:
             return self._page_docks[pane_id]
         dock = QtWidgets.QDockWidget(title, self.page_host)
@@ -816,9 +816,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         dock = getattr(self, "_page_docks", {}).get(str(pane_id))
         if dock is None:
             return
-        widget = dock.widget()
-        if widget is not None and visible:
-            widget.setVisible(True)
         self._page_dock_desired[str(pane_id)] = bool(visible)
         self._sync_page_dock_visibility()
 
@@ -826,12 +823,22 @@ class LauncherWindow(QtWidgets.QMainWindow):
         dock = self._page_docks.get(str(pane_id))
         if dock is None:
             return
-        widget = dock.widget()
-        if widget is not None:
-            widget.show()
+        self._ensure_page_dock_content_visible(dock)
         dock.raise_()
         self._resize_page_dock(pane_id)
-        QtCore.QTimer.singleShot(0, lambda current_id=str(pane_id): self._resize_page_dock(current_id))
+        QtCore.QTimer.singleShot(0, lambda current_id=str(pane_id): self._activate_page_dock_later(current_id))
+
+    def _activate_page_dock_later(self, pane_id: str) -> None:
+        dock = self._page_docks.get(str(pane_id))
+        if dock is None or dock.isHidden():
+            return
+        self._ensure_page_dock_content_visible(dock)
+        self._resize_page_dock(pane_id)
+
+    def _ensure_page_dock_content_visible(self, dock: QtWidgets.QDockWidget) -> None:
+        widget = dock.widget()
+        if widget is not None and widget.isHidden():
+            widget.show()
 
     def _resize_page_dock(self, pane_id: str) -> None:
         dock = self._page_docks.get(str(pane_id))
@@ -855,7 +862,11 @@ class LauncherWindow(QtWidgets.QMainWindow):
         dock = getattr(self, "_page_docks", {}).get(str(pane_id))
         if dock is None:
             return False
-        return bool(not dock.isHidden() and self._page_dock_pages.get(str(pane_id), -1) == self._current_page_index())
+        key = str(pane_id)
+        return bool(
+            self._page_dock_pages.get(key, -1) == self._current_page_index()
+            and self._page_dock_desired.get(key, False)
+        )
 
     def _on_page_dock_visibility_changed(self, pane_id: str, visible: bool) -> None:
         if self._page_dock_pages.get(pane_id, -1) != self._current_page_index():
@@ -891,12 +902,14 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.log_panel.setGeometry(0, y, main_rect.width(), panel_height)
         self.log_panel.raise_()
 
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._layout_overlay_panels()
+    def _install_runtime_connections_once(self) -> None:
+        if getattr(self, "_runtime_connections_installed", False):
+            return
+        self._runtime_connections_installed = True
         self.command_controller.register_dispatcher("board", BoardCommandDispatcher(self.board_controller))
         self.shortcuts_controller = AppShortcutsController(self, self.command_controller, self.settings)
         self.shortcuts_controller.install()
+        self._install_shortcut_event_filters()
 
         self.settings_projects_dir = self.settings_page.settings_projects_dir
         self.settings_server_dir = self.settings_page.settings_server_dir
@@ -1056,6 +1069,54 @@ class LauncherWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, self._handle_startup_configuration)
         QtCore.QTimer.singleShot(0, self._prune_runtime_cache_startup)
 
+    def _install_shortcut_event_filters(self) -> None:
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+        targets: list[QtCore.QObject] = [self, self.page_host, self.pages, self.board_page]
+        for attr_name in (
+            "view",
+            "groups_panel",
+            "groups_tree",
+            "edit_panel",
+            "edit_timeline_bar",
+        ):
+            widget = getattr(self.board_page, attr_name, None)
+            if widget is not None:
+                targets.append(widget)
+                viewport = getattr(widget, "viewport", None)
+                if callable(viewport):
+                    targets.append(viewport())
+        for dock in getattr(self, "_page_docks", {}).values():
+            targets.append(dock)
+            widget = dock.widget()
+            if widget is not None:
+                targets.append(widget)
+
+        seen: set[int] = set()
+        for target in targets:
+            if target is None or id(target) in seen:
+                continue
+            seen.add(id(target))
+            try:
+                target.installEventFilter(self)
+            except RuntimeError:
+                continue
+            if isinstance(target, QtWidgets.QWidget):
+                for child in target.findChildren(QtWidgets.QWidget):
+                    if id(child) in seen:
+                        continue
+                    seen.add(id(child))
+                    try:
+                        child.installEventFilter(self)
+                    except RuntimeError:
+                        pass
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._layout_overlay_panels()
+
     def apply_initial_window_geometry(self) -> None:
         screen = QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
         if screen is None:
@@ -1122,6 +1183,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._nav_clients_badge.move(x, y)
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if event.type() == QtCore.QEvent.Type.KeyPress and hasattr(self, "shortcuts_controller"):
+            if isinstance(event, QtGui.QKeyEvent) and self.shortcuts_controller.handle_key_event(event):
+                return True
         if obj is self._nav_clients_btn and event.type() in (
             QtCore.QEvent.Type.Resize,
             QtCore.QEvent.Type.Show,

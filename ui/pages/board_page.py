@@ -214,8 +214,6 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_footer.setWordWrap(True)
         edit_layout.addWidget(self.edit_footer, 0)
 
-        self.edit_panel.setVisible(False)
-
         self.focus_exit_btn = QtWidgets.QToolButton(self)
         self.focus_exit_btn.setText("Exit Focus")
         self.focus_exit_btn.setVisible(False)
@@ -271,7 +269,6 @@ class BoardPage(QtWidgets.QWidget):
         # Timeline pane content (for focus mode video editing).
         self.edit_timeline_bar = QtWidgets.QFrame()
         self.edit_timeline_bar.setStyleSheet(subtle_panel_frame_style(bg_key="app_bg"))
-        self.edit_timeline_bar.setVisible(False)
         timeline_layout = QtWidgets.QVBoxLayout(self.edit_timeline_bar)
         timeline_layout.setContentsMargins(10, 6, 10, 6)
         timeline_layout.setSpacing(6)
@@ -296,7 +293,6 @@ class BoardPage(QtWidgets.QWidget):
 
     def set_edit_panel_visible(self, visible: bool) -> None:
         self._set_board_pane_visible("edit", bool(visible))
-        self.edit_panel.setVisible(bool(visible))
         self.focus_exit_btn.setVisible(bool(visible))
         if visible:
             self._position_edit_overlay()
@@ -377,7 +373,6 @@ class BoardPage(QtWidgets.QWidget):
 
     def set_timeline_bar_visible(self, visible: bool) -> None:
         self._set_board_pane_visible("timeline", bool(visible))
-        self.edit_timeline_bar.setVisible(bool(visible))
 
     def sync_groups_toggle(self, visible: bool) -> None:
         if self.groups_toggle.isChecked() == bool(visible):
