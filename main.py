@@ -17,7 +17,6 @@ os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 from core.settings import (
     DEFAULT_ASSET_SCHEMA,
     DEFAULT_PROJECTS_DIR,
-    DEFAULT_TEMPLATE_HIP,
     DEFAULT_SETTINGS,
     active_settings_path,
     is_first_run,
@@ -379,7 +378,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings = load_settings()
         self.projects_dir = Path(self.settings["projects_dir"])
         self.server_repo_dir = Path(self.settings["server_repo_dir"])
-        self._template_hip = Path(self.settings["template_hip"])
         self._new_hip_pattern = self.settings["new_hip_pattern"]
         self._use_file_association = bool(self.settings["use_file_association"])
         self._show_splash_screen = bool(self.settings.get("show_splash_screen", True))
@@ -448,7 +446,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings_page = SettingsPage(
             self.projects_dir,
             self.server_repo_dir,
-            self._template_hip,
             self._new_hip_pattern,
             self._video_backend_pref,
             self._use_file_association,
@@ -750,7 +747,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
         self.settings_projects_dir = self.settings_page.settings_projects_dir
         self.settings_server_dir = self.settings_page.settings_server_dir
-        self.settings_template_hip = self.settings_page.settings_template_hip
         self.settings_pattern = self.settings_page.settings_pattern
         self.settings_video_backend = self.settings_page.settings_video_backend
         self.settings_use_assoc = self.settings_page.settings_use_assoc
@@ -760,7 +756,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings_save_btn = self.settings_page.settings_save_btn
         self.settings_projects_browse_btn = self.settings_page.settings_projects_browse_btn
         self.settings_server_browse_btn = self.settings_page.settings_server_browse_btn
-        self.settings_template_browse_btn = self.settings_page.settings_template_browse_btn
         self.settings_houdini_browse_btn = self.settings_page.settings_houdini_browse_btn
         self.settings_blender_browse_btn = self.settings_page.settings_blender_browse_btn
 
@@ -869,12 +864,10 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.settings_save_btn.clicked.connect(self.save_settings_from_ui)
         self.settings_projects_browse_btn.clicked.connect(self._browse_settings_projects_dir)
         self.settings_server_browse_btn.clicked.connect(self._browse_settings_server_dir)
-        self.settings_template_browse_btn.clicked.connect(self._browse_settings_template_hip)
         self.settings_houdini_browse_btn.clicked.connect(self._browse_settings_houdini_exe)
         self.settings_blender_browse_btn.clicked.connect(self._browse_settings_blender_exe)
         self.settings_projects_dir.textChanged.connect(self._refresh_settings_validation)
         self.settings_server_dir.textChanged.connect(self._refresh_settings_validation)
-        self.settings_template_hip.textChanged.connect(self._refresh_settings_validation)
         self.settings_houdini_exe.textChanged.connect(self._refresh_settings_validation)
         self.settings_blender_exe.textChanged.connect(self._refresh_settings_validation)
         self.settings_use_assoc.toggled.connect(self._refresh_settings_validation)
@@ -987,7 +980,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
     def save_settings_from_ui(self) -> None:
         projects_dir = self.settings_projects_dir.text().strip()
         server_repo_dir = self.settings_server_dir.text().strip()
-        template_hip = self.settings_template_hip.text().strip()
         pattern = self.settings_pattern.text().strip()
         use_assoc = self.settings_use_assoc.isChecked()
         show_splash_screen = self.settings_show_splash.isChecked()
@@ -1013,7 +1005,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
             {
                 "projects_dir": str(resolved_projects_dir),
                 "server_repo_dir": server_repo_dir,
-                "template_hip": template_hip,
                 "new_hip_pattern": pattern,
                 "use_file_association": use_assoc,
                 "show_splash_screen": show_splash_screen,
@@ -1031,7 +1022,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.shortcuts_controller.reload_settings(self.settings)
 
         self.server_repo_dir = Path(server_repo_dir) if server_repo_dir else Path(DEFAULT_SETTINGS["server_repo_dir"])
-        self._template_hip = Path(template_hip) if template_hip else DEFAULT_TEMPLATE_HIP
         self._new_hip_pattern = pattern or "{projectName}_001.hipnc"
         self._use_file_association = bool(use_assoc)
         self._show_splash_screen = bool(show_splash_screen)
@@ -1105,7 +1095,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         snapshot = {
             "projects_dir": self.settings_projects_dir.text().strip(),
             "server_repo_dir": self.settings_server_dir.text().strip(),
-            "template_hip": self.settings_template_hip.text().strip(),
             "use_file_association": self.settings_use_assoc.isChecked(),
             "houdini_exe": normalize_houdini_exe(self.settings_houdini_exe.text()),
             "blender_exe": normalize_blender_exe(self.settings_blender_exe.text()),
@@ -1140,16 +1129,6 @@ class LauncherWindow(QtWidgets.QMainWindow):
         )
         if directory:
             self.settings_server_dir.setText(directory)
-
-    def _browse_settings_template_hip(self) -> None:
-        path, _selected = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Select Template Hip",
-            self.settings_template_hip.text().strip() or str(Path(__file__).resolve().parent),
-            "Houdini Files (*.hip *.hiplc *.hipnc);;All Files (*.*)",
-        )
-        if path:
-            self.settings_template_hip.setText(path)
 
     def _browse_settings_houdini_exe(self) -> None:
         path, _selected = QtWidgets.QFileDialog.getOpenFileName(

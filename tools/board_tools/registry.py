@@ -29,11 +29,7 @@ def discover_board_tools(force: bool = False) -> dict[str, BoardToolCapabilities
 
     pkg_name = "tools.board_tools"
     package = _import_or_reload(pkg_name, force=force)
-    search_paths = list(getattr(package, "__path__", [])) if package is not None else []
-    if not search_paths:
-        pkg_dir = Path(__file__).resolve().parent
-        if pkg_dir.exists():
-            search_paths = [str(pkg_dir)]
+    search_paths = _board_tool_search_paths(package)
     if not search_paths:
         return {}
 
@@ -89,6 +85,41 @@ def _import_or_reload(module_name: str, *, force: bool) -> object | None:
         return importlib.import_module(module_name)
     except Exception:
         return None
+
+
+def _board_tool_search_paths(package: object | None) -> list[str]:
+    search_paths = list(getattr(package, "__path__", [])) if package is not None else []
+    portable_path = _portable_board_tools_path()
+    if portable_path is not None:
+        _append_unique_path(search_paths, portable_path)
+        package_path = getattr(package, "__path__", None) if package is not None else None
+        if package_path is not None:
+            try:
+                _append_unique_path(package_path, portable_path)
+            except Exception:
+                pass
+    if not search_paths:
+        pkg_dir = Path(__file__).resolve().parent
+        if pkg_dir.exists():
+            search_paths = [str(pkg_dir)]
+    return search_paths
+
+
+def _portable_board_tools_path() -> str | None:
+    if not bool(getattr(sys, "frozen", False)):
+        return None
+    exe_path = Path(getattr(sys, "executable", "") or "")
+    if not exe_path:
+        return None
+    board_tools_dir = exe_path.resolve().parent / "tools" / "board_tools"
+    return str(board_tools_dir) if board_tools_dir.exists() else None
+
+
+def _append_unique_path(paths: object, path: str) -> None:
+    normalized = str(Path(path).resolve()).casefold()
+    existing = {str(Path(str(item)).resolve()).casefold() for item in list(paths)}  # type: ignore[arg-type]
+    if normalized not in existing:
+        paths.append(path)  # type: ignore[attr-defined]
 
 
 def _is_scene_runtime(runtime: object) -> bool:

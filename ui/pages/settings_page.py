@@ -48,7 +48,6 @@ class SettingsPage(QtWidgets.QWidget):
         self,
         projects_dir: Path,
         server_repo_dir: Path,
-        template_hip: Path,
         new_hip_pattern: str,
         video_backend_pref: str,
         use_file_association: bool,
@@ -163,7 +162,7 @@ class SettingsPage(QtWidgets.QWidget):
 
         self.workspace_page = self._build_section_page(
             "Workspace Setup",
-            "Paths and templates used by the launcher to discover and create project structures.",
+            "Paths and naming settings used by the launcher to discover and create project structures.",
         )
         self.launch_page = self._build_section_page(
             "Launch Behavior",
@@ -185,7 +184,6 @@ class SettingsPage(QtWidgets.QWidget):
         self._build_workspace_fields(
             projects_dir,
             server_repo_dir,
-            template_hip,
             new_hip_pattern,
             runtime_cache_location,
             runtime_cache_max_gb,
@@ -305,7 +303,6 @@ class SettingsPage(QtWidgets.QWidget):
         self,
         projects_dir: Path,
         server_repo_dir: Path,
-        template_hip: Path,
         new_hip_pattern: str,
         runtime_cache_location: str,
         runtime_cache_max_gb: int,
@@ -326,19 +323,14 @@ class SettingsPage(QtWidgets.QWidget):
         self.settings_server_browse_btn = QtWidgets.QPushButton("Browse...")
         locations_form.addRow("Server Repo Folder", self._with_browse(self.settings_server_dir, self.settings_server_browse_btn))
 
-        template_form = self._build_card(
+        naming_form = self._build_card(
             self.workspace_page,
             "Project Creation",
-            "Template and naming settings used when the launcher needs to create or initialize a fresh project scene.",
+            "Naming settings used when the launcher needs to create or initialize a fresh project scene.",
         )
-        self.settings_template_hip = QtWidgets.QLineEdit(str(template_hip))
-        self.settings_template_hip.setPlaceholderText(r"<launcher>\untitled.hipnc")
-        self.settings_template_browse_btn = QtWidgets.QPushButton("Browse...")
-        template_form.addRow("Template Hip", self._with_browse(self.settings_template_hip, self.settings_template_browse_btn))
-
         self.settings_pattern = QtWidgets.QLineEdit(new_hip_pattern)
         self.settings_pattern.setPlaceholderText("{projectName}_001")
-        template_form.addRow("New Hip Pattern", self.settings_pattern)
+        naming_form.addRow("New Hip Pattern", self.settings_pattern)
 
         runtime_form = self._build_card(
             self.workspace_page,

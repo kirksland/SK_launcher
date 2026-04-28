@@ -247,7 +247,7 @@ class BoardPage(QtWidgets.QWidget):
 
         self.grid_toggle.toggled.connect(self.view.set_show_grid)
         self.groups_toggle.toggled.connect(self.groups_panel.setVisible)
-        self.edit_close_btn.clicked.connect(lambda: self.set_edit_panel_visible(False))
+        self.edit_close_btn.clicked.connect(self._on_exit_focus)
         self.edit_image_tool_add_btn.clicked.connect(
             lambda: self.show_tool_add_menu(
                 self.edit_image_tool_add_btn.mapToGlobal(

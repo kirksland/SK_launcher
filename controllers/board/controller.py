@@ -518,9 +518,11 @@ class BoardController:
             now = time.time()
             if now - self._last_save_ts < 1.0:
                 return
+        project_changed = project_root != self._project_root
+        if project_changed and self._focus_item is not None:
+            self.exit_focus_mode()
         if self._project_root and self._dirty:
             self.save_board()
-        project_changed = project_root != self._project_root
         if project_changed:
             self._cancel_pending_board_load()
             self._media_cache.reset_project_scoped()
