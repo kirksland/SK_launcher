@@ -54,8 +54,21 @@ if errorlevel 1 (
   exit /b 1
 )
 
+set "DIST_ROOT=%ROOT%dist\SkyforgeLauncher"
+set "PORTABLE_TOOLS=%DIST_ROOT%\tools\board_tools"
+
+echo [INFO] Copying portable board tools...
+if not exist "%PORTABLE_TOOLS%" mkdir "%PORTABLE_TOOLS%"
+robocopy "%ROOT%tools\board_tools" "%PORTABLE_TOOLS%" /E /XD __pycache__ /XF *.pyc >nul
+if errorlevel 8 (
+  echo [ERROR] Failed to copy portable board tools.
+  pause
+  exit /b 1
+)
+
 echo.
 echo [OK] Build complete.
-echo Output: %ROOT%dist\SkyforgeLauncher
+echo Output: %DIST_ROOT%
+echo Board tools: %PORTABLE_TOOLS%
 pause
 exit /b 0
