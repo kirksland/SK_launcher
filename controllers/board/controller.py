@@ -178,10 +178,15 @@ class BoardController:
         self._connect_edit_tool_panel_signals()
         self.w.board_page.edit_exr_gamma_slider.sliderPressed.connect(self._on_edit_preview_slider_pressed)
         self.w.board_page.edit_exr_gamma_slider.sliderReleased.connect(self._on_edit_preview_slider_released)
-        self.w.board_page.edit_image_adjust_reset_btn.clicked.connect(self._reset_edit_image_adjustments)
+        self.w.board_page.edit_image_adjust_reset_btn.clicked.connect(self._reset_selected_edit_tool_adjustments)
         self.w.board_page.edit_image_tool_list.currentRowChanged.connect(self._on_edit_tool_stack_selection_changed)
         self.w.board_page.imageToolAddRequested.connect(self._on_edit_tool_stack_add_clicked)
         self.w.board_page.imageToolRemoveRequested.connect(self._on_edit_tool_stack_remove_index)
+        self.w.board_page.imageToolRemovePanelRequested.connect(self._on_edit_tool_remove_panel_requested)
+        self.w.board_page.imageToolResetPanelRequested.connect(self._on_edit_tool_reset_panel_requested)
+        self.w.board_page.imageToolMoveInstanceRequested.connect(self._on_edit_tool_move_instance_requested)
+        self.w.board_page.imageToolInstanceChanged.connect(self._on_edit_tool_instance_changed)
+        self.w.board_page.imageToolInstanceSelected.connect(self._on_edit_tool_instance_selected)
         self.w.board_page.edit_image_tool_up_btn.clicked.connect(self._on_edit_tool_stack_up_clicked)
         self.w.board_page.edit_image_tool_down_btn.clicked.connect(self._on_edit_tool_stack_down_clicked)
         self._focus_item: Optional[QtWidgets.QGraphicsItem] = None
@@ -1017,8 +1022,17 @@ class BoardController:
     def _selected_tool_panel(self) -> str:
         return self._edit_tools.selected_tool_panel()
 
+    def _selected_tool_instance_id(self) -> str:
+        return self._edit_tools.selected_tool_instance_id()
+
     def _tool_panel_state_for_id(self, tool_id: str) -> dict[str, object]:
         return self._edit_tools.panel_state_for_id(tool_id)
+
+    def _tool_instance_state_for_id(self, instance_id: str) -> dict[str, object]:
+        return self._edit_tools.instance_state_for_id(instance_id)
+
+    def _set_tool_instance_state_in_stack(self, instance_id: str, settings: dict[str, object]) -> None:
+        self._edit_tools.set_instance_state(instance_id, settings)
 
     def _connect_edit_tool_panel_signals(self) -> None:
         self._edit_tools.connect_panel_signals()
@@ -1084,6 +1098,21 @@ class BoardController:
     def _remove_edit_tool_stack_index(self, idx: int) -> None:
         self._edit_tools.remove_stack_index(idx)
 
+    def _on_edit_tool_remove_panel_requested(self, panel: str) -> None:
+        self._edit_tools.remove_tool_panel(panel)
+
+    def _on_edit_tool_reset_panel_requested(self, panel: str) -> None:
+        self._edit_tools.reset_tool_panel_settings(panel)
+
+    def _on_edit_tool_move_instance_requested(self, instance_id: str, target_index: int) -> None:
+        self._edit_tools.move_tool_instance(instance_id, target_index)
+
+    def _on_edit_tool_instance_changed(self, instance_id: str) -> None:
+        self._edit_tools.on_tool_instance_changed(instance_id)
+
+    def _on_edit_tool_instance_selected(self, instance_id: str) -> None:
+        self._edit_tools.select_tool_instance(instance_id)
+
     def _on_edit_tool_stack_up_clicked(self) -> None:
         self._edit_tools.on_stack_up_clicked()
 
@@ -1133,6 +1162,9 @@ class BoardController:
 
     def _reset_edit_image_adjustments(self) -> None:
         self._edit_tools.reset_settings()
+
+    def _reset_selected_edit_tool_adjustments(self) -> None:
+        self._edit_tools.reset_selected_tool_settings()
 
     def _on_edit_preview_slider_pressed(self) -> None:
         self._edit_preview.on_slider_pressed()

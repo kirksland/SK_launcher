@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from typing import Optional
 
-from core.board_edit.panels import panel_state_map_for_tools, normalize_panel_state
+from core.board_edit.panels import normalize_panel_state
 from core.board_edit.session import EditVisualState, coerce_color_adjustments, default_tool_stack_for_kind, tool_stack_from_override
 from core.board_edit.tool_stack import (
     append_tool,
+    find_tool_entry_by_instance,
     make_tool_entry,
+    move_tool_to_index,
     move_tool,
     normalize_tool_entries,
     remove_tool_at,
     tool_stack_is_effective,
+    update_tool_instance_settings,
     upsert_tool_settings,
 )
 from core.board_scene.items import BoardImageItem, BoardVideoItem
@@ -68,8 +71,9 @@ class BoardEditToolsController:
                 continue
             tool_caps = get_board_tool(tool_id)
             has_scene = bool(getattr(tool_caps, "has_scene", False))
+            panel = str(getattr(spec, "ui_panel", "") or "").strip().lower()
             for control in getattr(spec, "ui_controls", ()):
-                slider = self.w.board_page.image_tool_control_slider(getattr(control, "key", ""))
+                slider = self.w.board_page.image_tool_control_slider(getattr(control, "key", ""), panel)
                 if slider is None:
                     continue
                 if has_scene:
@@ -131,6 +135,10 @@ class BoardEditToolsController:
         selected_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
         return self.tool_panel_for_id(selected_id)
 
+    def selected_tool_instance_id(self) -> str:
+        selected = self.selected_tool_entry()
+        return str(selected.get("instance_id", "")).strip() if isinstance(selected, dict) else ""
+
     def panel_state_for_id(self, tool_id: str) -> dict[str, object]:
         spec = get_edit_tool(tool_id)
         if spec is None:
@@ -140,6 +148,19 @@ class BoardEditToolsController:
             return {}
         raw_state = self.w.board_page.current_image_tool_panel_state(panel)
         return normalize_panel_state(tool_id, raw_state)
+
+    def instance_state_for_id(self, instance_id: str) -> dict[str, object]:
+        _idx, entry = find_tool_entry_by_instance(self.edit.stack, instance_id)
+        if entry is None:
+            return {}
+        settings = entry.get("settings", {})
+        return dict(settings) if isinstance(settings, dict) else {}
+
+    def set_instance_state(self, instance_id: str, settings: dict[str, object]) -> None:
+        entries, idx = update_tool_instance_settings(self.edit.stack, instance_id, settings)
+        self.edit.stack = entries
+        if idx >= 0:
+            self.edit.selected_index = idx
 
     def sync_values_from_stack(self) -> None:
         visual = self.visual_state()
@@ -159,17 +180,17 @@ class BoardEditToolsController:
             [(label, tool_id) for tool_id, label in self.edit.tool_defs]
         )
         rows = []
+        instances = []
         for entry in self.edit.stack:
             tool_id = str(entry.get("id", "tool")).strip().lower()
             enabled = bool(entry.get("enabled", True))
             rows.append((self.tool_label_for_id(tool_id), enabled))
+            item = dict(entry)
+            item["label"] = self.tool_label_for_id(tool_id)
+            instances.append(item)
         self.w.board_page.set_image_tool_stack_items(rows, self.edit.selected_index)
-        for panel, state in panel_state_map_for_tools(
-            (tool_id for tool_id, _label in self.edit.tool_defs),
-            self.edit.stack,
-        ).items():
-            self.w.board_page.set_image_tool_panel_state(panel, state)
-        self.w.board_page.set_active_image_tool_panel(self.selected_tool_panel())
+        self.w.board_page.set_image_tool_instances(instances)
+        self.w.board_page.set_selected_image_tool_instance(self.selected_tool_instance_id())
         self.board._refresh_focus_scene_handles()
 
     def current_stack(self) -> list[dict[str, object]]:
@@ -268,6 +289,14 @@ class BoardEditToolsController:
         self.edit.selected_index = int(row)
         self.sync_stack_ui()
 
+    def select_tool_instance(self, instance_id: str) -> None:
+        idx, entry = find_tool_entry_by_instance(self.edit.stack, instance_id)
+        if entry is None:
+            return
+        self.edit.selected_index = idx
+        self.w.board_page.set_selected_image_tool_instance(instance_id)
+        self.board._refresh_focus_scene_handles()
+
     def on_stack_add_clicked(self, tool_id: object = None) -> None:
         if self.board._edit_image_path is None:
             return
@@ -294,17 +323,109 @@ class BoardEditToolsController:
             return
         entries, next_idx = remove_tool_at(self.edit.stack, idx)
         self.edit.stack = entries
-        if not self.edit.stack:
-            self.edit.stack = self.default_stack()
-            self.edit.selected_index = 0 if self.edit.stack else -1
-        else:
-            self.edit.selected_index = next_idx
+        self.edit.selected_index = next_idx if self.edit.stack else -1
         self.sync_stack_ui()
         if isinstance(self.board._focus_item, BoardVideoItem):
             self.board._commit_current_focus_video_override()
             self.board._apply_scene_tool_to_focus_item()
             self.board._schedule_video_focus_preview(self.board._edit_video_playhead, immediate=True)
         else:
+            self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
+
+    def remove_tool_panel(self, panel: str) -> None:
+        key = str(panel or "").strip()
+        for idx, entry in enumerate(self.edit.stack):
+            if str(entry.get("instance_id", "")).strip() == key:
+                self.remove_stack_index(idx)
+                return
+
+    def reset_selected_tool_settings(self) -> None:
+        selected = self.selected_tool_entry()
+        tool_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
+        self.reset_tool_settings(tool_id)
+
+    def reset_tool_panel_settings(self, panel: str) -> None:
+        key = str(panel or "").strip()
+        for entry in self.edit.stack:
+            if str(entry.get("instance_id", "")).strip() == key:
+                self.reset_tool_instance_settings(key)
+                return
+
+    def reset_tool_instance_settings(self, instance_id: str) -> None:
+        idx, entry = find_tool_entry_by_instance(self.edit.stack, instance_id)
+        if entry is None:
+            return
+        tool_id = str(entry.get("id", "")).strip().lower()
+        spec = get_edit_tool(tool_id)
+        if spec is None:
+            return
+        state = dict(spec.default_state())
+        entries, next_idx = update_tool_instance_settings(self.edit.stack, instance_id, state)
+        self.edit.stack = entries
+        if next_idx >= 0:
+            self.edit.selected_index = next_idx
+        self.w.board_page.set_image_tool_instance_state(instance_id, state)
+        self.sync_values_from_stack()
+        self.board._apply_scene_tool_to_focus_item()
+        if isinstance(self.board._focus_item, BoardVideoItem):
+            self.board._commit_current_focus_video_override()
+            self.board._schedule_video_focus_preview(self.board._edit_video_playhead, immediate=True)
+            return
+        if isinstance(self.board._focus_item, BoardImageItem):
+            self.board._commit_current_focus_image_override()
+            self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
+
+    def move_tool_instance(self, instance_id: str, target_index: int) -> None:
+        source_idx, entry = find_tool_entry_by_instance(self.edit.stack, instance_id)
+        if entry is None:
+            return
+        entries, next_idx = move_tool_to_index(self.edit.stack, source_idx, int(target_index))
+        self.edit.stack = entries
+        self.edit.selected_index = next_idx
+        self.sync_stack_ui()
+        self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
+
+    def on_tool_instance_changed(self, instance_id: str) -> None:
+        idx, entry = find_tool_entry_by_instance(self.edit.stack, instance_id)
+        if entry is None:
+            return
+        tool_id = str(entry.get("id", "")).strip().lower()
+        state = self.w.board_page.current_image_tool_instance_state(instance_id)
+        entries, next_idx = update_tool_instance_settings(self.edit.stack, instance_id, state)
+        self.edit.stack = entries
+        self.edit.selected_index = next_idx if next_idx >= 0 else idx
+        self.w.board_page.set_selected_image_tool_instance(instance_id)
+        self.sync_values_from_stack()
+        tool_caps = get_board_tool(tool_id)
+        if tool_caps is not None and tool_caps.has_scene:
+            self.board._on_edit_scene_tool_panel_changed(tool_id)
+            return
+        self.board._commit_current_focus_image_override()
+        self.schedule_focus_image_preview()
+
+    def reset_tool_settings(self, tool_id: str) -> None:
+        tool_id = str(tool_id or "").strip().lower()
+        spec = get_edit_tool(tool_id)
+        if spec is None:
+            return
+        state = dict(spec.default_state())
+        panel = str(getattr(spec, "ui_panel", "") or "").strip().lower()
+        if panel:
+            self.w.board_page.set_image_tool_panel_state(panel, state)
+        self.set_tool_state(
+            tool_id,
+            state,
+            add_if_missing=True,
+            insert_at=getattr(spec, "stack_insert_at", None),
+        )
+        self.sync_values_from_stack()
+        self.board._apply_scene_tool_to_focus_item()
+        if isinstance(self.board._focus_item, BoardVideoItem):
+            self.board._commit_current_focus_video_override()
+            self.board._schedule_video_focus_preview(self.board._edit_video_playhead, immediate=True)
+            return
+        if isinstance(self.board._focus_item, BoardImageItem):
+            self.board._commit_current_focus_image_override()
             self.board._schedule_edit_preview_update(channel=str(self.board._edit_exr_channel or ""))
 
     def on_stack_up_clicked(self) -> None:

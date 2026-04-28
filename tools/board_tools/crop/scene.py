@@ -12,6 +12,7 @@ from core.board_edit.handles import (
     build_crop_handle_layout,
     hit_test_crop_handle,
 )
+from core.board_edit.tool_stack import extract_crop_settings
 from tools.board_tools.base import BoardToolSceneHost, BoardToolSceneRuntime
 
 
@@ -42,6 +43,47 @@ def is_crop_scene_target(item: object) -> bool:
 
 def crop_handles_active(item: object, selected_panel: str) -> bool:
     return str(selected_panel or "").strip().lower() == "crop" and is_crop_scene_target(item)
+
+
+def selected_crop_instance_id(host: BoardToolSceneHost) -> str:
+    instance_getter = getattr(host, "selected_tool_instance_id", None)
+    selected_entry_getter = getattr(host, "selected_tool_entry", None)
+    if callable(instance_getter) and callable(selected_entry_getter):
+        entry = selected_entry_getter()
+        if isinstance(entry, dict) and str(entry.get("id", "")).strip().lower() == TOOL_ID:
+            return str(instance_getter() or "").strip()
+    return ""
+
+
+def active_crop_settings(host: BoardToolSceneHost) -> dict[str, object]:
+    instance_id = selected_crop_instance_id(host)
+    instance_state = getattr(host, "tool_instance_state", None)
+    if instance_id and callable(instance_state):
+        return instance_state(instance_id)
+    return host.tool_panel_state(TOOL_ID)
+
+
+def update_active_crop_settings(
+    host: BoardToolSceneHost,
+    settings: dict[str, object],
+    *,
+    schedule_preview: bool,
+) -> None:
+    instance_id = selected_crop_instance_id(host)
+    instance_update = getattr(host, "update_scene_tool_instance_settings", None)
+    if instance_id and callable(instance_update):
+        instance_update(instance_id, settings, schedule_preview=schedule_preview)
+        return
+    host.update_scene_tool_settings(TOOL_ID, settings, schedule_preview=schedule_preview)
+
+
+def cumulative_crop_settings(host: BoardToolSceneHost) -> tuple[float, float, float, float]:
+    stack_getter = getattr(host, "current_tool_stack", None)
+    if callable(stack_getter):
+        crop = extract_crop_settings(stack_getter())
+        if crop is not None:
+            return crop
+    return crop_settings_tuple(active_crop_settings(host))
 
 
 def crop_settings_tuple(settings: object) -> tuple[float, float, float, float]:
@@ -185,13 +227,13 @@ def refresh_controller_handles(host: BoardToolSceneHost) -> None:
 
 
 def handle_panel_value_changed(host: BoardToolSceneHost) -> None:
-    panel_state = host.tool_panel_state(TOOL_ID)
+    panel_state = active_crop_settings(host)
     left = float(panel_state.get("left", 0.0))
     top = float(panel_state.get("top", 0.0))
     right = float(panel_state.get("right", 0.0))
     bottom = float(panel_state.get("bottom", 0.0))
-    host.update_scene_tool_settings(
-        TOOL_ID,
+    update_active_crop_settings(
+        host,
         {"left": left, "top": top, "right": right, "bottom": bottom},
         schedule_preview=True,
     )
@@ -210,7 +252,7 @@ def handle_mouse_press(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, even
         layout = state.layout
     if layout is None:
         return False
-    crop = crop_settings_tuple(host.tool_panel_state(TOOL_ID))
+    crop = crop_settings_tuple(active_crop_settings(host))
     state.drag = begin_crop_handle_drag(
         item,
         layout,
@@ -226,8 +268,8 @@ def handle_mouse_move(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, event
     if crop is None:
         return False
     left, top, right, bottom = crop
-    host.update_scene_tool_settings(
-        TOOL_ID,
+    update_active_crop_settings(
+        host,
         {"left": left, "top": top, "right": right, "bottom": bottom},
         schedule_preview=False,
     )
@@ -246,9 +288,11 @@ def handle_mouse_release(host: BoardToolSceneHost, scene_pos: QtCore.QPointF, ev
 
 def apply_to_focus_item(host: BoardToolSceneHost) -> bool:
     item = host.focus_item()
+    if not selected_crop_instance_id(host):
+        return False
     if not apply_crop_to_item(
         item,
-        crop_settings_tuple(host.tool_panel_state(TOOL_ID)),
+        cumulative_crop_settings(host),
     ):
         return False
     group = host.find_group_for_item(item)
