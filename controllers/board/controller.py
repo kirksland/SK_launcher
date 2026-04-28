@@ -642,14 +642,80 @@ class BoardController:
         selected = list(self._scene.selectedItems())
         if not selected:
             return
+        removable_assets = self._managed_asset_paths_for_items(selected)
         self.begin_scene_interaction(kind="delete_selection", history_label="Delete selection")
         try:
             for item in selected:
                 if item.scene() is self._scene:
                     self._scene.removeItem(item)
             self._prune_empty_groups()
+            self._delete_unreferenced_managed_assets(removable_assets)
         finally:
             self.end_scene_interaction(history=True, update_groups=True)
+
+    def _managed_asset_paths_for_items(self, items: list[QtWidgets.QGraphicsItem]) -> set[Path]:
+        if self._project_root is None:
+            return set()
+        assets_dir = self._project_root / ".skyforge_board_assets"
+        result: set[Path] = set()
+        for item in items:
+            kind = str(item.data(0) or "").strip().lower()
+            if kind not in {"image", "video"}:
+                continue
+            filename = str(item.data(1) or "").strip()
+            if not filename or Path(filename).name != filename:
+                continue
+            path = assets_dir / filename
+            if self._is_managed_board_asset(path):
+                result.add(path)
+        return result
+
+    def _is_managed_board_asset(self, path: Path) -> bool:
+        if self._project_root is None:
+            return False
+        assets_dir = self._project_root / ".skyforge_board_assets"
+        try:
+            path.resolve().relative_to(assets_dir.resolve())
+        except Exception:
+            return False
+        return True
+
+    def _scene_references_asset(self, path: Path) -> bool:
+        if self._project_root is None:
+            return False
+        try:
+            target = path.resolve()
+        except Exception:
+            target = path
+        assets_dir = self._project_root / ".skyforge_board_assets"
+        for item in self._scene.items():
+            kind = str(item.data(0) or "").strip().lower()
+            if kind not in {"image", "video"}:
+                continue
+            filename = str(item.data(1) or "").strip()
+            if not filename or Path(filename).name != filename:
+                continue
+            candidate = assets_dir / filename
+            try:
+                if candidate.resolve() == target:
+                    return True
+            except Exception:
+                if candidate == path:
+                    return True
+        return False
+
+    def _delete_unreferenced_managed_assets(self, paths: set[Path]) -> None:
+        for path in sorted(paths, key=lambda p: str(p).lower()):
+            if not self._is_managed_board_asset(path):
+                continue
+            if self._scene_references_asset(path):
+                continue
+            try:
+                if path.exists() and path.is_file():
+                    path.unlink()
+                    self._image_exr_display_overrides.pop(path.name, None)
+            except Exception as exc:
+                self._notify(f"Failed to delete unused board asset:\n{path.name}\n{exc}")
 
     def remove_selected_from_groups(self) -> None:
         self._group_actions.remove_selected_from_groups()

@@ -295,6 +295,10 @@ class BoardEditToolsController:
             return
         self.edit.selected_index = idx
         self.w.board_page.set_selected_image_tool_instance(instance_id)
+        try:
+            self.w.board_page.view.setFocus()
+        except Exception:
+            pass
         self.board._refresh_focus_scene_handles()
 
     def on_stack_add_clicked(self, tool_id: object = None) -> None:

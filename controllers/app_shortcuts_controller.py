@@ -22,7 +22,6 @@ TEXT_INPUT_TYPES = (
     QtWidgets.QLineEdit,
     QtWidgets.QTextEdit,
     QtWidgets.QPlainTextEdit,
-    QtWidgets.QAbstractSpinBox,
     QtWidgets.QComboBox,
 )
 
@@ -116,6 +115,14 @@ class AppShortcutsController:
 
     def _text_input_has_focus(self) -> bool:
         focus_widget = QtWidgets.QApplication.focusWidget()
+        if isinstance(focus_widget, QtWidgets.QAbstractSpinBox):
+            return False
+        if isinstance(focus_widget, QtWidgets.QLineEdit):
+            parent = focus_widget.parent()
+            while parent is not None:
+                if isinstance(parent, QtWidgets.QAbstractSpinBox):
+                    return False
+                parent = parent.parent()
         return isinstance(focus_widget, TEXT_INPUT_TYPES)
 
     def _active_focus_kind(self) -> str:
