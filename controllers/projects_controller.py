@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.commands import ActionContext, ActionResolver, ActionRule
 from core.dcc import (
     DEFAULT_NEW_PROJECT_DCC,
     DccCreateContext,
@@ -31,7 +32,13 @@ from core.project_runtime import (
     create_project_structure,
 )
 from core.watchers import update_watcher_paths
+from ui.utils.context_menu import exec_context_menu
 from ui.widgets.project_card import ProjectCard
+
+
+PROJECT_DETAIL_ACTION_RULES = (
+    ActionRule("projects.send_to_board", targets=("projects.detail_tree",), when="has_paths"),
+)
 
 
 class ProjectsController:
@@ -406,17 +413,35 @@ class ProjectsController:
         index = tree.indexAt(pos)
         if index.isValid() and not tree.selectionModel().isSelected(index):
             tree.setCurrentIndex(index)
-        menu = QtWidgets.QMenu(tree)
-        send_action = menu.addAction("Send To Board")
-        action = menu.exec(tree.viewport().mapToGlobal(pos))
-        if action != send_action:
+        paths = self._selected_project_detail_paths()
+        if not paths:
             return
+        command_controller = getattr(self.w, "command_controller", None)
+        shortcuts_controller = getattr(self.w, "shortcuts_controller", None)
+        if command_controller is None:
+            return
+        context = ActionContext(
+            scope="projects",
+            target="projects.detail_tree",
+            metadata={"paths": tuple(paths), "has_paths": bool(paths)},
+        )
+        actions = ActionResolver(
+            command_controller.registry,
+            getattr(shortcuts_controller, "installed_bindings", ()),
+            PROJECT_DETAIL_ACTION_RULES,
+        ).resolve(context)
+        command_id = exec_context_menu(tree, actions, tree.viewport().mapToGlobal(pos))
+        if command_id:
+            command_controller.execute(command_id, context.to_command_context())
+
+    def _selected_project_detail_paths(self) -> list[Path]:
+        tree = self.w.project_detail_tree
         selection = tree.selectionModel()
         if selection is None:
-            return
+            return []
         rows = selection.selectedRows(0)
         if not rows:
-            return
+            return []
         paths: list[Path] = []
         seen: set[Path] = set()
         model = tree.model()
@@ -434,10 +459,7 @@ class ProjectsController:
                 continue
             seen.add(path)
             paths.append(path)
-        if not paths:
-            return
-        if hasattr(self.w, "board_controller"):
-            self.w.board_controller.add_paths_from_selection(paths)
+        return paths
 
     def _scan_dir_entries(self, path: Path) -> list[tuple[str, bool]]:
         cached = self._dir_cache.get(path)

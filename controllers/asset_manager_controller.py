@@ -6,6 +6,7 @@ from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.commands import ActionContext, ActionResolver, ActionRule
 from core.asset_detection import DetectedProjectLayout
 from core.asset_selection import resolve_entity_record_for_path, resolve_entity_type_for_path
 from core.asset_layout import EntityRecord, ResolvedAssetLayout
@@ -14,8 +15,16 @@ from controllers.asset_browser_panel_controller import AssetBrowserPanelControll
 from controllers.asset_details_panel_controller import AssetDetailsPanelController
 from controllers.asset_project_context_controller import AssetProjectContextController
 from controllers.asset_refresh_controller import AssetRefreshController
+from ui.utils.context_menu import exec_context_menu
 from ui.utils.thumbnails import build_thumbnail_pixmap, load_media_pixmap
 from ui.widgets.asset_version_row import AssetVersionRow
+
+
+ASSET_CONTEXT_ACTION_RULES = (
+    ActionRule("asset.copy_path", targets=("asset.inventory",), when="has_path"),
+    ActionRule("asset.copy_path", targets=("asset.entity_list",), when="has_path", label="Copy Asset Path"),
+    ActionRule("asset.copy_path", targets=("asset.project_grid",), when="has_path", label="Copy Project Path"),
+)
 
 
 class AssetManagerController:
@@ -240,14 +249,14 @@ class AssetManagerController:
             path_text = str(path) if path else ""
         if not path_text or not isinstance(path_text, str):
             return
-        menu = QtWidgets.QMenu(self.w)
         label = "Copy Path" if kind not in ("usd", "video", "image") else f"Copy {str(kind).upper()} Path"
-        action = menu.addAction(label)
-        chosen = menu.exec(self.w.asset_inventory_list.mapToGlobal(pos))
-        if chosen == action:
-            normalized = self.w._to_houdini_path(path_text)
-            QtWidgets.QApplication.clipboard().setText(normalized)
-            self.set_asset_status(f"Copied: {normalized}")
+        self._exec_asset_context_menu(
+            self.w.asset_inventory_list,
+            pos,
+            target="asset.inventory",
+            path=path_text,
+            label=label,
+        )
 
     def show_asset_context_menu(self, pos: QtCore.QPoint) -> None:
         sender = self.w.sender()
@@ -255,29 +264,62 @@ class AssetManagerController:
         item = list_widget.itemAt(pos)
         if item is None:
             return
-        menu = QtWidgets.QMenu(self.w)
-        action = menu.addAction("Copy Asset Path")
-        chosen = menu.exec(list_widget.mapToGlobal(pos))
-        if chosen == action:
-            path = str(item.data(QtCore.Qt.ItemDataRole.UserRole))
-            normalized = self.w._to_houdini_path(path)
-            QtWidgets.QApplication.clipboard().setText(normalized)
-            self.set_asset_status(f"Copied: {normalized}")
+        path = str(item.data(QtCore.Qt.ItemDataRole.UserRole))
+        self._exec_asset_context_menu(
+            list_widget,
+            pos,
+            target="asset.entity_list",
+            path=path,
+            label="Copy Asset Path",
+        )
 
     def show_asset_manager_context_menu(self, pos: QtCore.QPoint) -> None:
         item = self.w.asset_grid.itemAt(pos)
         if item is None:
             return
-        menu = QtWidgets.QMenu(self.w)
-        action = menu.addAction("Copy Project Path")
-        chosen = menu.exec(self.w.asset_grid.mapToGlobal(pos))
-        if chosen == action:
-            path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
-            if not path_text:
-                return
-            normalized = self.w._to_houdini_path(str(path_text))
-            QtWidgets.QApplication.clipboard().setText(normalized)
-            self.set_asset_status(f"Copied: {normalized}")
+        path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if not path_text:
+            return
+        self._exec_asset_context_menu(
+            self.w.asset_grid,
+            pos,
+            target="asset.project_grid",
+            path=str(path_text),
+            label="Copy Project Path",
+        )
+
+    def _exec_asset_context_menu(
+        self,
+        widget: QtWidgets.QWidget,
+        pos: QtCore.QPoint,
+        *,
+        target: str,
+        path: str,
+        label: str,
+    ) -> None:
+        command_controller = getattr(self.w, "command_controller", None)
+        shortcuts_controller = getattr(self.w, "shortcuts_controller", None)
+        if command_controller is None:
+            return
+        context = ActionContext(
+            scope="asset_manager",
+            target=target,
+            metadata={"path": path, "has_path": bool(path)},
+        )
+        rules = tuple(
+            ActionRule(rule.command_id, targets=rule.targets, when=rule.when, label=label)
+            if target in rule.targets
+            else rule
+            for rule in ASSET_CONTEXT_ACTION_RULES
+        )
+        actions = ActionResolver(
+            command_controller.registry,
+            getattr(shortcuts_controller, "installed_bindings", ()),
+            rules,
+        ).resolve(context)
+        command_id = exec_context_menu(widget, actions, widget.mapToGlobal(pos))
+        if command_id:
+            command_controller.execute(command_id, context.to_command_context())
 
     def _rebuild_asset_entity_lists(self, target: str) -> None:
         self._browser_panel.rebuild_entity_lists(target)

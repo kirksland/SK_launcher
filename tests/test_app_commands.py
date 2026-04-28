@@ -7,6 +7,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from core.commands import (
     AppCommand,
+    ActionContext,
+    ActionResolver,
+    ActionRule,
     CommandContext,
     CommandRegistry,
     CommandResult,
@@ -15,8 +18,10 @@ from core.commands import (
     find_shortcut_conflicts,
 )
 from controllers.app_command_controller import AppCommandController
+from controllers.asset_command_dispatcher import AssetCommandDispatcher
 from controllers.board.command_dispatcher import BoardCommandDispatcher
 from controllers.app_shortcuts_controller import AppShortcutsController, should_block_shortcut_for_text_input
+from controllers.projects_command_dispatcher import ProjectsCommandDispatcher
 from core.commands.registry import validate_command
 from core.commands.shortcuts import normalize_shortcut_sequence
 from core.commands.scopes import scopes_overlap
@@ -169,6 +174,129 @@ class AppCommandTests(unittest.TestCase):
         self.assertTrue(ungroup_result.handled)
         self.assertEqual(["toggle_group", "group", "ungroup"], board.calls)
 
+    def test_board_command_dispatcher_executes_context_actions(self) -> None:
+        board = _FakeBoardController()
+        dispatcher = BoardCommandDispatcher(board)
+
+        note_result = dispatcher.execute_command(
+            "board.add.note",
+            CommandContext("board", metadata={"scene_pos": "scene-pos"}),
+        )
+        convert_result = dispatcher.execute_command(
+            "board.media.convert_video_to_sequence",
+            CommandContext("board", metadata={"item": "video-item"}),
+        )
+        remove_result = dispatcher.execute_command("board.group.remove_selected")
+
+        self.assertTrue(note_result.handled)
+        self.assertTrue(convert_result.handled)
+        self.assertTrue(remove_result.handled)
+        self.assertEqual(
+            ["note:scene-pos", "convert_video:video-item", "remove_from_group"],
+            board.calls,
+        )
+
+    def test_action_resolver_lists_context_actions_with_shortcuts(self) -> None:
+        registry = CommandRegistry(
+            [
+                _command("board.layout.auto", "board", ("I",)),
+                _command("board.group.create", "board", ("Ctrl+G",)),
+                _command("board.group.ungroup", "board", ("Ctrl+Shift+G",)),
+                _command("projects.open", "projects", ("Enter",), domain="projects"),
+            ]
+        )
+        bindings = build_shortcut_bindings(registry.list())
+        resolver = ActionResolver(
+            registry,
+            bindings,
+            [
+                ActionRule("board.layout.auto", targets=("board.viewport",)),
+                ActionRule("board.group.create", targets=("board.viewport",), when="can_group"),
+                ActionRule("board.group.ungroup", targets=("board.viewport",), when="has_group"),
+                ActionRule("projects.open", targets=("board.viewport",)),
+            ],
+        )
+
+        actions = resolver.resolve(
+            ActionContext(
+                "board",
+                target="board.viewport",
+                metadata={"can_group": True, "has_group": False},
+            )
+        )
+
+        by_id = {action.command_id: action for action in actions}
+        self.assertEqual(["board.group.create", "board.layout.auto"], sorted(by_id))
+        self.assertEqual("Ctrl+G", by_id["board.group.create"].shortcut)
+        self.assertEqual("I", by_id["board.layout.auto"].shortcut)
+
+    def test_action_resolver_supports_contextual_rule_labels(self) -> None:
+        registry = CommandRegistry([_command("board.item.open", "board")])
+        resolver = ActionResolver(
+            registry,
+            [],
+            [
+                ActionRule("board.item.open", targets=("board.groups_tree",), when="kind=image", label="Edit Image"),
+                ActionRule("board.item.open", targets=("board.groups_tree",), when="kind=video", label="Open Video"),
+            ],
+        )
+
+        actions = resolver.resolve(ActionContext("board", target="board.groups_tree", metadata={"kind": "video"}))
+
+        self.assertEqual(["Open Video"], [action.label for action in actions])
+
+    def test_board_command_dispatcher_executes_group_tree_actions(self) -> None:
+        board = _FakeBoardController()
+        dispatcher = BoardCommandDispatcher(board)
+
+        add_result = dispatcher.execute_command(
+            "board.group.add_selected_to_group",
+            CommandContext("board", metadata={"group_key": 42}),
+        )
+        open_result = dispatcher.execute_command(
+            "board.item.open",
+            CommandContext("board", metadata={"kind": "video", "item": "video-item"}),
+        )
+        rename_result = dispatcher.execute_command(
+            "board.item.rename",
+            CommandContext("board", metadata={"tree_item": "tree-item", "info": ("image", 1)}),
+        )
+
+        self.assertTrue(add_result.handled)
+        self.assertTrue(open_result.handled)
+        self.assertTrue(rename_result.handled)
+        self.assertEqual(
+            ["add_to_group:42", "open_media:video-item", "rename:tree-item:('image', 1)"],
+            board.calls,
+        )
+
+    def test_projects_command_dispatcher_sends_selection_to_board(self) -> None:
+        projects = _FakeProjectsController()
+        dispatcher = ProjectsCommandDispatcher(projects)
+
+        result = dispatcher.execute_command(
+            "projects.send_to_board",
+            CommandContext("projects", metadata={"paths": ("C:/project/a.png", "C:/project/b.mov")}),
+        )
+
+        self.assertTrue(result.handled)
+        self.assertEqual(["C:\\project\\a.png", "C:\\project\\b.mov"], [str(path) for path in projects.w.board_controller.paths])
+
+    def test_asset_command_dispatcher_copies_normalized_path(self) -> None:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        _ = app
+        asset = _FakeAssetController()
+        dispatcher = AssetCommandDispatcher(asset)
+
+        result = dispatcher.execute_command(
+            "asset.copy_path",
+            CommandContext("asset_manager", metadata={"path": "C:\\project\\asset\\tree.usd"}),
+        )
+
+        self.assertTrue(result.handled)
+        self.assertEqual("C:/project/asset/tree.usd", QtWidgets.QApplication.clipboard().text())
+        self.assertEqual(["Copied: C:/project/asset/tree.usd"], asset.statuses)
+
     def test_app_command_controller_reports_missing_dispatcher(self) -> None:
         controller = AppCommandController()
 
@@ -312,6 +440,63 @@ class _FakeBoardController:
 
     def ungroup_selected(self) -> None:
         self.calls.append("ungroup")
+
+    def remove_selected_from_groups(self) -> None:
+        self.calls.append("remove_from_group")
+
+    def add_note_at(self, scene_pos) -> None:
+        self.calls.append(f"note:{scene_pos}")
+
+    def convert_video_to_sequence(self, item) -> None:
+        self.calls.append(f"convert_video:{item}")
+
+    def add_selected_to_group(self, group_key: int) -> None:
+        self.calls.append(f"add_to_group:{group_key}")
+
+    def open_image_item(self, item) -> None:
+        self.calls.append(f"open_image:{item}")
+
+    def open_media_item(self, item) -> None:
+        self.calls.append(f"open_media:{item}")
+
+    def edit_note(self, item) -> None:
+        self.calls.append(f"edit_note:{item}")
+
+    def begin_group_tree_rename(self, item, info) -> None:
+        self.calls.append(f"rename:{item}:{info}")
+
+
+class _FakeProjectBoardController:
+    def __init__(self) -> None:
+        self.paths = []
+
+    def add_paths_from_selection(self, paths) -> None:
+        self.paths.extend(paths)
+
+
+class _FakeProjectsWindow:
+    def __init__(self) -> None:
+        self.board_controller = _FakeProjectBoardController()
+
+
+class _FakeProjectsController:
+    def __init__(self) -> None:
+        self.w = _FakeProjectsWindow()
+
+
+class _FakeAssetWindow:
+    @staticmethod
+    def _to_houdini_path(text: str) -> str:
+        return text.replace("\\", "/")
+
+
+class _FakeAssetController:
+    def __init__(self) -> None:
+        self.w = _FakeAssetWindow()
+        self.statuses = []
+
+    def set_asset_status(self, text: str) -> None:
+        self.statuses.append(text)
 
 
 if __name__ == "__main__":

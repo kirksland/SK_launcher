@@ -32,10 +32,12 @@ from core.settings import (
 from core.houdini_env import build_houdini_env
 from core.project_storage import prune_local_runtime_cache
 from controllers.asset_manager_controller import AssetManagerController
+from controllers.asset_command_dispatcher import AssetCommandDispatcher
 from controllers.asset_pipeline_panel_controller import AssetPipelinePanelController
 from controllers.app_command_controller import AppCommandController
 from controllers.app_shortcuts_controller import AppShortcutsController
 from controllers.projects_controller import ProjectsController
+from controllers.projects_command_dispatcher import ProjectsCommandDispatcher
 from controllers.client_controller import ClientController
 from controllers.process_controller import ProcessController
 from controllers.board.command_dispatcher import BoardCommandDispatcher
@@ -907,6 +909,8 @@ class LauncherWindow(QtWidgets.QMainWindow):
             return
         self._runtime_connections_installed = True
         self.command_controller.register_dispatcher("board", BoardCommandDispatcher(self.board_controller))
+        self.command_controller.register_dispatcher("projects", ProjectsCommandDispatcher(self.project_controller))
+        self.command_controller.register_dispatcher("asset", AssetCommandDispatcher(self.asset_controller))
         self.shortcuts_controller = AppShortcutsController(self, self.command_controller, self.settings)
         self.shortcuts_controller.install()
         self._install_shortcut_event_filters()

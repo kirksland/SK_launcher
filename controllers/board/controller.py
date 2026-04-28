@@ -1514,6 +1514,9 @@ class BoardController:
     def show_groups_tree_context_menu(self, pos: QtCore.QPoint) -> bool:
         return self._groups_panel.show_context_menu(pos)
 
+    def begin_group_tree_rename(self, item: QtWidgets.QTreeWidgetItem, info: tuple) -> None:
+        self._groups_panel.begin_inline_rename(item, info)
+
     def rename_group_tree_entry(self, info: tuple, desired_name: Optional[str] = None) -> bool:
         if not self._ui_alive():
             return False

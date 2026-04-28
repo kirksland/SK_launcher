@@ -64,6 +64,30 @@ def project_card_menu_style() -> str:
     )
 
 
+def menu_dark_style() -> str:
+    return (
+        "QMenu {"
+        f"background: {PALETTE['panel_bg']};"
+        f"color: {PALETTE['text']};"
+        f"border: 1px solid {PALETTE['border']};"
+        "}"
+        "QMenu::item {"
+        "padding: 5px 28px 5px 12px;"
+        "}"
+        "QMenu::item:selected {"
+        "background: #323741;"
+        "}"
+        "QMenu::item:disabled {"
+        f"color: {PALETTE['muted']};"
+        "}"
+        "QMenu::separator {"
+        f"background: {PALETTE['border']};"
+        "height: 1px;"
+        "margin: 4px 8px;"
+        "}"
+    )
+
+
 def project_card_version_combo_style() -> str:
     return (
         "QComboBox {"

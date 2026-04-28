@@ -5,6 +5,7 @@ from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.commands import ActionContext, ActionResolver, ActionRule
 from core.board_scene.groups import (
     editable_name_for_tree_path,
     find_scene_item_for_tree_info,
@@ -18,8 +19,23 @@ from core.board_scene.groups import (
     tree_path_for_info,
 )
 from core.board_scene.items import BoardNoteItem
+from ui.utils.context_menu import exec_context_menu
 
 PIC_EXTS = {".pic", ".picnc"}
+
+BOARD_GROUPS_TREE_ACTION_RULES = (
+    ActionRule("board.group.add_selected_to_group", targets=("board.groups_tree",), when="add_to_group"),
+    ActionRule("board.group.ungroup", targets=("board.groups_tree",), when="ungroup"),
+    ActionRule("board.item.open", targets=("board.groups_tree",), when="kind=image", label="Edit Image"),
+    ActionRule("board.item.open", targets=("board.groups_tree",), when="kind=video", label="Open Video"),
+    ActionRule("board.item.open", targets=("board.groups_tree",), when="kind=sequence", label="Open Sequence"),
+    ActionRule("board.item.open", targets=("board.groups_tree",), when="kind=note", label="Edit Note"),
+    ActionRule("board.media.convert_video_to_sequence", targets=("board.groups_tree",), when="convert_video"),
+    ActionRule("board.item.rename", targets=("board.groups_tree",), when="rename_entry"),
+    ActionRule("board.path.copy", targets=("board.groups_tree",), when="copy_path"),
+    ActionRule("board.media.convert_picnc", targets=("board.groups_tree",), when="convert_pic"),
+    ActionRule("board.group.remove_selected", targets=("board.groups_tree",), when="remove_from_group"),
+)
 
 
 class BoardGroupsController:
@@ -251,87 +267,34 @@ class BoardGroupsController:
         kind = str(info[0])
         path = self.tree_info_path(info)
         flags = group_tree_menu_flags(info, tree_path=path, pic_exts=set(PIC_EXTS))
-        menu = QtWidgets.QMenu(tree)
-        add_to_group = None
-        remove_from_group = None
-        ungroup = None
-        open_item = None
-        convert_video = None
-        convert_pic = None
-        rename_entry = None
-        copy_path = None
-
-        if flags.get("add_to_group"):
-            add_to_group = menu.addAction("Add Selected To Group")
-        if flags.get("ungroup"):
-            ungroup = menu.addAction("Ungroup")
-        elif flags.get("open_item"):
-            if kind == "image":
-                open_item = menu.addAction("Edit Image")
-            elif kind == "video":
-                open_item = menu.addAction("Open Video")
-            elif kind == "sequence":
-                open_item = menu.addAction("Open Sequence")
-            elif kind == "note":
-                open_item = menu.addAction("Edit Note")
-            if flags.get("convert_video"):
-                convert_video = menu.addAction("Convert Video To Sequence")
-            if flags.get("rename_entry"):
-                rename_entry = menu.addAction("Rename...")
-                if flags.get("copy_path"):
-                    copy_path = menu.addAction("Copy Path")
-                if flags.get("convert_pic"):
-                    convert_pic = menu.addAction("Convert PICNC...")
-            if flags.get("remove_from_group"):
-                remove_from_group = menu.addAction("Remove From Group")
-        else:
+        if not (flags.get("add_to_group") or flags.get("ungroup") or flags.get("open_item")):
             return False
+        target = self.find_scene_item_for_tree_info(info) if flags.get("open_item") else None
+        metadata = {
+            **flags,
+            "info": info,
+            "tree_item": item,
+            "kind": kind,
+            "path": path,
+        }
+        if kind == "group":
+            metadata["group_key"] = info[1]
+        if target is not None:
+            metadata["item"] = target
 
-        action = menu.exec(tree.mapToGlobal(pos))
-        if action is None:
-            return True
-        if action == add_to_group:
-            self.add_selected_to_group(info[1])
-            return True
-        if action == ungroup:
-            self.select_tree_info_target(info)
-            self.board.ungroup_selected()
-            return True
-        if action == remove_from_group:
-            self.select_tree_info_target(info)
-            self.board.remove_selected_from_groups()
-            return True
-        if action == open_item:
-            target = self.find_scene_item_for_tree_info(info)
-            if target is None:
-                self.board._notify("Item not found.")
-                return True
-            if kind == "image":
-                self.board.open_image_item(target)
-            elif kind in ("video", "sequence"):
-                self.board.open_media_item(target)
-            elif kind == "note" and isinstance(target, BoardNoteItem):
-                self.board.edit_note(target)
-            return True
-        if action == convert_video:
-            target = self.find_scene_item_for_tree_info(info)
-            if target is not None:
-                self.board.convert_video_to_sequence(target)
-            return True
-        if action == convert_pic:
-            src_path = self.tree_info_path(info)
-            if src_path is not None:
-                self.board.convert_picnc_interactive(src_path)
-            return True
-        if action == rename_entry:
-            self._begin_inline_rename(item, info)
-            return True
-        if action == copy_path:
-            path = self.tree_info_path(info)
-            if path is not None:
-                QtWidgets.QApplication.clipboard().setText(str(path))
-                self.board._notify(f"Copied: {path}")
-            return True
+        command_controller = getattr(self.w, "command_controller", None)
+        shortcuts_controller = getattr(self.w, "shortcuts_controller", None)
+        if command_controller is None:
+            return False
+        context = ActionContext(scope="board", target="board.groups_tree", metadata=metadata)
+        actions = ActionResolver(
+            command_controller.registry,
+            getattr(shortcuts_controller, "installed_bindings", ()),
+            BOARD_GROUPS_TREE_ACTION_RULES,
+        ).resolve(context)
+        command_id = exec_context_menu(tree, actions, tree.mapToGlobal(pos))
+        if command_id:
+            command_controller.execute(command_id, context.to_command_context())
         return True
 
     def _on_tree_clicked(self, item: QtWidgets.QTreeWidgetItem) -> None:
@@ -391,6 +354,9 @@ class BoardGroupsController:
                 return
 
         QtCore.QTimer.singleShot(0, _open_editor)
+
+    def begin_inline_rename(self, item: QtWidgets.QTreeWidgetItem, info: tuple) -> None:
+        self._begin_inline_rename(item, info)
 
     def _on_tree_item_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         if not self.board._ui_alive():

@@ -4,6 +4,23 @@ from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from core.commands import ActionContext, ActionResolver, ActionRule
+from ui.utils.context_menu import exec_context_menu
+
+
+BOARD_VIEWPORT_ACTION_RULES = (
+    ActionRule("board.add.image", targets=("board.viewport",)),
+    ActionRule("board.add.video", targets=("board.viewport",)),
+    ActionRule("board.add.sequence", targets=("board.viewport",)),
+    ActionRule("board.add.note", targets=("board.viewport",)),
+    ActionRule("board.media.convert_picnc", targets=("board.viewport",), separator_before=True),
+    ActionRule("board.media.convert_video_to_sequence", targets=("board.viewport",), when="single_video"),
+    ActionRule("board.group.create", targets=("board.viewport",), when="can_group", separator_before=True),
+    ActionRule("board.layout.auto", targets=("board.viewport",)),
+    ActionRule("board.group.remove_selected", targets=("board.viewport",), when="has_group_members"),
+    ActionRule("board.group.ungroup", targets=("board.viewport",), when="has_group"),
+)
+
 
 class BoardView(QtWidgets.QGraphicsView):
     def __init__(self, scene: QtWidgets.QGraphicsScene, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -278,7 +295,6 @@ class BoardView(QtWidgets.QGraphicsView):
         controller = self._resolve_controller()
         if controller is None:
             return
-        menu = QtWidgets.QMenu(self)
         selected = self.scene().selectedItems()
         selected_kinds = {getattr(i, "data", lambda _k: None)(0) for i in selected}
         has_group = "group" in selected_kinds
@@ -286,50 +302,32 @@ class BoardView(QtWidgets.QGraphicsView):
         has_group_members = bool(selected_items)
         can_group = len(selected_items) >= 2
         single_video = len(selected_items) == 1 and selected_items[0].data(0) == "video"
-
-        add_image = menu.addAction("Add Image...")
-        add_video = menu.addAction("Add Video...")
-        add_sequence = menu.addAction("Add Image Sequence...")
-        add_note = menu.addAction("Add Note")
-        convert_picnc = menu.addAction("Convert PICNC...")
+        metadata = {
+            "scene_pos": self.mapToScene(view_pos),
+            "selected_items": tuple(selected_items),
+            "selected_kinds": tuple(str(kind) for kind in selected_kinds if kind),
+            "has_group": has_group,
+            "has_group_members": has_group_members,
+            "can_group": can_group,
+            "single_video": single_video,
+        }
         if single_video:
-            convert_video = menu.addAction("Convert Video To Sequence")
-        else:
-            convert_video = None
-        if can_group:
-            add_group = menu.addAction("Group Selection")
-        else:
-            add_group = None
-        auto_layout = menu.addAction("Auto Layout")
-        if has_group_members:
-            remove_from_group = menu.addAction("Remove From Group")
-        else:
-            remove_from_group = None
-        if has_group:
-            ungroup = menu.addAction("Ungroup")
-        else:
-            ungroup = None
-        action = menu.exec(global_pos)
-        if action == add_image and hasattr(controller, "add_image"):
-            controller.add_image()
-        elif action == add_video and hasattr(controller, "add_video"):
-            controller.add_video()
-        elif action == add_sequence and hasattr(controller, "add_sequence"):
-            controller.add_sequence()
-        elif action == add_note and hasattr(controller, "add_note_at"):
-            controller.add_note_at(self.mapToScene(view_pos))
-        elif action == convert_picnc and hasattr(controller, "convert_picnc_interactive"):
-            controller.convert_picnc_interactive()
-        elif convert_video is not None and action == convert_video and hasattr(controller, "convert_video_to_sequence"):
-            controller.convert_video_to_sequence(selected_items[0])
-        elif add_group is not None and action == add_group and hasattr(controller, "add_group"):
-            controller.add_group()
-        elif action == auto_layout and hasattr(controller, "layout_selection_grid"):
-            controller.layout_selection_grid()
-        elif remove_from_group is not None and action == remove_from_group and hasattr(controller, "remove_selected_from_groups"):
-            controller.remove_selected_from_groups()
-        elif ungroup is not None and action == ungroup and hasattr(controller, "ungroup_selected"):
-            controller.ungroup_selected()
+            metadata["item"] = selected_items[0]
+
+        window = getattr(controller, "w", None) or self.window()
+        command_controller = getattr(window, "command_controller", None)
+        shortcuts_controller = getattr(window, "shortcuts_controller", None)
+        if command_controller is None:
+            return
+        context = ActionContext(scope="board", target="board.viewport", metadata=metadata)
+        actions = ActionResolver(
+            command_controller.registry,
+            getattr(shortcuts_controller, "installed_bindings", ()),
+            BOARD_VIEWPORT_ACTION_RULES,
+        ).resolve(context)
+        command_id = exec_context_menu(self, actions, global_pos)
+        if command_id:
+            command_controller.execute(command_id, context.to_command_context())
 
     def _on_groups_tree_menu(self, pos: QtCore.QPoint) -> None:
         controller = self._resolve_controller()
