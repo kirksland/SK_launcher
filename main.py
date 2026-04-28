@@ -417,8 +417,17 @@ class LauncherWindow(QtWidgets.QMainWindow):
         layout.setSpacing(0)
         outer.addWidget(main_panel, 1)
 
+        self.page_host = QtWidgets.QMainWindow(main_panel)
+        self.page_host.setWindowFlags(QtCore.Qt.WindowType.Widget)
+        self.page_host.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.page_host.setStyleSheet(app_stylesheet())
+        layout.addWidget(self.page_host, 1)
+
         self.pages = QtWidgets.QStackedWidget()
-        layout.addWidget(self.pages, 1)
+        self.page_host.setCentralWidget(self.pages)
 
         from ui.pages.client_page import ClientPage
         from ui.pages.projects_page import ProjectsPage
@@ -439,9 +448,13 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._startup_status("Loading board tools...")
         self.board_page = BoardPage(parent=self)
         self.pages.addWidget(self.board_page)
+        self._page_docks: dict[str, QtWidgets.QDockWidget] = {}
+        self._page_dock_pages: dict[str, int] = {}
+        self._page_dock_desired: dict[str, bool] = {}
 
         self.client_page = ClientPage(parent=self)
         self.pages.addWidget(self.client_page)
+        self._setup_page_docks()
 
         self.settings_page = SettingsPage(
             self.projects_dir,
@@ -723,6 +736,146 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.board_controller.set_project(None)
         self._layout_overlay_panels()
 
+    def _setup_page_docks(self) -> None:
+        self.page_host.setDockOptions(
+            self.page_host.dockOptions()
+            | QtWidgets.QMainWindow.DockOption.AllowNestedDocks
+            | QtWidgets.QMainWindow.DockOption.AllowTabbedDocks
+            | QtWidgets.QMainWindow.DockOption.AnimatedDocks
+        )
+        specs = (
+            (0, "projects.detail", "Project Details", self.projects_page.detail_panel, QtCore.Qt.DockWidgetArea.RightDockWidgetArea, False),
+            (2, "board.groups", "Groups", self.board_page.groups_panel, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, True),
+            (2, "board.edit", "Edit", self.board_page.edit_panel, QtCore.Qt.DockWidgetArea.RightDockWidgetArea, False),
+            (2, "board.timeline", "Timeline", self.board_page.edit_timeline_bar, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, False),
+            (3, "clients.sync", "Client Sync", self.client_page.sync_panel, QtCore.Qt.DockWidgetArea.RightDockWidgetArea, True),
+        )
+        for page_index, pane_id, title, widget, area, initial_visible in specs:
+            self._register_page_dock(page_index, pane_id, title, widget, area, initial_visible=initial_visible)
+        self.page_host.resizeDocks([self._page_docks["board.groups"]], [240], QtCore.Qt.Orientation.Horizontal)
+        self.page_host.resizeDocks([self._page_docks["board.edit"]], [360], QtCore.Qt.Orientation.Horizontal)
+        self.page_host.resizeDocks([self._page_docks["board.timeline"]], [180], QtCore.Qt.Orientation.Vertical)
+        self.page_host.resizeDocks([self._page_docks["projects.detail"]], [320], QtCore.Qt.Orientation.Horizontal)
+        self.page_host.resizeDocks([self._page_docks["clients.sync"]], [480], QtCore.Qt.Orientation.Horizontal)
+        self._sync_page_dock_visibility()
+
+    def _register_page_dock(
+        self,
+        page_index: int,
+        pane_id: str,
+        title: str,
+        widget: QtWidgets.QWidget,
+        area: QtCore.Qt.DockWidgetArea,
+        *,
+        initial_visible: bool,
+    ) -> QtWidgets.QDockWidget:
+        widget.setVisible(True)
+        if pane_id in self._page_docks:
+            return self._page_docks[pane_id]
+        dock = QtWidgets.QDockWidget(title, self.page_host)
+        dock.setObjectName(pane_id)
+        dock.setWidget(widget)
+        dock.setAllowedAreas(
+            QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
+            | QtCore.Qt.DockWidgetArea.RightDockWidgetArea
+            | QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
+            | QtCore.Qt.DockWidgetArea.TopDockWidgetArea
+        )
+        dock.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        dock.visibilityChanged.connect(
+            lambda visible, current_id=pane_id: self._on_page_dock_visibility_changed(current_id, bool(visible))
+        )
+        self.page_host.addDockWidget(area, dock)
+        self._page_docks[pane_id] = dock
+        self._page_dock_pages[pane_id] = int(page_index)
+        self._page_dock_desired[pane_id] = bool(initial_visible)
+        dock.setVisible(False)
+        return dock
+
+    def _current_page_index(self) -> int:
+        if not hasattr(self, "pages"):
+            return -1
+        return int(self.pages.currentIndex())
+
+    def _sync_page_dock_visibility(self) -> None:
+        if not hasattr(self, "_page_docks"):
+            return
+        current = self._current_page_index()
+        for pane_id, dock in self._page_docks.items():
+            page_index = self._page_dock_pages.get(pane_id, -1)
+            visible = page_index == current and self._page_dock_desired.get(pane_id, False)
+            dock.setVisible(bool(visible))
+            if visible:
+                self._activate_page_dock(pane_id)
+
+    def set_page_dock_visible(self, pane_id: str, visible: bool) -> None:
+        dock = getattr(self, "_page_docks", {}).get(str(pane_id))
+        if dock is None:
+            return
+        widget = dock.widget()
+        if widget is not None and visible:
+            widget.setVisible(True)
+        self._page_dock_desired[str(pane_id)] = bool(visible)
+        self._sync_page_dock_visibility()
+
+    def _activate_page_dock(self, pane_id: str) -> None:
+        dock = self._page_docks.get(str(pane_id))
+        if dock is None:
+            return
+        widget = dock.widget()
+        if widget is not None:
+            widget.show()
+        dock.raise_()
+        self._resize_page_dock(pane_id)
+        QtCore.QTimer.singleShot(0, lambda current_id=str(pane_id): self._resize_page_dock(current_id))
+
+    def _resize_page_dock(self, pane_id: str) -> None:
+        dock = self._page_docks.get(str(pane_id))
+        if dock is None:
+            return
+        horizontal_sizes = {
+            "projects.detail": 340,
+            "board.groups": 240,
+            "board.edit": 360,
+            "clients.sync": 480,
+        }
+        vertical_sizes = {
+            "board.timeline": 180,
+        }
+        if pane_id in horizontal_sizes:
+            self.page_host.resizeDocks([dock], [horizontal_sizes[pane_id]], QtCore.Qt.Orientation.Horizontal)
+        if pane_id in vertical_sizes:
+            self.page_host.resizeDocks([dock], [vertical_sizes[pane_id]], QtCore.Qt.Orientation.Vertical)
+
+    def page_dock_is_visible(self, pane_id: str) -> bool:
+        dock = getattr(self, "_page_docks", {}).get(str(pane_id))
+        if dock is None:
+            return False
+        return bool(not dock.isHidden() and self._page_dock_pages.get(str(pane_id), -1) == self._current_page_index())
+
+    def _on_page_dock_visibility_changed(self, pane_id: str, visible: bool) -> None:
+        if self._page_dock_pages.get(pane_id, -1) != self._current_page_index():
+            return
+        self._page_dock_desired[pane_id] = bool(visible)
+        if pane_id == "board.groups" and hasattr(self, "board_page"):
+            try:
+                self.board_page.sync_groups_toggle(bool(visible))
+            except RuntimeError:
+                pass
+
+    def _board_page_active(self) -> bool:
+        return self._current_page_index() == 2
+
+    def set_board_pane_visible(self, pane_id: str, visible: bool) -> None:
+        self.set_page_dock_visible(f"board.{pane_id}", bool(visible))
+
+    def board_pane_is_visible(self, pane_id: str) -> bool:
+        return self.page_dock_is_visible(f"board.{pane_id}")
+
     def _set_log_panel_expanded(self, expanded: bool) -> None:
         self.log_panel.set_expanded(expanded)
         self._layout_overlay_panels()
@@ -948,6 +1101,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._send_media_key(0xB1)
 
     def _on_main_page_changed(self, index: int) -> None:
+        self._sync_page_dock_visibility()
         # Ensure board visuals/overrides are freshly applied when entering the Board page.
         if int(index) == 1 and hasattr(self, "asset_controller") and self.asset_controller is not None:
             QtCore.QTimer.singleShot(0, self.asset_controller.ensure_project_context_loaded)

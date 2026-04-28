@@ -372,6 +372,10 @@ class ProjectsController:
 
     def close_project_detail_panel(self) -> None:
         self.w.project_detail_panel.setVisible(False)
+        if hasattr(self.w, "set_page_dock_visible"):
+            self.w.set_page_dock_visible("projects.detail", False)
+        else:
+            self.w.project_detail_panel.setVisible(False)
         self._detail_pinned = False
         current = self.w.project_grid.currentItem()
         if current is not None:
@@ -384,6 +388,10 @@ class ProjectsController:
 
     def _show_project_detail(self, project_path: Path) -> None:
         self.w.project_detail_panel.setVisible(True)
+        if hasattr(self.w, "set_page_dock_visible"):
+            self.w.set_page_dock_visible("projects.detail", True)
+        else:
+            self.w.project_detail_panel.setVisible(True)
         self.w.project_detail_title.setText(f"Structure: {project_path.name}")
         root_path = str(project_path)
         self._fs_model.setRootPath(root_path)

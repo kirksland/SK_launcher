@@ -77,12 +77,12 @@ class ClientPage(QtWidgets.QWidget):
         )
         body.addWidget(self.client_list, 0)
 
-        right_panel = QtWidgets.QFrame()
-        right_panel.setStyleSheet(panel_style())
-        right_layout = QtWidgets.QVBoxLayout(right_panel)
+        self.sync_panel = QtWidgets.QFrame()
+        self.sync_panel.setStyleSheet(panel_style())
+        right_layout = QtWidgets.QVBoxLayout(self.sync_panel)
         right_layout.setContentsMargins(12, 12, 12, 12)
         right_layout.setSpacing(10)
-        body.addWidget(right_panel, 1)
+        body.addWidget(self.sync_panel, 1)
 
         header_row = QtWidgets.QHBoxLayout()
         sync_title = QtWidgets.QLabel("Client Sync")

@@ -90,11 +90,10 @@ class BoardPage(QtWidgets.QWidget):
         self.view = BoardView(self.scene, self)
         self.view.setStyleSheet(border_only_style())
 
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.view, 1)
 
         self.groups_panel = QtWidgets.QFrame()
-        self.groups_panel.setFixedWidth(220)
+        self.groups_panel.setMinimumWidth(220)
         self.groups_panel.setStyleSheet(subtle_panel_frame_style(bg_key="app_bg"))
         groups_layout = QtWidgets.QVBoxLayout(self.groups_panel)
         groups_layout.setContentsMargins(8, 8, 8, 8)
@@ -109,10 +108,6 @@ class BoardPage(QtWidgets.QWidget):
         self.groups_tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.groups_tree.customContextMenuRequested.connect(self._on_groups_tree_menu)
         groups_layout.addWidget(self.groups_tree, 1)
-
-        splitter.addWidget(self.groups_panel)
-        splitter.addWidget(self.view)
-        splitter.setStretchFactor(1, 1)
 
         self.loading_overlay = QtWidgets.QFrame(self.view)
         self.loading_overlay.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -137,7 +132,7 @@ class BoardPage(QtWidgets.QWidget):
         self.loading_overlay.setFixedWidth(300)
         self.loading_overlay.hide()
 
-        # Edit overlay (floating over the board view)
+        # Edit pane content. LauncherWindow owns the dock; focus mode owns scene behavior.
         self.edit_panel = BoardEditPanel(self)
         edit_layout = self.edit_panel.content_layout
 
@@ -220,7 +215,6 @@ class BoardPage(QtWidgets.QWidget):
         edit_layout.addWidget(self.edit_footer, 0)
 
         self.edit_panel.setVisible(False)
-        self.edit_panel.raise_()
 
         self.focus_exit_btn = QtWidgets.QToolButton(self)
         self.focus_exit_btn.setText("Exit Focus")
@@ -246,7 +240,7 @@ class BoardPage(QtWidgets.QWidget):
         self.focus_exit_btn.clicked.connect(self._on_exit_focus)
 
         self.grid_toggle.toggled.connect(self.view.set_show_grid)
-        self.groups_toggle.toggled.connect(self.groups_panel.setVisible)
+        self.groups_toggle.toggled.connect(lambda visible: self._set_board_pane_visible("groups", visible))
         self.edit_close_btn.clicked.connect(self._on_exit_focus)
         self.edit_image_tool_add_btn.clicked.connect(
             lambda: self.show_tool_add_menu(
@@ -274,7 +268,7 @@ class BoardPage(QtWidgets.QWidget):
         self.hint_label.setStyleSheet(muted_text_style())
         footer.addWidget(self.hint_label, 1)
 
-        # Bottom timeline bar (for focus mode video editing)
+        # Timeline pane content (for focus mode video editing).
         self.edit_timeline_bar = QtWidgets.QFrame()
         self.edit_timeline_bar.setStyleSheet(subtle_panel_frame_style(bg_key="app_bg"))
         self.edit_timeline_bar.setVisible(False)
@@ -298,31 +292,21 @@ class BoardPage(QtWidgets.QWidget):
         timeline_actions.addWidget(self.edit_timeline_export_btn, 0)
         timeline_actions.addStretch(1)
         timeline_layout.addLayout(timeline_actions, 0)
-        layout.insertWidget(layout.count() - 1, self.edit_timeline_bar, 0)
         self._position_edit_overlay()
 
     def set_edit_panel_visible(self, visible: bool) -> None:
+        self._set_board_pane_visible("edit", bool(visible))
         self.edit_panel.setVisible(bool(visible))
         self.focus_exit_btn.setVisible(bool(visible))
         if visible:
             self._position_edit_overlay()
-            self.edit_panel.raise_()
             self.focus_exit_btn.raise_()
 
     def _position_edit_overlay(self) -> None:
-        if self.edit_panel is None:
-            return
         viewport = self.view.viewport()
         top_left = viewport.mapTo(self, QtCore.QPoint(0, 0))
         anchor = QtCore.QRect(top_left, viewport.size())
         inset = 14
-        panel_w = min(self.edit_panel.maximumWidth(), max(self.edit_panel.minimumWidth(), 344))
-        panel_w = min(panel_w, max(260, anchor.width() - (inset * 2)))
-        available_h = max(220, anchor.height() - (inset * 2))
-        panel_h = min(available_h, 620)
-        x = anchor.right() - panel_w - inset
-        y = anchor.top() + inset
-        self.edit_panel.setGeometry(x, y, panel_w, panel_h)
         self.focus_exit_btn.adjustSize()
         btn_x = anchor.left() + inset
         btn_y = anchor.top() + inset
@@ -350,7 +334,7 @@ class BoardPage(QtWidgets.QWidget):
         self.loading_overlay.move(x, 18)
 
     def show_tool_add_menu(self, global_pos: QtCore.QPoint) -> bool:
-        if not self.edit_panel.isVisible():
+        if not self._board_pane_is_visible("edit"):
             return False
         if not self.edit_tool_stack_section.isVisible():
             return False
@@ -392,7 +376,43 @@ class BoardPage(QtWidgets.QWidget):
         self.edit_preview_stack.setVisible(bool(visible))
 
     def set_timeline_bar_visible(self, visible: bool) -> None:
+        self._set_board_pane_visible("timeline", bool(visible))
         self.edit_timeline_bar.setVisible(bool(visible))
+
+    def sync_groups_toggle(self, visible: bool) -> None:
+        if self.groups_toggle.isChecked() == bool(visible):
+            return
+        self.groups_toggle.blockSignals(True)
+        self.groups_toggle.setChecked(bool(visible))
+        self.groups_toggle.blockSignals(False)
+
+    def _board_host(self) -> object | None:
+        host = self.window()
+        return host if host is not self else self.parent()
+
+    def _set_board_pane_visible(self, pane_id: str, visible: bool) -> None:
+        host = self._board_host()
+        if host is not None and hasattr(host, "set_board_pane_visible"):
+            host.set_board_pane_visible(pane_id, bool(visible))
+            return
+        widget = {
+            "groups": self.groups_panel,
+            "edit": self.edit_panel,
+            "timeline": self.edit_timeline_bar,
+        }.get(str(pane_id))
+        if widget is not None:
+            widget.setVisible(bool(visible))
+
+    def _board_pane_is_visible(self, pane_id: str) -> bool:
+        host = self._board_host()
+        if host is not None and hasattr(host, "board_pane_is_visible"):
+            return bool(host.board_pane_is_visible(pane_id))
+        widget = {
+            "groups": self.groups_panel,
+            "edit": self.edit_panel,
+            "timeline": self.edit_timeline_bar,
+        }.get(str(pane_id))
+        return bool(widget is not None and widget.isVisible())
 
     def set_edit_panel_content(
         self,
