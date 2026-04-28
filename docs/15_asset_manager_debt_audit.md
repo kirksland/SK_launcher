@@ -35,7 +35,6 @@ These are already configurable:
 
 - `projects_dir`
 - `server_repo_dir`
-- `template_hip`
 - `houdini_exe`
 - `use_file_association`
 

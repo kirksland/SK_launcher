@@ -7,7 +7,6 @@ from core.settings import (
     DEFAULT_PROJECTS_DIR,
     DEFAULT_SETTINGS,
     DEFAULT_SERVER_REPO_DIR,
-    DEFAULT_TEMPLATE_HIP,
     active_settings_path,
     is_first_run,
     load_settings,
@@ -38,7 +37,6 @@ class SettingsDistributionTests(unittest.TestCase):
     def test_defaults_are_distribution_safe(self) -> None:
         self.assertTrue(DEFAULT_PROJECTS_DIR.is_absolute())
         self.assertTrue(DEFAULT_SERVER_REPO_DIR.is_absolute())
-        self.assertTrue(str(DEFAULT_TEMPLATE_HIP).lower().endswith("untitled.hipnc"))
         self.assertIsInstance(DEFAULT_SETTINGS["shortcuts"], dict)
 
     def test_active_settings_path_prefers_existing_legacy_file(self) -> None:
@@ -159,7 +157,6 @@ class SettingsDistributionTests(unittest.TestCase):
             {
                 "projects_dir": "",
                 "server_repo_dir": "",
-                "template_hip": "",
                 "use_file_association": False,
                 "houdini_exe": "",
                 "blender_exe": "",
@@ -167,7 +164,7 @@ class SettingsDistributionTests(unittest.TestCase):
         )
         self.assertEqual(
             issues,
-            ["Projects Folder", "Server Repo Folder", "Template Hip", "Houdini Executable"],
+            ["Projects Folder", "Server Repo Folder", "Houdini Executable"],
         )
 
     def test_settings_startup_issues_reports_invalid_blender_path_when_present(self) -> None:
@@ -175,7 +172,6 @@ class SettingsDistributionTests(unittest.TestCase):
             {
                 "projects_dir": str(DEFAULT_PROJECTS_DIR),
                 "server_repo_dir": str(DEFAULT_SERVER_REPO_DIR),
-                "template_hip": str(DEFAULT_TEMPLATE_HIP),
                 "use_file_association": True,
                 "houdini_exe": "",
                 "blender_exe": r"C:\missing\blender.exe",

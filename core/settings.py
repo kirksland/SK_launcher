@@ -23,12 +23,10 @@ def _documents_dir() -> Path:
 
 
 DEFAULT_PROJECTS_DIR = _documents_dir() / "HoudiniProjects"
-DEFAULT_TEMPLATE_HIP = LAUNCHER_ROOT / "untitled.hipnc"
 DEFAULT_SERVER_REPO_DIR = _documents_dir() / "StudioProject"
 
 DEFAULT_SETTINGS: Dict[str, object] = {
     "projects_dir": str(DEFAULT_PROJECTS_DIR),
-    "template_hip": str(DEFAULT_TEMPLATE_HIP),
     "new_hip_pattern": "{projectName}_001.hipnc",
     "use_file_association": True,
     "show_splash_screen": True,
@@ -125,9 +123,6 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
             merged["houdini_exe"] = installs[0]["path"]
             if "use_file_association" not in data:
                 merged["use_file_association"] = False
-    template_hip = str(merged.get("template_hip", "")).strip()
-    if (not template_hip or not Path(template_hip).exists()) and DEFAULT_TEMPLATE_HIP.exists():
-        merged["template_hip"] = str(DEFAULT_TEMPLATE_HIP)
     return merged
 
 
@@ -159,7 +154,6 @@ def settings_startup_issues(settings: Dict[str, object]) -> List[str]:
 
     projects_dir = str(settings.get("projects_dir", "")).strip()
     server_repo_dir = str(settings.get("server_repo_dir", "")).strip()
-    template_hip = str(settings.get("template_hip", "")).strip()
     use_assoc = bool(settings.get("use_file_association", True))
     houdini_exe = str(settings.get("houdini_exe", "")).strip()
     blender_exe = str(settings.get("blender_exe", "")).strip()
@@ -168,8 +162,6 @@ def settings_startup_issues(settings: Dict[str, object]) -> List[str]:
         issues.append("Projects Folder")
     if not server_repo_dir or not Path(server_repo_dir).exists():
         issues.append("Server Repo Folder")
-    if not template_hip or not Path(template_hip).exists():
-        issues.append("Template Hip")
     if not use_assoc and (not houdini_exe or not Path(houdini_exe).exists()):
         issues.append("Houdini Executable")
     if blender_exe and not Path(blender_exe).exists():

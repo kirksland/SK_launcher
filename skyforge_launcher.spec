@@ -10,7 +10,6 @@ ROOT = Path.cwd()
 datas = [
     (str(ROOT / "config"), "config"),
     (str(ROOT / "horizontalSF.png"), "."),
-    (str(ROOT / "untitled.hipnc"), "."),
 ]
 
 hiddenimports = [

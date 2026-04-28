@@ -257,7 +257,6 @@ class ProjectsController:
                 project_path=project_path,
                 launcher_root=Path(__file__).resolve().parents[1],
                 executable=self._dcc_executable(dcc_id),
-                template_path=self.w._template_hip,
                 filename_pattern=filename,
             ),
         )

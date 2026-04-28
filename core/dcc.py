@@ -26,8 +26,6 @@ class DccCreateContext:
     project_path: Path
     launcher_root: Path
     executable: str = ""
-    template_path: Optional[Path] = None
-    default_template_path: Optional[Path] = None
     filename_pattern: str = ""
     ensure_runtime_scripts: bool = False
 
