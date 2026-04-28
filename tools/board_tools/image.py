@@ -29,6 +29,7 @@ def normalize_tool_stack(stack: object) -> list[dict[str, Any]]:
             continue
         normalized.append(
             {
+                "instance_id": str(entry.get("instance_id", "") or "").strip(),
                 "id": tool_id,
                 "enabled": bool(entry.get("enabled", True)),
                 "settings": dict(entry.get("settings", {})) if isinstance(entry.get("settings"), dict) else {},
@@ -55,21 +56,29 @@ def extract_bcs_settings(stack: object) -> tuple[float, float, float] | None:
 
 
 def extract_crop_settings(stack: object) -> tuple[float, float, float, float] | None:
+    left = top = right = bottom = 0.0
+    found = False
     for entry in normalize_tool_stack(stack):
-        if entry.get("id") != "crop":
+        if entry.get("id") != "crop" or not bool(entry.get("enabled", True)):
             continue
+        found = True
         settings = entry.get("settings", {})
         if not isinstance(settings, dict):
-            return None
+            continue
         try:
-            left = float(settings.get("left", 0.0))
-            top = float(settings.get("top", 0.0))
-            right = float(settings.get("right", 0.0))
-            bottom = float(settings.get("bottom", 0.0))
+            next_left = max(0.0, min(0.95, float(settings.get("left", 0.0))))
+            next_top = max(0.0, min(0.95, float(settings.get("top", 0.0))))
+            next_right = max(0.0, min(0.95, float(settings.get("right", 0.0))))
+            next_bottom = max(0.0, min(0.95, float(settings.get("bottom", 0.0))))
         except Exception:
-            return None
-        return left, top, right, bottom
-    return None
+            continue
+        remaining_w = max(0.01, 1.0 - left - right)
+        remaining_h = max(0.01, 1.0 - top - bottom)
+        left += remaining_w * next_left
+        right += remaining_w * next_right
+        top += remaining_h * next_top
+        bottom += remaining_h * next_bottom
+    return (left, top, right, bottom) if found else None
 
 
 def apply_image_tool_stack(rgb: object, stack: object) -> object:

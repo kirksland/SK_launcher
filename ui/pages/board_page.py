@@ -27,6 +27,11 @@ from ui.utils.styles import (
 class BoardPage(QtWidgets.QWidget):
     imageToolAddRequested = QtCore.Signal(str)
     imageToolRemoveRequested = QtCore.Signal(int)
+    imageToolRemovePanelRequested = QtCore.Signal(str)
+    imageToolResetPanelRequested = QtCore.Signal(str)
+    imageToolMoveInstanceRequested = QtCore.Signal(str, int)
+    imageToolInstanceChanged = QtCore.Signal(str)
+    imageToolInstanceSelected = QtCore.Signal(str)
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -170,16 +175,28 @@ class BoardPage(QtWidgets.QWidget):
         edit_layout.addWidget(self.edit_tool_hint, 0)
 
         self.edit_controls = BoardEditControlsPanel()
-        edit_layout.addWidget(self.edit_controls, 0)
+        self.edit_controls.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        edit_layout.addWidget(self.edit_controls, 1)
         for attr_name in self.edit_controls.exported_attribute_names():
             setattr(self, attr_name, getattr(self.edit_controls, attr_name))
         self.edit_image_tool_list.currentRowChanged.connect(self._refresh_tool_stack_row_selection)
+        self.edit_tool_settings_remove_btn.clicked.connect(
+            lambda: self.imageToolRemoveRequested.emit(self.current_image_tool_stack_index())
+        )
+        self.edit_controls.toolRemoveRequested.connect(self.imageToolRemovePanelRequested)
+        self.edit_controls.toolResetRequested.connect(self.imageToolResetPanelRequested)
+        self.edit_controls.toolMoveRequested.connect(self.imageToolMoveInstanceRequested)
+        self.edit_controls.toolSettingsChanged.connect(self.imageToolInstanceChanged)
+        self.edit_controls.toolSelected.connect(self.imageToolInstanceSelected)
 
         self.set_image_adjust_controls_visible(False)
 
         # Preview stack (image / video / sequence)
         self.edit_preview = BoardEditPreviewStack()
-        edit_layout.addWidget(self.edit_preview, 1)
+        edit_layout.addWidget(self.edit_preview, 0)
         self.edit_preview_stack = self.edit_preview.stack
         self.edit_image_preview = self.edit_preview.image_preview
         self.edit_video_panel = self.edit_preview.video_panel
@@ -476,7 +493,7 @@ class BoardPage(QtWidgets.QWidget):
             self.edit_image_tool_add_btn,
             self.edit_image_tool_up_btn,
             self.edit_image_tool_down_btn,
-            self.edit_image_adjust_reset_btn,
+            self.edit_tool_settings_section,
         ]
         for panel_widgets in self.edit_controls.panel_widgets().values():
             controls.extend(panel_widgets)
@@ -492,10 +509,25 @@ class BoardPage(QtWidgets.QWidget):
     def set_active_image_tool_panel(self, panel: str) -> None:
         self.edit_controls.set_active_tool_panel(panel)
 
+    def set_visible_image_tool_panels(self, panels: list[str]) -> None:
+        self.edit_controls.set_visible_tool_panels(panels)
+
+    def set_image_tool_instances(self, instances: list[dict[str, object]]) -> None:
+        self.edit_controls.set_tool_instances(instances)
+
+    def current_image_tool_instance_state(self, instance_id: str) -> dict[str, float]:
+        return self.edit_controls.current_instance_state(instance_id)
+
+    def set_image_tool_instance_state(self, instance_id: str, state: dict[str, object]) -> None:
+        self.edit_controls.set_instance_state(instance_id, state)
+
+    def set_selected_image_tool_instance(self, instance_id: str) -> None:
+        self.edit_controls.set_selected_tool_instance(instance_id)
+
     def set_image_adjust_labels(self, brightness: float, contrast: float, saturation: float) -> None:
-        self.edit_controls.set_control_value("brightness", brightness)
-        self.edit_controls.set_control_value("contrast", contrast)
-        self.edit_controls.set_control_value("saturation", saturation)
+        self.edit_controls.set_control_value("brightness", brightness, "bcs")
+        self.edit_controls.set_control_value("contrast", contrast, "bcs")
+        self.edit_controls.set_control_value("saturation", saturation, "bcs")
 
     def set_image_tool_add_options(self, options: list[tuple[str, str]]) -> None:
         self.edit_image_tool_add_combo.blockSignals(True)
@@ -519,19 +551,23 @@ class BoardPage(QtWidgets.QWidget):
             row.removeRequested.connect(lambda _checked=False, row_idx=idx: self.imageToolRemoveRequested.emit(row_idx))
             self.edit_image_tool_list.setItemWidget(item, row)
         has_items = bool(items)
-        self.edit_image_tool_list.setVisible(has_items)
-        self.edit_image_tool_empty.setVisible(not has_items and self.edit_image_tools_label.isVisible())
+        self.edit_image_tool_list.setVisible(False)
+        self.edit_image_tool_empty.setVisible(False)
         if items and selected_index >= 0 and selected_index < len(items):
             self.edit_image_tool_list.setCurrentRow(int(selected_index))
         elif items:
             self.edit_image_tool_list.setCurrentRow(0)
+            selected_index = 0
         row_h = 38
         visible_rows = max(1, min(3, len(items)))
         frame = 6
         self.edit_image_tool_list.setMaximumHeight(frame + (row_h * visible_rows))
-        can_reorder = len(items) > 1
-        self.edit_image_tool_up_btn.setVisible(can_reorder)
-        self.edit_image_tool_down_btn.setVisible(can_reorder)
+        self.edit_image_tool_up_btn.setVisible(False)
+        self.edit_image_tool_down_btn.setVisible(False)
+        self.edit_tool_settings_remove_btn.setEnabled(0 <= int(selected_index) < len(items))
+        self.edit_tool_settings_remove_btn.setVisible(False)
+        self.edit_image_adjust_reset_btn.setEnabled(0 <= int(selected_index) < len(items))
+        self.edit_image_adjust_reset_btn.setVisible(False)
         self.edit_image_tool_list.blockSignals(False)
         self._refresh_tool_stack_row_selection(self.edit_image_tool_list.currentRow())
 
@@ -555,7 +591,7 @@ class BoardPage(QtWidgets.QWidget):
             control_key = str(getattr(control, "key", "") or "").strip()
             if not control_key:
                 continue
-            current = self.edit_controls.current_control_value(control_key)
+            current = self.edit_controls.current_control_value(control_key, key)
             if current is not None:
                 values[control_key] = current
         return values
@@ -572,10 +608,14 @@ class BoardPage(QtWidgets.QWidget):
             control_key = str(getattr(control, "key", "") or "").strip()
             if not control_key:
                 continue
-            self.edit_controls.set_control_value(control_key, merged.get(control_key, getattr(control, "minimum", 0.0)))
+            self.edit_controls.set_control_value(
+                control_key,
+                merged.get(control_key, getattr(control, "minimum", 0.0)),
+                key,
+            )
 
-    def image_tool_control_slider(self, control_key: str) -> QtWidgets.QSlider | None:
-        return self.edit_controls.control_slider(control_key)
+    def image_tool_control_slider(self, control_key: str, panel: str = "") -> QtWidgets.QSlider | None:
+        return self.edit_controls.control_slider(control_key, panel)
 
     def show_edit_preview_image(self, pixmap: QtGui.QPixmap, label: str = "") -> None:
         self.edit_preview_stack.setCurrentWidget(self.edit_image_preview)

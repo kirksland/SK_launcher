@@ -48,14 +48,30 @@ class BoardEditFocusController:
     def selected_tool_panel(self) -> str:
         return self.board._selected_tool_panel()
 
+    def selected_tool_instance_id(self) -> str:
+        return self.board._selected_tool_instance_id()
+
+    def selected_tool_entry(self) -> dict[str, object] | None:
+        selected = self.edit.selected_tool_entry()
+        return selected if isinstance(selected, dict) else None
+
+    def current_tool_stack(self) -> list[dict[str, object]]:
+        return self.edit.current_stack()
+
     def tool_panel_state(self, tool_id: str) -> dict[str, object]:
         return self.board._tool_panel_state_for_id(tool_id)
+
+    def tool_instance_state(self, instance_id: str) -> dict[str, object]:
+        return self.board._tool_instance_state_for_id(instance_id)
 
     def set_tool_panel_state(self, tool_id: str, state: dict[str, object]) -> None:
         spec = get_edit_tool(tool_id)
         panel = str(getattr(spec, "ui_panel", "") or "").strip().lower() if spec is not None else ""
         if panel:
             self.w.board_page.set_image_tool_panel_state(panel, state)
+
+    def set_tool_instance_state(self, instance_id: str, state: dict[str, object]) -> None:
+        self.w.board_page.set_image_tool_instance_state(instance_id, state)
 
     def set_tool_stack_state(self, tool_id: str, state: dict[str, object], *, add_if_missing: bool = True) -> None:
         self.board._set_tool_state_in_stack(tool_id, state, add_if_missing=add_if_missing)
@@ -72,6 +88,29 @@ class BoardEditFocusController:
         normalized = spec.normalize_state(settings) if spec is not None else dict(settings)
         self.set_tool_panel_state(tool_id, normalized)
         self.set_tool_stack_state(tool_id, normalized, add_if_missing=True)
+        self.apply_scene_tool_to_focus_item()
+        self.commit_focus_override()
+        if schedule_preview:
+            self.schedule_focus_preview()
+
+    def update_scene_tool_instance_settings(
+        self,
+        instance_id: str,
+        settings: dict[str, object],
+        *,
+        schedule_preview: bool = True,
+    ) -> None:
+        entry = self.tool_instance_state(instance_id)
+        selected = self.selected_tool_entry()
+        tool_id = str(selected.get("id", "")).strip().lower() if isinstance(selected, dict) else ""
+        spec = get_edit_tool(tool_id)
+        normalized = spec.normalize_state(settings) if spec is not None else dict(settings)
+        if entry:
+            entry.update(normalized)
+            normalized = spec.normalize_state(entry) if spec is not None else dict(entry)
+        self.set_tool_instance_state(instance_id, normalized)
+        self.board._set_tool_instance_state_in_stack(instance_id, normalized)
+        self.board._sync_edit_values_from_tool_stack()
         self.apply_scene_tool_to_focus_item()
         self.commit_focus_override()
         if schedule_preview:

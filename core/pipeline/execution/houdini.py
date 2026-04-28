@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.houdini_env import build_houdini_env
+from core.houdini_env import build_houdini_env, resolve_hython_executable
 from core.pipeline.jobs.requests import RuntimeProcessRequest
 
 from .result import ExecutionResult, ExecutionStatus, ProducedOutput
@@ -105,7 +104,7 @@ def execute_houdini_request(
                 "request_payload": plan.request_payload,
             },
         )
-    resolved_executable = _resolve_hython_executable(executable)
+    resolved_executable = resolve_hython_executable(executable)
     if not resolved_executable:
         return ExecutionResult(
             status=ExecutionStatus.FAILED,
@@ -122,28 +121,6 @@ def execute_houdini_request(
         launcher_root=launcher_root,
         project_path=project_path,
     )
-
-
-def _resolve_hython_executable(executable: str) -> str:
-    raw = str(executable or "").strip()
-    if not raw:
-        return ""
-    candidate = Path(raw)
-    if candidate.exists():
-        if candidate.name.lower() == "houdini.exe":
-            hython = candidate.with_name("hython.exe")
-            if hython.exists():
-                return str(hython)
-        return str(candidate)
-    if raw.lower() == "houdini":
-        which_hython = shutil.which("hython")
-        return which_hython or ""
-    if raw.lower() == "hython":
-        return shutil.which("hython") or ""
-    which_value = shutil.which(raw)
-    return which_value or ""
-
-
 def _execution_result_from_payload(payload: dict[str, object]) -> ExecutionResult:
     outputs = []
     for item in payload.get("outputs", []) or []:

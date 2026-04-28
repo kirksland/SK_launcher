@@ -8,8 +8,17 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.dcc import detect_dcc_for_path
-from core.fs import find_projects, open_hip, open_with_file_association
+from core.dcc import (
+    DEFAULT_NEW_PROJECT_DCC,
+    DccCreateContext,
+    DccOpenContext,
+    create_scene_with_dcc,
+    default_scene_filename,
+    get_dcc_handler,
+    iter_dccs,
+    open_scene_with_dcc,
+)
+from core.fs import find_projects
 from core.houdini_env import build_houdini_env
 from core.project_catalog import (
     filter_and_sort_projects,
@@ -18,14 +27,9 @@ from core.project_catalog import (
     scan_project_scene_files,
 )
 from core.project_runtime import (
-    JOB_INIT_MARKER,
     PROJECT_SUBDIRS,
-    ensure_job_scripts_if_needed,
-    ensure_template_hip,
-    resolve_new_hip_name,
-    resolve_template_hip,
+    create_project_structure,
 )
-from core.settings import DEFAULT_TEMPLATE_HIP
 from core.watchers import update_watcher_paths
 from ui.widgets.project_card import ProjectCard
 
@@ -38,6 +42,8 @@ class ProjectsController:
         self._detail_pinned = False
         self._detail_project_path: Optional[Path] = None
         self._scan_token = 0.0
+        self._last_open_scene_path: Optional[Path] = None
+        self._last_open_scene_time = 0.0
         self._dir_cache: Dict[Path, list[tuple[str, bool]]] = {}
         self._fs_model = QtWidgets.QFileSystemModel(self.w)
         self._fs_model.setReadOnly(True)
@@ -141,80 +147,176 @@ class ProjectsController:
             return
 
         try:
-            project_path.mkdir(parents=True, exist_ok=False)
-            for subdir in PROJECT_SUBDIRS:
-                (project_path / subdir).mkdir(parents=False, exist_ok=True)
-            self._ensure_template_hip(project_path)
-            (project_path / JOB_INIT_MARKER).write_text("init_job", encoding="utf-8")
+            create_project_structure(project_path, PROJECT_SUBDIRS)
         except Exception as exc:  # pragma: no cover - filesystem errors
             self.w._warn(f"Failed to create project:\n{exc}")
             return
 
         self.refresh_projects()
+        self._select_project_path(project_path)
+        self.w.status.setText(f"Created project: {project_path.name}")
 
-    def _resolve_new_hip_name(self, project_name: str) -> str:
-        return resolve_new_hip_name(self.w._new_hip_pattern, project_name)
+    def add_scene_to_selected_project(self) -> None:
+        project_path = self._selected_project_path()
+        if project_path is None:
+            self.w._warn("Select a project first.")
+            return
+        self._create_scene_for_project(project_path)
 
-    def _resolve_template_hip(self) -> Optional[Path]:
-        return resolve_template_hip(
-            self.w._template_hip,
-            DEFAULT_TEMPLATE_HIP,
-            Path(__file__).resolve().parents[1],
-        )
-
-    def _ensure_template_hip(self, project_path: Path) -> Optional[Path]:
-        target, error = ensure_template_hip(
-            project_path,
-            pattern=self.w._new_hip_pattern,
-            custom_template=self.w._template_hip,
-            default_template=DEFAULT_TEMPLATE_HIP,
-            launcher_root=Path(__file__).resolve().parents[1],
-        )
-        if error:
-            self.w._warn(error)
-        return target
-
-    def _ensure_job_scripts_if_needed(self, project_path: Path) -> None:
-        ensure_job_scripts_if_needed(project_path, marker_name=JOB_INIT_MARKER)
-
-    def open_selected_project(self) -> None:
+    def _selected_project_path(self) -> Optional[Path]:
         item = self.w.project_grid.currentItem()
         if item is None:
-            self.w._warn("Select a project first.")
-            return
+            return None
         path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
         if not path_text:
+            return None
+        return Path(str(path_text))
+
+    def _select_project_path(self, project_path: Path) -> None:
+        for row in range(self.w.project_grid.count()):
+            item = self.w.project_grid.item(row)
+            if item is None:
+                continue
+            path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if path_text and Path(str(path_text)) == project_path:
+                self.w.project_grid.setCurrentItem(item)
+                return
+
+    def _prompt_scene_dcc_id(self, project_path: Path) -> Optional[str]:
+        descriptors = list(iter_dccs())
+        if not descriptors:
+            self.w._warn("No DCC handlers are available.")
+            return None
+        labels = [descriptor.label for descriptor in descriptors]
+        default_index = 0
+        for index, descriptor in enumerate(descriptors):
+            if descriptor.id == DEFAULT_NEW_PROJECT_DCC:
+                default_index = index
+                break
+        label, ok = QtWidgets.QInputDialog.getItem(
+            self.w,
+            "Add Scene",
+            f"DCC for {project_path.name}:",
+            labels,
+            default_index,
+            False,
+        )
+        if not ok:
+            return None
+        for descriptor in descriptors:
+            if descriptor.label == label:
+                return descriptor.id
+        return None
+
+    def _prompt_scene_filename(self, project_path: Path, dcc_id: str) -> Optional[str]:
+        descriptor = next((entry for entry in iter_dccs() if entry.id == dcc_id), None)
+        handler = get_dcc_handler(dcc_id)
+        default_name = (
+            handler.default_scene_filename(project_path.name)
+            if handler is not None
+            else default_scene_filename(project_path.name, dcc_id)
+        )
+        filename, ok = QtWidgets.QInputDialog.getText(
+            self.w,
+            "Scene Name",
+            f"Scene file for {project_path.name}:",
+            text=default_name,
+        )
+        if not ok:
+            return None
+        normalized = Path(filename.strip()).name
+        if not normalized:
+            self.w._warn("Scene name cannot be empty.")
+            return None
+        if "." not in Path(normalized).name and descriptor is not None and descriptor.extensions:
+            normalized = f"{normalized}{descriptor.extensions[0]}"
+        return normalized
+
+    def _dcc_executable(self, dcc_id: str) -> str:
+        token = str(dcc_id or "").strip().lower()
+        if token == "houdini":
+            return str(getattr(self.w, "_houdini_exe", "") or "").strip()
+        if token == "blender":
+            return str(getattr(self.w, "_blender_exe", "") or "").strip()
+        return ""
+
+    def _create_scene_for_project(self, project_path: Path) -> Optional[Path]:
+        dcc_id = self._prompt_scene_dcc_id(project_path)
+        if not dcc_id:
+            return None
+        filename = self._prompt_scene_filename(project_path, dcc_id)
+        if filename is None:
+            return None
+        target_path = project_path / filename
+        if target_path.exists():
+            self.w._warn(f"A scene named {filename} already exists in {project_path.name}.")
+            return None
+        result = create_scene_with_dcc(
+            dcc_id,
+            DccCreateContext(
+                project_path=project_path,
+                launcher_root=Path(__file__).resolve().parents[1],
+                executable=self._dcc_executable(dcc_id),
+                template_path=self.w._template_hip,
+                filename_pattern=filename,
+            ),
+        )
+        if result.error:
+            self.w._warn(result.error)
+            return None
+        self.refresh_projects()
+        self._select_project_path(project_path)
+        if result.scene_path is not None:
+            self.w._project_scene_selection[project_path] = result.scene_path
+            self.w.status.setText(f"Created scene: {result.scene_path.name}")
+        return result.scene_path
+
+    def open_selected_project(self) -> None:
+        project_path = self._selected_project_path()
+        if project_path is None:
             self.w._warn("Select a project first.")
             return
-        project_path = Path(item.data(QtCore.Qt.ItemDataRole.UserRole))
+        item = self.w.project_grid.currentItem()
         card = self.w.project_grid.itemWidget(item)
         if isinstance(card, ProjectCard):
             scene_file = card.selected_scene_file()
         else:
             scene_file = None
-        if scene_file is None and (project_path / JOB_INIT_MARKER).exists():
-            scene_file = self._ensure_template_hip(project_path)
         if scene_file is None:
             self.w._warn(f"No supported scene file found in {project_path.name}.")
             return
         try:
+            if self._suppress_duplicate_scene_open(scene_file):
+                return
             self._open_scene_file(scene_file, project_path)
             self.w.status.setText(f"Opened: {scene_file.name}")
         except Exception as exc:  # pragma: no cover - UI error path
             self.w._warn(f"Failed to open: {scene_file}\n{exc}")
 
+    def _suppress_duplicate_scene_open(self, scene_file: Path) -> bool:
+        now = time.monotonic()
+        try:
+            scene_key = scene_file.resolve()
+        except Exception:
+            scene_key = scene_file
+        if self._last_open_scene_path == scene_key and (now - self._last_open_scene_time) < 1.5:
+            self.w.status.setText(f"Already opening: {scene_file.name}")
+            return True
+        self._last_open_scene_path = scene_key
+        self._last_open_scene_time = now
+        return False
+
     def _open_scene_file(self, scene_file: Path, project_path: Path) -> None:
-        descriptor = detect_dcc_for_path(scene_file)
-        if descriptor is None:
-            raise RuntimeError(f"Unsupported scene file: {scene_file.name}")
-        if descriptor.id == "houdini":
-            if self.w._use_file_association or not self.w._houdini_exe:
-                open_with_file_association(scene_file)
-                return
-            self._ensure_job_scripts_if_needed(project_path)
-            self._launch_houdini(scene_file, project_path)
-            return
-        open_with_file_association(scene_file)
+        descriptor = next((entry for entry in iter_dccs() if scene_file.suffix.lower() in entry.extensions), None)
+        open_scene_with_dcc(
+            scene_file,
+            DccOpenContext(
+                project_path=project_path,
+                launcher_root=Path(__file__).resolve().parents[1],
+                use_file_association=bool(self.w._use_file_association),
+                executable=self._dcc_executable(descriptor.id if descriptor is not None else ""),
+            ),
+        )
 
     def on_card_selection_changed(self, card: ProjectCard) -> None:
         item = self.w._card_to_item.get(card)

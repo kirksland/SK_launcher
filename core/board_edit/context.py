@@ -61,8 +61,6 @@ class BoardEditContext:
 
     def ensure_stack(self, default_factory: ToolStackFactory) -> list[dict[str, object]]:
         tools = self.current_stack()
-        if not tools:
-            tools = normalize_tool_entries(default_factory(self.focus_kind))
         self.stack = tools
         if self.selected_index < 0 or self.selected_index >= len(self.stack):
             self.selected_index = 0 if self.stack else -1

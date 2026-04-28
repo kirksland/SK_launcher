@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -56,3 +57,27 @@ def build_houdini_env(
         env["HOUDINI_PATH"] = f"{project_text};&" + (existing_hpath or "")
 
     return env
+
+
+def resolve_hython_executable(executable: str) -> str:
+    raw = str(executable or "").strip()
+    if not raw:
+        return ""
+    candidate = Path(raw)
+    if candidate.exists():
+        if candidate.name.lower() == "houdini.exe":
+            hython = candidate.with_name("hython.exe")
+            if hython.exists():
+                return str(hython)
+        if candidate.name.lower() == "hython.exe":
+            return str(candidate)
+        return ""
+    token = raw.lower()
+    if token == "houdini":
+        return shutil.which("hython") or ""
+    if token in {"hython", "hython.exe"}:
+        return shutil.which("hython") or shutil.which("hython.exe") or ""
+    which_value = shutil.which(raw)
+    if which_value and Path(which_value).name.lower() in {"hython", "hython.exe"}:
+        return which_value
+    return ""

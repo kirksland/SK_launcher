@@ -5,6 +5,7 @@
   "use_file_association": false,
   "show_splash_screen": true,
   "houdini_exe": "C:\\Program Files\\Side Effects Software\\Houdini 21.0.559\\bin\\houdini.exe",
+  "blender_exe": "C:\\Program Files\\Blender Foundation\\Blender 3.5\\blender.exe",
   "server_repo_dir": "C:\\Users\\justi\\Documents\\studio project\\StudioProject",
   "video_backend": "opencv",
   "asset_manager_projects": [
@@ -727,6 +728,9 @@
     }
   },
   "shortcuts": {},
+  "runtime_cache_location": "local_appdata",
+  "runtime_cache_max_gb": 5,
+  "runtime_cache_max_days": 30,
   "project_tree_batch_size": 20,
   "project_tree_batch_delay_ms": 24,
   "client_sync_roots": {

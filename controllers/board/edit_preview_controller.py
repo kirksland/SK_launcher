@@ -28,6 +28,10 @@ class BoardEditPreviewController:
 
     def on_slider_released(self) -> None:
         self.board._edit_preview_dragging = False
+        try:
+            self.w.board_page.view.setFocus()
+        except Exception:
+            pass
         self.schedule_update()
 
     def schedule_update(self, channel: Optional[str] = None) -> None:
