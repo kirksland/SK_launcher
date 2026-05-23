@@ -667,9 +667,10 @@ class BoardPage(QtWidgets.QWidget):
         print(f"[BOARD] Drop received. URLs: {len(event.mimeData().urls())} pos={pos} scene={scene_pos}")
         handled = False
         for url in event.mimeData().urls():
-            local_path = Path(url.toLocalFile())
-            print(f"[BOARD] URL -> {local_path}")
-            if local_path.is_file():
+            local_text = url.toLocalFile() if url.isLocalFile() else ""
+            local_path = Path(local_text) if local_text else None
+            print(f"[BOARD] URL -> {url.toString()} local={local_path}")
+            if local_path is not None and local_path.is_file():
                 item = None
                 if hasattr(controller, "_is_video_file") and controller._is_video_file(local_path):
                     if hasattr(controller, "add_video_from_path"):
@@ -683,7 +684,7 @@ class BoardPage(QtWidgets.QWidget):
                     controller.try_add_item_to_group(item, scene_pos)
                     handled = True
             else:
-                if local_path.exists() and local_path.is_dir():
+                if local_path is not None and local_path.exists() and local_path.is_dir():
                     if hasattr(controller, "add_sequence_from_dir"):
                         item = controller.add_sequence_from_dir(local_path, scene_pos=scene_pos)
                         if item is not None:
@@ -696,20 +697,37 @@ class BoardPage(QtWidgets.QWidget):
                     controller.add_image_from_url(str(url.toString()), scene_pos=scene_pos)
                     handled = True
                 else:
-                    print(f"[BOARD] Missing path: {local_path}")
+                    print(f"[BOARD] Unsupported URL: {url.toString()}")
         if not handled and event.mimeData().hasImage():
             controller.add_image_from_image_data(event.mimeData().imageData(), scene_pos=scene_pos)
             handled = True
-        if not handled and event.mimeData().hasHtml():
-            html = event.mimeData().html()
-            match = re.search(r'src=["\'](https?://[^"\']+)["\']', html)
-            if match:
-                controller.add_image_from_url(match.group(1), scene_pos=scene_pos)
+        if not handled:
+            html_url = self._image_url_from_html(event.mimeData().html()) if event.mimeData().hasHtml() else ""
+            if html_url:
+                controller.add_image_from_url(html_url, scene_pos=scene_pos)
                 handled = True
-        if not handled and event.mimeData().hasText():
-            text = event.mimeData().text().strip()
-            if text.lower().startswith("http"):
-                controller.add_image_from_url(text, scene_pos=scene_pos)
+        if not handled:
+            text_url = self._image_url_from_text(event.mimeData().text()) if event.mimeData().hasText() else ""
+            if text_url:
+                controller.add_image_from_url(text_url, scene_pos=scene_pos)
+
+    @staticmethod
+    def can_handle_external_drop(mime: QtCore.QMimeData) -> bool:
+        if mime.hasUrls() or mime.hasImage():
+            return True
+        if mime.hasHtml() and BoardPage._image_url_from_html(mime.html()):
+            return True
+        return bool(mime.hasText() and BoardPage._image_url_from_text(mime.text()))
+
+    @staticmethod
+    def _image_url_from_html(html: str) -> str:
+        match = re.search(r'<img\b[^>]*\bsrc=["\'](https?://[^"\']+)["\']', str(html or ""), re.IGNORECASE)
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
+    def _image_url_from_text(text: str) -> str:
+        value = str(text or "").strip()
+        return value if value.lower().startswith(("http://", "https://")) else ""
 
     def set_controller(self, controller) -> None:
         self._controller = controller
@@ -746,7 +764,7 @@ class BoardPage(QtWidgets.QWidget):
             controller.ungroup_selected()
 
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # type: ignore[override]
-        if event.mimeData().hasUrls():
+        if self.can_handle_external_drop(event.mimeData()):
             print("[BOARD] dragEnter")
             event.setDropAction(QtCore.Qt.DropAction.CopyAction)
             event.acceptProposedAction()
@@ -754,7 +772,7 @@ class BoardPage(QtWidgets.QWidget):
         super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event: QtGui.QDragMoveEvent) -> None:  # type: ignore[override]
-        if event.mimeData().hasUrls():
+        if self.can_handle_external_drop(event.mimeData()):
             print("[BOARD] dragMove")
             event.setDropAction(QtCore.Qt.DropAction.CopyAction)
             event.acceptProposedAction()
@@ -762,7 +780,7 @@ class BoardPage(QtWidgets.QWidget):
         super().dragMoveEvent(event)
 
     def dropEvent(self, event: QtGui.QDropEvent) -> None:  # type: ignore[override]
-        if event.mimeData().hasUrls():
+        if self.can_handle_external_drop(event.mimeData()):
             print("[BOARD] dropEvent")
             self.handle_external_drop(event)
             event.acceptProposedAction()

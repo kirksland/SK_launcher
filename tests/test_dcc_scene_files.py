@@ -14,6 +14,7 @@ from core.dcc import (
     get_dcc_handler,
     open_scene_with_dcc,
 )
+from core.dcc_handlers.blender import convert_obj_to_fbx
 
 
 class DccSceneFileTests(unittest.TestCase):
@@ -171,6 +172,31 @@ class DccSceneFileTests(unittest.TestCase):
 
         self.assertIsNone(result.scene_path)
         self.assertIn("Could not resolve a valid Blender executable", result.error)
+
+    def test_convert_obj_to_fbx_uses_blender_background_export(self) -> None:
+        root = self._make_case_dir("dcc_blender_obj_fbx")
+        source = root / "chair.obj"
+        target = root / "chair.fbx"
+        source.write_text("obj", encoding="utf-8")
+
+        def _fake_run(command, **_kwargs):
+            self.assertIn("--background", command)
+            self.assertIn("--python-expr", command)
+            target.write_text("fbx", encoding="utf-8")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("core.dcc_handlers.blender._resolve_blender_executable", return_value="C:/Blender/blender.exe"):
+            with mock.patch("subprocess.run", side_effect=_fake_run) as run_mock:
+                result = convert_obj_to_fbx(
+                    source,
+                    executable="C:/Blender/blender.exe",
+                    launcher_root=root,
+                )
+
+        self.assertEqual(result.error, "")
+        self.assertEqual(result.output_path, target)
+        self.assertTrue(target.exists())
+        run_mock.assert_called_once()
 
     def test_create_scene_with_unknown_dcc_returns_error(self) -> None:
         root = self._make_case_dir("dcc_unknown_scene")

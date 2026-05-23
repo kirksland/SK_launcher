@@ -15,6 +15,8 @@ class BoardCommandDispatcher:
         command_id = str(command_id or "").strip().lower()
         if command_id == "board.add.image":
             return self._execute(command_id, "add_image")
+        if command_id == "board.paste.image":
+            return self._execute(command_id, "paste_image_from_clipboard")
         if command_id == "board.add.video":
             return self._execute(command_id, "add_video")
         if command_id == "board.add.sequence":

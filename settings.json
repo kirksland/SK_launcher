@@ -724,6 +724,144 @@
       "usd_search": [
         "publish"
       ]
+    },
+    "C:\\Users\\justi\\Documents\\HoudiniProjects\\new_Test": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "modeling",
+        "lookdev",
+        "layout",
+        "animation",
+        "vfx",
+        "lighting"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "geo"
+        ]
+      },
+      "entity_sources": [
+        {
+          "path": "geo",
+          "entity_type": "asset",
+          "role": "library_asset",
+          "confidence": "high",
+          "evidence": [
+            "user manual mapping"
+          ]
+        }
+      ],
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish",
+            "root"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish",
+        "root"
+      ]
+    },
+    "C:\\Users\\justi\\Documents\\HoudiniProjects\\MnM": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "modeling",
+        "lookdev",
+        "layout",
+        "animation",
+        "vfx",
+        "lighting"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "geo"
+        ]
+      },
+      "entity_sources": [
+        {
+          "path": "geo",
+          "entity_type": "asset",
+          "role": "library_asset",
+          "confidence": "high",
+          "evidence": [
+            "direct source geometry files",
+            "texture folders",
+            "texture map naming"
+          ]
+        }
+      ],
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish",
+            "root"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "textures"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish",
+        "root"
+      ]
     }
   },
   "shortcuts": {

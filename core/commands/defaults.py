@@ -20,6 +20,13 @@ DEFAULT_APP_COMMANDS: tuple[AppCommand, ...] = (
         default_shortcuts=(),
     ),
     AppCommand(
+        id="board.paste.image",
+        label="Paste Image",
+        domain="board",
+        scope="board",
+        default_shortcuts=("Ctrl+V",),
+    ),
+    AppCommand(
         id="board.add.video",
         label="Add Video...",
         domain="board",
@@ -148,6 +155,13 @@ DEFAULT_APP_COMMANDS: tuple[AppCommand, ...] = (
     AppCommand(
         id="asset.copy_path",
         label="Copy Path",
+        domain="asset",
+        scope="asset_manager",
+        default_shortcuts=(),
+    ),
+    AppCommand(
+        id="asset.convert_obj_to_fbx",
+        label="Convert OBJ To FBX",
         domain="asset",
         scope="asset_manager",
         default_shortcuts=(),

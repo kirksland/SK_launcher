@@ -11,6 +11,12 @@ from core.dcc import DccCreateContext, DccCreateResult, DccDescriptor, DccHandle
 
 
 @dataclass(frozen=True)
+class BlenderObjToFbxResult:
+    output_path: Path | None
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class BlenderDccHandler(DccHandler):
     descriptor: DccDescriptor
 
@@ -76,6 +82,73 @@ class BlenderDccHandler(DccHandler):
             subprocess.Popen([context.executable, str(scene_path)])
             return
         os.startfile(str(scene_path))  # type: ignore[attr-defined]
+
+
+def convert_obj_to_fbx(
+    source_path: Path,
+    *,
+    executable: str,
+    output_path: Path | None = None,
+    launcher_root: Path | None = None,
+) -> BlenderObjToFbxResult:
+    source = Path(source_path)
+    if source.suffix.lower() != ".obj":
+        return BlenderObjToFbxResult(None, "Only OBJ files can be converted to FBX.")
+    if not source.exists():
+        return BlenderObjToFbxResult(None, f"OBJ file does not exist: {source}")
+
+    target = Path(output_path) if output_path is not None else source.with_suffix(".fbx")
+    executable_path = _resolve_blender_executable(executable)
+    if not executable_path:
+        return BlenderObjToFbxResult(
+            None,
+            "Could not resolve a valid Blender executable. Configure Blender in Settings before converting OBJ files.",
+        )
+
+    expression = _obj_to_fbx_expression(source, target)
+    command = [
+        executable_path,
+        "--background",
+        "--factory-startup",
+        "--python-expr",
+        expression,
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(launcher_root or Path.cwd()),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:
+        return BlenderObjToFbxResult(None, f"Failed to launch Blender for OBJ to FBX conversion:\n{exc}")
+    if completed.returncode != 0:
+        message = str(completed.stderr or completed.stdout or "").strip()
+        if not message:
+            message = f"Blender exited with code {completed.returncode}."
+        return BlenderObjToFbxResult(None, f"Failed to convert OBJ to FBX:\n{message}")
+    if not target.exists():
+        return BlenderObjToFbxResult(None, "Blender conversion completed, but no FBX file was written.")
+    return BlenderObjToFbxResult(target, "")
+
+
+def _obj_to_fbx_expression(source: Path, target: Path) -> str:
+    source_text = json.dumps(str(source))
+    target_text = json.dumps(str(target))
+    return (
+        "import bpy, pathlib; "
+        "bpy.ops.object.select_all(action='SELECT'); "
+        "bpy.ops.object.delete(); "
+        f"src={source_text}; dst={target_text}; "
+        "pathlib.Path(dst).parent.mkdir(parents=True, exist_ok=True); "
+        "\ntry:\n"
+        "    bpy.ops.wm.obj_import(filepath=src)\n"
+        "except Exception:\n"
+        "    bpy.ops.import_scene.obj(filepath=src)\n"
+        "bpy.ops.object.select_all(action='SELECT'); "
+        "bpy.ops.export_scene.fbx(filepath=dst, use_selection=False, path_mode='AUTO')"
+    )
 
 
 def _resolve_blender_executable(executable: str) -> str:

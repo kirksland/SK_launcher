@@ -580,6 +580,9 @@ class BoardController:
     def add_image_from_image_data(self, image_data, scene_pos: Optional[QtCore.QPointF] = None) -> None:
         self._media_import.add_image_from_image_data(image_data, scene_pos=scene_pos)
 
+    def paste_image_from_clipboard(self) -> None:
+        self._media_import.paste_image_from_clipboard()
+
     def add_video(self) -> None:
         self._media_import.add_video()
 

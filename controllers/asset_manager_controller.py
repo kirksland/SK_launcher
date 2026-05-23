@@ -21,6 +21,13 @@ from ui.widgets.asset_version_row import AssetVersionRow
 
 
 ASSET_CONTEXT_ACTION_RULES = (
+    ActionRule(
+        "asset.convert_obj_to_fbx",
+        targets=("asset.inventory",),
+        when="is_obj",
+        label="Convert OBJ To FBX",
+        separator_before=True,
+    ),
     ActionRule("asset.copy_path", targets=("asset.inventory",), when="has_path"),
     ActionRule("asset.copy_path", targets=("asset.entity_list",), when="has_path", label="Copy Asset Path"),
     ActionRule("asset.copy_path", targets=("asset.project_grid",), when="has_path", label="Copy Project Path"),
@@ -256,6 +263,7 @@ class AssetManagerController:
             target="asset.inventory",
             path=path_text,
             label=label,
+            extra_metadata={"is_obj": Path(path_text).suffix.lower() == ".obj"},
         )
 
     def show_asset_context_menu(self, pos: QtCore.QPoint) -> None:
@@ -296,6 +304,7 @@ class AssetManagerController:
         target: str,
         path: str,
         label: str,
+        extra_metadata: dict[str, object] | None = None,
     ) -> None:
         command_controller = getattr(self.w, "command_controller", None)
         shortcuts_controller = getattr(self.w, "shortcuts_controller", None)
@@ -304,11 +313,11 @@ class AssetManagerController:
         context = ActionContext(
             scope="asset_manager",
             target=target,
-            metadata={"path": path, "has_path": bool(path)},
+            metadata={"path": path, "has_path": bool(path), **(extra_metadata or {})},
         )
         rules = tuple(
             ActionRule(rule.command_id, targets=rule.targets, when=rule.when, label=label)
-            if target in rule.targets
+            if target in rule.targets and rule.command_id == "asset.copy_path"
             else rule
             for rule in ASSET_CONTEXT_ACTION_RULES
         )

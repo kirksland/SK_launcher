@@ -1,5 +1,7 @@
 import unittest
 import os
+from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -19,6 +21,7 @@ from core.commands import (
 )
 from controllers.app_command_controller import AppCommandController
 from controllers.asset_command_dispatcher import AssetCommandDispatcher
+from controllers.asset_manager_controller import ASSET_CONTEXT_ACTION_RULES
 from controllers.board.command_dispatcher import BoardCommandDispatcher
 from controllers.app_shortcuts_controller import AppShortcutsController, should_block_shortcut_for_text_input
 from controllers.projects_command_dispatcher import ProjectsCommandDispatcher
@@ -48,6 +51,7 @@ class AppCommandTests(unittest.TestCase):
 
         self.assertEqual("I", registry.require("board.layout.auto").default_shortcuts[0])
         self.assertEqual("F", registry.require("board.view.fit").default_shortcuts[0])
+        self.assertEqual("Ctrl+V", registry.require("board.paste.image").default_shortcuts[0])
         self.assertEqual("G", registry.require("board.group.toggle").default_shortcuts[0])
         self.assertEqual("Ctrl+G", registry.require("board.group.create").default_shortcuts[0])
         self.assertEqual("Ctrl+Shift+G", registry.require("board.group.ungroup").default_shortcuts[0])
@@ -160,6 +164,15 @@ class AppCommandTests(unittest.TestCase):
 
         self.assertTrue(result.handled)
         self.assertFalse(board.w.board_page.grid_toggle.isChecked())
+
+    def test_board_command_dispatcher_executes_paste_image(self) -> None:
+        board = _FakeBoardController()
+        dispatcher = BoardCommandDispatcher(board)
+
+        result = dispatcher.execute_command("board.paste.image")
+
+        self.assertTrue(result.handled)
+        self.assertEqual(["paste_image"], board.calls)
 
     def test_board_command_dispatcher_executes_group_commands(self) -> None:
         board = _FakeBoardController()
@@ -297,6 +310,41 @@ class AppCommandTests(unittest.TestCase):
         self.assertEqual("C:/project/asset/tree.usd", QtWidgets.QApplication.clipboard().text())
         self.assertEqual(["Copied: C:/project/asset/tree.usd"], asset.statuses)
 
+    def test_asset_command_dispatcher_converts_obj_to_fbx(self) -> None:
+        asset = _FakeAssetController()
+        dispatcher = AssetCommandDispatcher(asset)
+
+        with mock.patch(
+            "controllers.asset_command_dispatcher.convert_obj_to_fbx",
+            return_value=mock.Mock(output_path=Path("C:/project/asset/tree.fbx"), error=""),
+        ) as convert:
+            result = dispatcher.execute_command(
+                "asset.convert_obj_to_fbx",
+                CommandContext("asset_manager", metadata={"path": "C:\\project\\asset\\tree.obj"}),
+            )
+
+        self.assertTrue(result.handled)
+        self.assertEqual("C:\\project\\asset\\tree.fbx", result.message)
+        self.assertEqual("C:/Blender/blender.exe", convert.call_args.kwargs["executable"])
+        self.assertEqual(
+            ["Converting OBJ to FBX with Blender: tree.obj", "Converted FBX: C:/project/asset/tree.fbx"],
+            asset.statuses,
+        )
+
+    def test_asset_inventory_actions_include_obj_conversion(self) -> None:
+        registry = create_default_command_registry()
+        actions = ActionResolver(registry, [], ASSET_CONTEXT_ACTION_RULES).resolve(
+            ActionContext(
+                "asset_manager",
+                target="asset.inventory",
+                metadata={"path": "C:/project/tree.obj", "has_path": True, "is_obj": True},
+            )
+        )
+
+        labels_by_id = {action.command_id: action.label for action in actions}
+        self.assertEqual("Convert OBJ To FBX", labels_by_id["asset.convert_obj_to_fbx"])
+        self.assertEqual("Copy Path", labels_by_id["asset.copy_path"])
+
     def test_app_command_controller_reports_missing_dispatcher(self) -> None:
         controller = AppCommandController()
 
@@ -327,14 +375,14 @@ class AppCommandTests(unittest.TestCase):
 
         shortcuts.install()
 
-        self.assertEqual(6, first_count)
+        self.assertEqual(7, first_count)
         self.assertEqual(first_install_count, shortcuts.install_count)
         self.assertEqual(first_shortcuts, tuple(shortcuts.shortcuts))
 
         shortcuts.reload_settings({"shortcuts": {"board.view.fit": ["Ctrl+F"]}})
 
         self.assertEqual(first_install_count + 1, shortcuts.install_count)
-        self.assertEqual(6, len(shortcuts.shortcuts))
+        self.assertEqual(7, len(shortcuts.shortcuts))
         self.assertTrue(any(shortcut.key().toString() == "Ctrl+F" for shortcut in shortcuts.shortcuts))
         shortcuts.clear()
 
@@ -429,6 +477,9 @@ class _FakeBoardController:
     def fit_view(self) -> None:
         self.calls.append("fit")
 
+    def paste_image_from_clipboard(self) -> None:
+        self.calls.append("paste_image")
+
     def exit_focus_mode(self) -> None:
         self.calls.append("exit_focus")
 
@@ -485,6 +536,8 @@ class _FakeProjectsController:
 
 
 class _FakeAssetWindow:
+    _blender_exe = "C:/Blender/blender.exe"
+
     @staticmethod
     def _to_houdini_path(text: str) -> str:
         return text.replace("\\", "/")

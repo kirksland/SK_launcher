@@ -153,6 +153,20 @@ class BoardMediaImportController:
             return
         self.add_image_from_path(dest, scene_pos=scene_pos)
 
+    def paste_image_from_clipboard(self) -> None:
+        board = self.board
+        if not board._project_root:
+            board._notify("Select a project first.")
+            return
+        mime = QtWidgets.QApplication.clipboard().mimeData()
+        if mime is None or not mime.hasImage():
+            board._notify("Clipboard does not contain an image.")
+            return
+        self.add_image_from_image_data(
+            mime.imageData(),
+            scene_pos=board._current_view_scene_center(),
+        )
+
     def add_video(self) -> None:
         board = self.board
         if not board._project_root:

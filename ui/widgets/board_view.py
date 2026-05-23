@@ -523,7 +523,7 @@ class BoardView(QtWidgets.QGraphicsView):
                 self._scale_overlays[idx].setRect(item.sceneBoundingRect())
 
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # type: ignore[override]
-        if event.mimeData().hasUrls():
+        if self._can_handle_external_drop(event.mimeData()):
             print("[BOARD][VIEW] dragEnter")
             event.setDropAction(QtCore.Qt.DropAction.CopyAction)
             event.acceptProposedAction()
@@ -531,7 +531,7 @@ class BoardView(QtWidgets.QGraphicsView):
         super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event: QtGui.QDragMoveEvent) -> None:  # type: ignore[override]
-        if event.mimeData().hasUrls():
+        if self._can_handle_external_drop(event.mimeData()):
             print("[BOARD][VIEW] dragMove")
             event.setDropAction(QtCore.Qt.DropAction.CopyAction)
             event.acceptProposedAction()
@@ -539,7 +539,7 @@ class BoardView(QtWidgets.QGraphicsView):
         super().dragMoveEvent(event)
 
     def dropEvent(self, event: QtGui.QDropEvent) -> None:  # type: ignore[override]
-        if event.mimeData().hasUrls():
+        if self._can_handle_external_drop(event.mimeData()):
             print("[BOARD][VIEW] dropEvent")
             widget = self.parentWidget()
             while widget is not None and not hasattr(widget, "handle_external_drop"):
@@ -551,3 +551,12 @@ class BoardView(QtWidgets.QGraphicsView):
             event.acceptProposedAction()
             return
         super().dropEvent(event)
+
+    def _can_handle_external_drop(self, mime: QtCore.QMimeData) -> bool:
+        widget = self.parentWidget()
+        while widget is not None:
+            handler = getattr(widget, "can_handle_external_drop", None)
+            if callable(handler):
+                return bool(handler(mime))
+            widget = widget.parentWidget()
+        return bool(mime.hasUrls())
