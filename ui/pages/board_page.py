@@ -261,7 +261,7 @@ class BoardPage(QtWidgets.QWidget):
         footer = QtWidgets.QHBoxLayout()
         layout.addLayout(footer)
         self.hint_label = QtWidgets.QLabel(
-            "Tip: Right-click for add/group, drag items, wheel to zoom, Ctrl+drag to scale, middle mouse to pan, Del to remove."
+            "Tip: Right-click for add/group, drag items, Alt+drag image to export, wheel to zoom, Ctrl+drag to scale, middle mouse to pan, Del to remove."
         )
         self.hint_label.setStyleSheet(muted_text_style())
         footer.addWidget(self.hint_label, 1)

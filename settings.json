@@ -862,6 +862,84 @@
         "publish",
         "root"
       ]
+    },
+    "C:\\Users\\justi\\Documents\\HoudiniProjects\\moose_project": {
+      "schema_version": 1,
+      "preset_id": "default_v1",
+      "contexts": [
+        "modeling",
+        "lookdev",
+        "layout",
+        "animation",
+        "vfx",
+        "lighting"
+      ],
+      "entity_roots": {
+        "shot": [
+          "shots"
+        ],
+        "asset": [
+          "geo",
+          "geo/moose"
+        ]
+      },
+      "entity_sources": [
+        {
+          "path": "geo",
+          "entity_type": "asset",
+          "role": "library_asset",
+          "confidence": "medium",
+          "evidence": [
+            "direct source geometry files"
+          ]
+        },
+        {
+          "path": "geo/moose",
+          "entity_type": "asset",
+          "role": "library_asset",
+          "confidence": "medium",
+          "evidence": [
+            "direct source geometry files"
+          ]
+        }
+      ],
+      "representations": {
+        "usd": {
+          "extensions": [
+            ".usd",
+            ".usda",
+            ".usdc",
+            ".usdnc"
+          ],
+          "folders": [
+            "publish",
+            "root"
+          ]
+        },
+        "review_video": {
+          "extensions": [
+            ".mp4",
+            ".mov"
+          ],
+          "folders": [
+            "publish"
+          ]
+        },
+        "preview_image": {
+          "extensions": [
+            ".png",
+            ".jpg",
+            ".jpeg"
+          ],
+          "folders": [
+            "preview"
+          ]
+        }
+      },
+      "usd_search": [
+        "publish",
+        "root"
+      ]
     }
   },
   "shortcuts": {

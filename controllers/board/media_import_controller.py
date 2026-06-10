@@ -42,6 +42,32 @@ class BoardMediaImportController:
             return
         self.add_image_from_path(Path(path))
 
+    @staticmethod
+    def _paths_match(path_a: Path, path_b: Path) -> bool:
+        try:
+            return path_a.resolve() == path_b.resolve()
+        except Exception:
+            return path_a == path_b
+
+    @staticmethod
+    def _unique_asset_path(assets_dir: Path, filename: str, source: Optional[Path] = None) -> Path:
+        candidate = assets_dir / filename
+        if source is not None and candidate.exists() and BoardMediaImportController._paths_match(source, candidate):
+            return candidate
+        if not candidate.exists():
+            return candidate
+
+        stem = candidate.stem or "media"
+        suffix = candidate.suffix
+        index = 1
+        while True:
+            unique = assets_dir / f"{stem}_{index:03d}{suffix}"
+            if source is not None and unique.exists() and BoardMediaImportController._paths_match(source, unique):
+                return unique
+            if not unique.exists():
+                return unique
+            index += 1
+
     def add_image_from_path(
         self,
         src: Path,
@@ -58,9 +84,9 @@ class BoardMediaImportController:
             return None
         assets_dir = board._project_root / ".skyforge_board_assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
-        dest = assets_dir / src.name
+        dest = self._unique_asset_path(assets_dir, src.name, src)
         print(f"[BOARD] Import image: {src} -> {dest}")
-        if src.resolve() != dest.resolve():
+        if not self._paths_match(src, dest):
             try:
                 shutil.copy2(src, dest)
             except Exception as exc:
@@ -112,7 +138,7 @@ class BoardMediaImportController:
         assets_dir = board._project_root / ".skyforge_board_assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
         safe_name = QtCore.QUrl(url).fileName() or f"web_{uuid.uuid4().hex}.png"
-        dest = assets_dir / safe_name
+        dest = self._unique_asset_path(assets_dir, safe_name)
         try:
             urllib.request.urlretrieve(url, dest)
         except Exception as exc:
@@ -198,9 +224,9 @@ class BoardMediaImportController:
             return None
         assets_dir = board._project_root / ".skyforge_board_assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
-        dest = assets_dir / src.name
+        dest = self._unique_asset_path(assets_dir, src.name, src)
         print(f"[BOARD] Import video: {src} -> {dest}")
-        if src.resolve() != dest.resolve():
+        if not self._paths_match(src, dest):
             try:
                 shutil.copy2(src, dest)
             except Exception as exc:

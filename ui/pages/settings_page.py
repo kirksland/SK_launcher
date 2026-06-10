@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtWidgets
 
 from core.commands import AppCommand
 from core.settings import discover_houdini_installations, normalize_blender_exe, normalize_houdini_exe
+from core.user_profile import normalize_user_profile, profile_initials
 from ui.utils.styles import PALETTE, title_style
 
 
@@ -59,6 +60,7 @@ class SettingsPage(QtWidgets.QWidget):
         runtime_cache_max_days: int,
         shortcut_commands: Sequence[AppCommand] = (),
         shortcut_overrides: Mapping[str, object] | None = None,
+        user_profile: Mapping[str, object] | None = None,
         parent: QtWidgets.QWidget | None = None,
         ) -> None:
         super().__init__(parent)
@@ -101,12 +103,19 @@ class SettingsPage(QtWidgets.QWidget):
         nav_subtitle.setStyleSheet(f"color: {PALETTE['muted']}; font-size: 11px;")
         nav_layout.addWidget(nav_subtitle)
 
+        self.nav_profile_btn = _SettingsNavButton("Profile")
         self.nav_workspace_btn = _SettingsNavButton("Workspace")
         self.nav_launch_btn = _SettingsNavButton("Launch")
         self.nav_houdini_btn = _SettingsNavButton("Houdini")
         self.nav_shortcuts_btn = _SettingsNavButton("Shortcuts")
         for index, button in enumerate(
-            (self.nav_workspace_btn, self.nav_launch_btn, self.nav_houdini_btn, self.nav_shortcuts_btn)
+            (
+                self.nav_profile_btn,
+                self.nav_workspace_btn,
+                self.nav_launch_btn,
+                self.nav_houdini_btn,
+                self.nav_shortcuts_btn,
+            )
         ):
             self._nav_group.addButton(button, index)
             nav_layout.addWidget(button)
@@ -160,6 +169,10 @@ class SettingsPage(QtWidgets.QWidget):
         self.settings_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
         self.settings_scroll_layout.addWidget(self.settings_stack)
 
+        self.profile_page = self._build_section_page(
+            "User Profile",
+            "Create the identity displayed in Skyforge and attached to future collaboration features.",
+        )
         self.workspace_page = self._build_section_page(
             "Workspace Setup",
             "Paths and naming settings used by the launcher to discover and create project structures.",
@@ -176,11 +189,13 @@ class SettingsPage(QtWidgets.QWidget):
             "Keyboard Shortcuts",
             "Action bindings shared by the app domains. Settings only persist changes from defaults.",
         )
+        self.settings_stack.addWidget(self.profile_page)
         self.settings_stack.addWidget(self.workspace_page)
         self.settings_stack.addWidget(self.launch_page)
         self.settings_stack.addWidget(self.houdini_page)
         self.settings_stack.addWidget(self.shortcuts_page)
 
+        self._build_profile_fields(user_profile or {})
         self._build_workspace_fields(
             projects_dir,
             server_repo_dir,
@@ -231,7 +246,7 @@ class SettingsPage(QtWidgets.QWidget):
         self.settings_houdini_version.currentIndexChanged.connect(self._on_houdini_version_changed)
         self.settings_houdini_exe.textChanged.connect(self._sync_houdini_version_selection)
         self._nav_group.idClicked.connect(self.settings_stack.setCurrentIndex)
-        self.nav_workspace_btn.setChecked(True)
+        self.nav_profile_btn.setChecked(True)
         self.settings_stack.setCurrentIndex(0)
 
     def _build_section_page(self, title: str, description: str) -> QtWidgets.QWidget:
@@ -359,6 +374,89 @@ class SettingsPage(QtWidgets.QWidget):
         self.settings_runtime_cache_max_days.setValue(max(1, int(runtime_cache_max_days)))
         self.settings_runtime_cache_max_days.setSuffix(" days")
         runtime_form.addRow("Retention Window", self.settings_runtime_cache_max_days)
+
+    def _build_profile_fields(self, raw_profile: Mapping[str, object]) -> None:
+        profile = normalize_user_profile(dict(raw_profile))
+
+        identity_form = self._build_card(
+            self.profile_page,
+            "Identity",
+            "This profile stays local for now. It is ready to be reused by project ownership and collaboration features.",
+        )
+
+        identity_row = QtWidgets.QWidget()
+        identity_layout = QtWidgets.QHBoxLayout(identity_row)
+        identity_layout.setContentsMargins(0, 0, 0, 4)
+        identity_layout.setSpacing(12)
+
+        self.profile_avatar = QtWidgets.QLabel(profile_initials(profile))
+        self.profile_avatar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.profile_avatar.setFixedSize(56, 56)
+        self.profile_avatar.setStyleSheet(
+            "QLabel {"
+            "background: rgba(242,193,78,0.16);"
+            "border: 1px solid rgba(242,193,78,0.45);"
+            "border-radius: 28px;"
+            f"color: {PALETTE['light_text']};"
+            "font-size: 17px;"
+            "font-weight: 700;"
+            "}"
+        )
+        identity_layout.addWidget(self.profile_avatar)
+
+        identity_text = QtWidgets.QVBoxLayout()
+        identity_text.setSpacing(2)
+        identity_title = QtWidgets.QLabel("Your Skyforge identity")
+        identity_title.setStyleSheet(f"color: {PALETTE['light_text']}; font-weight: 600;")
+        identity_text.addWidget(identity_title)
+        identity_hint = QtWidgets.QLabel("Your initials are generated automatically from your display name.")
+        identity_hint.setWordWrap(True)
+        identity_hint.setStyleSheet(f"color: {PALETTE['muted']};")
+        identity_text.addWidget(identity_hint)
+        identity_layout.addLayout(identity_text, 1)
+        identity_form.addRow("", identity_row)
+
+        self.profile_display_name = QtWidgets.QLineEdit(profile["display_name"])
+        self.profile_display_name.setPlaceholderText("Your display name")
+        identity_form.addRow("Display Name", self.profile_display_name)
+
+        self.profile_email = QtWidgets.QLineEdit(profile["email"])
+        self.profile_email.setPlaceholderText("name@example.com")
+        identity_form.addRow("Email", self.profile_email)
+
+        professional_form = self._build_card(
+            self.profile_page,
+            "Professional Details",
+            "Optional context that helps identify your place in a production team.",
+        )
+        self.profile_role = QtWidgets.QLineEdit(profile["role"])
+        self.profile_role.setPlaceholderText("Technical Artist, Director, Producer...")
+        professional_form.addRow("Role", self.profile_role)
+
+        self.profile_studio = QtWidgets.QLineEdit(profile["studio"])
+        self.profile_studio.setPlaceholderText("Studio or team")
+        professional_form.addRow("Studio / Team", self.profile_studio)
+
+        self.profile_bio = QtWidgets.QPlainTextEdit(profile["bio"])
+        self.profile_bio.setPlaceholderText("A short introduction")
+        self.profile_bio.setMaximumHeight(100)
+        professional_form.addRow("Bio", self.profile_bio)
+
+        self.profile_display_name.textChanged.connect(self._refresh_profile_avatar)
+
+    def profile_data(self) -> dict[str, str]:
+        return normalize_user_profile(
+            {
+                "display_name": self.profile_display_name.text(),
+                "email": self.profile_email.text(),
+                "role": self.profile_role.text(),
+                "studio": self.profile_studio.text(),
+                "bio": self.profile_bio.toPlainText(),
+            }
+        )
+
+    def _refresh_profile_avatar(self) -> None:
+        self.profile_avatar.setText(profile_initials(self.profile_data()))
 
     def _build_launch_fields(
         self,

@@ -11,6 +11,7 @@ from core.asset_schema import (
     default_asset_schema,
     normalize_asset_schema as normalize_asset_schema_config,
 )
+from core.user_profile import DEFAULT_USER_PROFILE, normalize_user_profile
 
 LAUNCHER_ROOT = Path(__file__).resolve().parent.parent
 LEGACY_SETTINGS_PATH = LAUNCHER_ROOT / "settings.json"
@@ -41,6 +42,7 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "runtime_cache_location": "local_appdata",
     "runtime_cache_max_gb": 5,
     "runtime_cache_max_days": 30,
+    "user_profile": dict(DEFAULT_USER_PROFILE),
 }
 
 
@@ -95,6 +97,7 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
         return _default_settings_with_latest_houdini()
     merged = DEFAULT_SETTINGS.copy()
     merged["asset_schema"] = default_asset_schema()
+    merged["user_profile"] = dict(DEFAULT_USER_PROFILE)
     merged.update({
         k: v
         for k, v in data.items()
@@ -116,6 +119,7 @@ def load_settings(settings_path: Optional[Path] = None) -> Dict[str, object]:
         data.get("runtime_cache_max_days"),
         int(DEFAULT_SETTINGS["runtime_cache_max_days"]),
     )
+    merged["user_profile"] = normalize_user_profile(data.get("user_profile"))
     # If settings predate houdini_exe storage, default to latest install.
     if "houdini_exe" not in data:
         installs = discover_houdini_installations()
@@ -146,6 +150,7 @@ def save_settings(settings: Dict[str, object], settings_path: Optional[Path] = N
         serializable.get("runtime_cache_max_days"),
         int(DEFAULT_SETTINGS["runtime_cache_max_days"]),
     )
+    serializable["user_profile"] = normalize_user_profile(serializable.get("user_profile"))
     resolved_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
 
 

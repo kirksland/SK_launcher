@@ -491,6 +491,49 @@ class AssetManagerPage(QtWidgets.QWidget):
         controls.addWidget(self.asset_video_slider, 1)
         self.asset_video_controller.bind_controls(self.asset_play_btn, self.asset_video_slider)
         self.asset_video_layout.addLayout(controls)
+
+        self.asset_comfy_frame = QtWidgets.QFrame()
+        self.asset_comfy_frame.setStyleSheet(panel_style())
+        comfy_layout = QtWidgets.QVBoxLayout(self.asset_comfy_frame)
+        comfy_layout.setContentsMargins(10, 10, 10, 10)
+        comfy_layout.setSpacing(8)
+
+        comfy_header = QtWidgets.QHBoxLayout()
+        comfy_title = QtWidgets.QLabel("ComfyUI Metadata")
+        comfy_title.setStyleSheet("font-weight: 600; color: #d8dde5;")
+        comfy_header.addWidget(comfy_title, 0)
+        self.asset_comfy_summary = QtWidgets.QLabel("")
+        self.asset_comfy_summary.setStyleSheet(muted_text_style(size_px=11))
+        comfy_header.addWidget(self.asset_comfy_summary, 1)
+        comfy_layout.addLayout(comfy_header)
+
+        self.asset_comfy_tabs = QtWidgets.QTabWidget()
+        self.asset_comfy_tabs.setDocumentMode(True)
+        self.asset_comfy_tabs.setMaximumHeight(210)
+        self.asset_comfy_prompt = self._make_metadata_text_view()
+        self.asset_comfy_negative = self._make_metadata_text_view()
+        self.asset_comfy_workflow = self._make_metadata_text_view()
+        self.asset_comfy_tabs.addTab(self.asset_comfy_prompt, "Prompt")
+        self.asset_comfy_tabs.addTab(self.asset_comfy_negative, "Negative")
+        self.asset_comfy_tabs.addTab(self.asset_comfy_workflow, "Workflow JSON")
+        comfy_layout.addWidget(self.asset_comfy_tabs)
+
+        comfy_actions = QtWidgets.QHBoxLayout()
+        comfy_actions.addStretch(1)
+        self.asset_comfy_copy_prompt_btn = QtWidgets.QPushButton("Copy Prompt")
+        self.asset_comfy_copy_prompt_btn.clicked.connect(
+            lambda: self._copy_metadata_text(self.asset_comfy_prompt)
+        )
+        comfy_actions.addWidget(self.asset_comfy_copy_prompt_btn)
+        self.asset_comfy_copy_workflow_btn = QtWidgets.QPushButton("Copy Workflow")
+        self.asset_comfy_copy_workflow_btn.clicked.connect(
+            lambda: self._copy_metadata_text(self.asset_comfy_workflow)
+        )
+        comfy_actions.addWidget(self.asset_comfy_copy_workflow_btn)
+        comfy_layout.addLayout(comfy_actions)
+        self.asset_comfy_frame.setVisible(False)
+
+        preview_tab_layout.addWidget(self.asset_comfy_frame, 0)
         preview_tab_layout.addWidget(self.asset_video_box, 1)
 
         pipeline_tab = QtWidgets.QWidget()
@@ -579,6 +622,26 @@ class AssetManagerPage(QtWidgets.QWidget):
         desc_label.setVisible(False)
         layout.addWidget(desc_label)
         return panel
+
+    @staticmethod
+    def _make_metadata_text_view() -> QtWidgets.QPlainTextEdit:
+        view = QtWidgets.QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        view.setStyleSheet(
+            "QPlainTextEdit {"
+            "background: #1b1f26;"
+            "border: 1px solid #14171c;"
+            "border-radius: 6px;"
+            "padding: 6px;"
+            "color: #cfd6df;"
+            "}"
+        )
+        return view
+
+    @staticmethod
+    def _copy_metadata_text(view: QtWidgets.QPlainTextEdit) -> None:
+        QtWidgets.QApplication.clipboard().setText(view.toPlainText())
 
     def set_project_panel_collapsed(self, collapsed: bool) -> None:
         if not hasattr(self, "asset_main_split"):

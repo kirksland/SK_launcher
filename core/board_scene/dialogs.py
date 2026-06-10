@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from video.player import VideoPreviewLabel
+
+
+ImageLoader = Callable[[Path], QtGui.QPixmap]
 
 
 class PopupOutsideCloseFilter(QtCore.QObject):
@@ -205,3 +208,275 @@ class SequencePlayerDialog(QtWidgets.QDialog):
             )
         self._preview.set_base_pixmap(pixmap)
         self._status.setText(f"{path.name} ({index + 1}/{len(self._frames)})")
+
+
+class BoardSlideshowDialog(QtWidgets.QDialog):
+    def __init__(
+        self,
+        image_paths: list[Path],
+        image_loader: ImageLoader,
+        parent: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Board Slideshow")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._screen_fit_applied = False
+        self._original_image_paths = list(image_paths)
+        self._image_paths = list(image_paths)
+        self._image_loader = image_loader
+        self._index = 0
+        self._playing = False
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self._advance)
+        self._shortcuts: list[QtGui.QShortcut] = []
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        self._status = QtWidgets.QLabel("")
+        self._status.setStyleSheet("color: #9aa3ad;")
+        layout.addWidget(self._status, 0)
+
+        options = QtWidgets.QHBoxLayout()
+        layout.addLayout(options, 0)
+
+        order_label = QtWidgets.QLabel("Order")
+        options.addWidget(order_label, 0)
+        self._order_combo = QtWidgets.QComboBox()
+        self._order_combo.addItem("Selection", "selection")
+        self._order_combo.addItem("Name A-Z", "name_asc")
+        self._order_combo.addItem("Name Z-A", "name_desc")
+        self._order_combo.addItem("Created oldest", "created_asc")
+        self._order_combo.addItem("Created newest", "created_desc")
+        self._order_combo.addItem("Modified oldest", "modified_asc")
+        self._order_combo.addItem("Modified newest", "modified_desc")
+        self._order_combo.setCurrentIndex(3)
+        self._order_combo.currentIndexChanged.connect(self._on_order_changed)
+        options.addWidget(self._order_combo, 0)
+        options.addStretch(1)
+
+        self._preview = VideoPreviewLabel()
+        self._preview.setMinimumSize(240, 160)
+        self._preview.setStyleSheet("color: #9aa3ad;")
+        layout.addWidget(self._preview, 1)
+
+        controls = QtWidgets.QHBoxLayout()
+        layout.addLayout(controls, 0)
+
+        self._prev_btn = QtWidgets.QPushButton("Previous")
+        self._prev_btn.clicked.connect(self.previous_image)
+        controls.addWidget(self._prev_btn, 0)
+
+        self._play_btn = QtWidgets.QPushButton("Play")
+        self._play_btn.clicked.connect(self.toggle_play)
+        controls.addWidget(self._play_btn, 0)
+
+        self._next_btn = QtWidgets.QPushButton("Next")
+        self._next_btn.clicked.connect(self.next_image)
+        controls.addWidget(self._next_btn, 0)
+
+        self._slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._slider.setRange(0, max(0, len(self._image_paths) - 1))
+        self._slider.valueChanged.connect(self._on_slider)
+        controls.addWidget(self._slider, 1)
+
+        delay_label = QtWidgets.QLabel("Delay")
+        controls.addWidget(delay_label, 0)
+        self._delay_spin = QtWidgets.QDoubleSpinBox()
+        self._delay_spin.setRange(0.2, 30.0)
+        self._delay_spin.setSingleStep(0.25)
+        self._delay_spin.setSuffix(" s")
+        self._delay_spin.setValue(2.0)
+        self._delay_spin.valueChanged.connect(self._on_delay_changed)
+        controls.addWidget(self._delay_spin, 0)
+
+        self._apply_order("created_asc")
+
+        if self._image_paths:
+            self._show_image(0)
+        else:
+            self._status.setText("No images selected.")
+            self._set_controls_enabled(False)
+        self._bind_keyboard_shortcuts()
+        self._fit_to_screen()
+
+    def _bind_keyboard_shortcuts(self) -> None:
+        bindings = (
+            (QtCore.Qt.Key.Key_Right, self.next_image),
+            (QtCore.Qt.Key.Key_Down, self.next_image),
+            (QtCore.Qt.Key.Key_Left, self.previous_image),
+            (QtCore.Qt.Key.Key_Up, self.previous_image),
+            (QtCore.Qt.Key.Key_Space, self.toggle_play),
+            (QtCore.Qt.Key.Key_Escape, self.close),
+        )
+        for key, callback in bindings:
+            shortcut = QtGui.QShortcut(QtGui.QKeySequence(key), self)
+            shortcut.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(callback)
+            self._shortcuts.append(shortcut)
+
+    def _available_screen_geometry(self) -> QtCore.QRect:
+        parent = self.parentWidget()
+        screen = None
+        if parent is not None:
+            center = parent.frameGeometry().center()
+            screen = QtGui.QGuiApplication.screenAt(center)
+            if screen is None:
+                screen = parent.screen()
+        if screen is None:
+            screen = QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
+        if screen is None:
+            screen = QtGui.QGuiApplication.primaryScreen()
+        return screen.availableGeometry() if screen is not None else QtCore.QRect(0, 0, 1100, 720)
+
+    def _fit_to_screen(self) -> None:
+        available = self._available_screen_geometry()
+        margin = 48
+        max_width = max(360, available.width() - margin)
+        max_height = max(280, available.height() - margin)
+        width = min(1100, max_width)
+        height = min(720, max_height)
+        self.resize(width, height)
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if self._screen_fit_applied:
+            return
+        self._screen_fit_applied = True
+        self._fit_to_screen()
+
+    def _set_controls_enabled(self, enabled: bool) -> None:
+        for widget in (self._prev_btn, self._play_btn, self._next_btn, self._slider, self._delay_spin, self._order_combo):
+            widget.setEnabled(bool(enabled))
+
+    def _on_slider(self, value: int) -> None:
+        self._index = int(value)
+        self._show_image(self._index)
+
+    @staticmethod
+    def _path_created_time(path: Path) -> float:
+        try:
+            stat = path.stat()
+            return float(getattr(stat, "st_birthtime", stat.st_ctime))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _path_modified_time(path: Path) -> float:
+        try:
+            return float(path.stat().st_mtime)
+        except Exception:
+            return 0.0
+
+    def _apply_order(self, order_key: str) -> None:
+        if order_key == "selection":
+            ordered = list(self._original_image_paths)
+        elif order_key == "name_asc":
+            ordered = sorted(self._image_paths, key=lambda path: path.name.lower())
+        elif order_key == "name_desc":
+            ordered = sorted(self._image_paths, key=lambda path: path.name.lower(), reverse=True)
+        elif order_key == "created_desc":
+            ordered = sorted(
+                self._image_paths,
+                key=lambda path: (self._path_created_time(path), path.name.lower()),
+                reverse=True,
+            )
+        elif order_key == "modified_asc":
+            ordered = sorted(self._image_paths, key=lambda path: (self._path_modified_time(path), path.name.lower()))
+        elif order_key == "modified_desc":
+            ordered = sorted(
+                self._image_paths,
+                key=lambda path: (self._path_modified_time(path), path.name.lower()),
+                reverse=True,
+            )
+        else:
+            ordered = sorted(self._image_paths, key=lambda path: (self._path_created_time(path), path.name.lower()))
+        self._image_paths = ordered
+
+    def _on_order_changed(self) -> None:
+        if not self._image_paths:
+            return
+        current_path = self._image_paths[self._index] if 0 <= self._index < len(self._image_paths) else None
+        order_key = str(self._order_combo.currentData() or "created_asc")
+        self._apply_order(order_key)
+        if current_path in self._image_paths:
+            self._index = self._image_paths.index(current_path)
+        else:
+            self._index = min(self._index, len(self._image_paths) - 1)
+        self._slider.setRange(0, max(0, len(self._image_paths) - 1))
+        self._set_index(self._index)
+
+    def _on_delay_changed(self) -> None:
+        if self._playing:
+            self._timer.start(self._interval_ms())
+
+    def _interval_ms(self) -> int:
+        return max(1, int(round(float(self._delay_spin.value()) * 1000.0)))
+
+    def toggle_play(self) -> None:
+        if not self._image_paths:
+            return
+        if self._playing:
+            self._timer.stop()
+            self._playing = False
+            self._play_btn.setText("Play")
+            return
+        self._timer.start(self._interval_ms())
+        self._playing = True
+        self._play_btn.setText("Pause")
+
+    def previous_image(self) -> None:
+        if not self._image_paths:
+            return
+        self._set_index((self._index - 1) % len(self._image_paths))
+
+    def next_image(self) -> None:
+        if not self._image_paths:
+            return
+        self._set_index((self._index + 1) % len(self._image_paths))
+
+    def _advance(self) -> None:
+        self.next_image()
+
+    def _set_index(self, index: int) -> None:
+        self._index = int(index)
+        self._slider.blockSignals(True)
+        self._slider.setValue(self._index)
+        self._slider.blockSignals(False)
+        self._show_image(self._index)
+
+    def _show_image(self, index: int) -> None:
+        if not self._image_paths:
+            return
+        if index < 0 or index >= len(self._image_paths):
+            return
+        path = self._image_paths[index]
+        pixmap = self._image_loader(path)
+        if pixmap.isNull():
+            self._status.setText(f"Failed to load: {path.name} ({index + 1}/{len(self._image_paths)})")
+            return
+        self._preview.set_base_pixmap(pixmap)
+        self._status.setText(f"{path.name} ({index + 1}/{len(self._image_paths)})")
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
+        if event.key() == QtCore.Qt.Key.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        if event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_Down):
+            self.next_image()
+            event.accept()
+            return
+        if event.key() in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_Up):
+            self.previous_image()
+            event.accept()
+            return
+        if event.key() == QtCore.Qt.Key.Key_Space:
+            self.toggle_play()
+            event.accept()
+            return
+        super().keyPressEvent(event)

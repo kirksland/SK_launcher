@@ -69,6 +69,13 @@ DEFAULT_APP_COMMANDS: tuple[AppCommand, ...] = (
         default_shortcuts=("I",),
     ),
     AppCommand(
+        id="board.slideshow.start",
+        label="Start Slideshow",
+        domain="board",
+        scope="board",
+        default_shortcuts=(),
+    ),
+    AppCommand(
         id="board.view.fit",
         label="Fit Board View",
         domain="board",

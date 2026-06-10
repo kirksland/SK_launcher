@@ -29,6 +29,8 @@ class BoardCommandDispatcher:
             return self._convert_video_to_sequence(command_id, context)
         if command_id == "board.layout.auto":
             return self._execute(command_id, "layout_selection_grid")
+        if command_id == "board.slideshow.start":
+            return self._execute(command_id, "start_selected_image_slideshow")
         if command_id == "board.view.fit":
             return self._execute(command_id, "fit_view")
         if command_id == "board.view.toggle_grid":

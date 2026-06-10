@@ -38,6 +38,7 @@ class SettingsDistributionTests(unittest.TestCase):
         self.assertTrue(DEFAULT_PROJECTS_DIR.is_absolute())
         self.assertTrue(DEFAULT_SERVER_REPO_DIR.is_absolute())
         self.assertIsInstance(DEFAULT_SETTINGS["shortcuts"], dict)
+        self.assertIsInstance(DEFAULT_SETTINGS["user_profile"], dict)
 
     def test_active_settings_path_prefers_existing_legacy_file(self) -> None:
         root = self._make_case_dir("settings_legacy")
@@ -119,6 +120,19 @@ class SettingsDistributionTests(unittest.TestCase):
         payload = settings_path.read_text(encoding="utf-8")
         self.assertIn('"board.layout.auto": [', payload)
         self.assertNotIn('"bad": 5', payload)
+
+    def test_load_settings_normalizes_user_profile(self) -> None:
+        root = self._make_case_dir("settings_user_profile")
+        settings_path = root / "settings.json"
+        settings_path.write_text(
+            '{"user_profile": {"display_name": "  Justin  ", "role": 12}}',
+            encoding="utf-8",
+        )
+
+        settings = load_settings(settings_path)
+
+        self.assertEqual(settings["user_profile"]["display_name"], "Justin")
+        self.assertEqual(settings["user_profile"]["role"], "")
 
     def test_load_settings_normalizes_project_asset_overrides(self) -> None:
         root = self._make_case_dir("settings_project_schema")

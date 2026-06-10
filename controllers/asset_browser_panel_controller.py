@@ -285,6 +285,17 @@ class AssetBrowserPanelController:
         entity_type = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
         self.host._load_entity_details(entity_path, entity_type if isinstance(entity_type, str) else None)
 
+    def on_asset_entity_double_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
+        path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if not path_text:
+            return
+        entity_path = Path(str(path_text))
+        self.on_asset_entity_clicked(item)
+        QtCore.QTimer.singleShot(
+            0,
+            lambda path=entity_path: self.host.play_current_entity_video(path),
+        )
+
     def on_asset_tab_changed(self, index: int) -> None:
         if index == 0:
             self.w.asset_entity_search.setPlaceholderText("Search shots...")

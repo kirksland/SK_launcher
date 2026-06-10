@@ -29,29 +29,26 @@ class AssetInventoryRenderer:
         inventory: AssetInventory,
         *,
         on_selected_path: Callable[[Path, str], None],
-    ) -> Optional[Path]:
+    ) -> None:
         self.list_widget.clear()
         self._pending_rows = []
         self._hydrate_index = 0
         if self.hint_label is not None:
             self.hint_label.setText(inventory.hint)
 
-        first_video: Optional[Path] = None
         if inventory.bundles:
-            first_video = self._render_bundles(inventory, on_selected_path)
+            self._render_bundles(inventory, on_selected_path)
         elif inventory.files:
             self._render_files(inventory)
         else:
             self.list_widget.addItem(inventory.empty_message)
         self._schedule_thumbnail_hydration()
-        return first_video
 
     def _render_bundles(
         self,
         inventory: AssetInventory,
         on_selected_path: Callable[[Path, str], None],
-    ) -> Optional[Path]:
-        first_video: Optional[Path] = None
+    ) -> None:
         for bundle in inventory.bundles:
             row = AssetVersionRow(
                 bundle.name,
@@ -88,9 +85,6 @@ class AssetInventoryRenderer:
 
             row.selection_changed.connect(sync_item_data_and_preview)
             sync_item_data()
-            if first_video is None:
-                first_video = _first_video_path(bundle.entries)
-        return first_video
 
     def _render_files(self, inventory: AssetInventory) -> None:
         for file_entry in inventory.files:
@@ -125,11 +119,3 @@ class AssetInventoryRenderer:
         self._hydrate_index = end
         if self._hydrate_index < len(self._pending_rows):
             QtCore.QTimer.singleShot(0, self._hydrate_thumbnail_batch)
-
-
-def _first_video_path(entries: list[dict[str, object]]) -> Optional[Path]:
-    for entry in entries:
-        video = entry.get("video")
-        if isinstance(video, Path):
-            return video
-    return None

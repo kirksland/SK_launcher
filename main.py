@@ -31,6 +31,7 @@ from core.settings import (
 )
 from core.houdini_env import build_houdini_env
 from core.project_storage import prune_local_runtime_cache
+from core.user_profile import profile_initials
 from controllers.asset_manager_controller import AssetManagerController
 from controllers.asset_command_dispatcher import AssetCommandDispatcher
 from controllers.asset_pipeline_panel_controller import AssetPipelinePanelController
@@ -284,6 +285,27 @@ class LauncherLogPanel(QtWidgets.QFrame):
         return QtCore.QSize(0, 0)
 
 
+class CurrentPageStackedWidget(QtWidgets.QStackedWidget):
+    """A stacked widget that lets hidden pages stop driving the window minimum."""
+
+    def sizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        widget = self.currentWidget()
+        return widget.sizeHint() if widget is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        widget = self.currentWidget()
+        if widget is None:
+            return QtCore.QSize(0, 0)
+        hint = widget.minimumSizeHint()
+        return QtCore.QSize(0, hint.height())
+
+
+class CompressibleToolButton(QtWidgets.QToolButton):
+    def minimumSizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        hint = super().minimumSizeHint()
+        return QtCore.QSize(0, hint.height())
+
+
 def _create_startup_splash() -> QtWidgets.QSplashScreen:
     root = Path(__file__).resolve().parent
     splash_image_path = root / "horizontalSF.png"
@@ -428,7 +450,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.page_host.setStyleSheet(app_stylesheet())
         layout.addWidget(self.page_host, 1)
 
-        self.pages = QtWidgets.QStackedWidget()
+        self.pages = CurrentPageStackedWidget()
         self.page_host.setCentralWidget(self.pages)
 
         from ui.pages.client_page import ClientPage
@@ -472,6 +494,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
             int(self.settings.get("runtime_cache_max_days", 30)),
             shortcut_commands=self.command_controller.registry.list(),
             shortcut_overrides=self.settings.get("shortcuts", {}),
+            user_profile=self.settings.get("user_profile", {}),
         )
         self.pages.addWidget(self.settings_page)
 
@@ -505,21 +528,21 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.media_label.setToolTip("Global media controls")
         group_layout.addWidget(self.media_label)
 
-        self.media_prev_btn = QtWidgets.QToolButton()
+        self.media_prev_btn = CompressibleToolButton()
         self.media_prev_btn.setIcon(QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaSkipBackward))
         self.media_prev_btn.setAutoRaise(True)
         self.media_prev_btn.setToolTip("Previous")
         self.media_prev_btn.setStyleSheet(tool_button_dark_style(padding="4px 8px"))
         group_layout.addWidget(self.media_prev_btn)
 
-        self.media_play_btn = QtWidgets.QToolButton()
+        self.media_play_btn = CompressibleToolButton()
         self.media_play_btn.setIcon(QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaPlay))
         self.media_play_btn.setAutoRaise(True)
         self.media_play_btn.setToolTip("Play / Pause")
         self.media_play_btn.setStyleSheet(tool_button_dark_style(padding="4px 8px"))
         group_layout.addWidget(self.media_play_btn)
 
-        self.media_next_btn = QtWidgets.QToolButton()
+        self.media_next_btn = CompressibleToolButton()
         self.media_next_btn.setIcon(QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaSkipForward))
         self.media_next_btn.setAutoRaise(True)
         self.media_next_btn.setToolTip("Next")
@@ -532,6 +555,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         nav_font.setPointSize(14)
 
         bottom_bar = QtWidgets.QFrame()
+        self.bottom_bar = bottom_bar
         bottom_bar.setFixedHeight(48)
         bottom_bar.setStyleSheet(
             "QFrame {"
@@ -540,17 +564,19 @@ class LauncherWindow(QtWidgets.QMainWindow):
             "}"
         )
         bottom_layout = QtWidgets.QHBoxLayout(bottom_bar)
+        self.bottom_layout = bottom_layout
         bottom_layout.setContentsMargins(10, 4, 10, 4)
         bottom_layout.setSpacing(10)
         layout.addWidget(bottom_bar, 0)
 
         nav_container = QtWidgets.QFrame()
+        self.nav_container = nav_container
         nav_row = QtWidgets.QHBoxLayout(nav_container)
         nav_row.setContentsMargins(0, 0, 0, 0)
         nav_row.setSpacing(6)
 
         for label in nav_labels:
-            btn = QtWidgets.QToolButton()
+            btn = CompressibleToolButton()
             btn.setText(label)
             btn.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
             btn.setAutoRaise(True)
@@ -559,20 +585,27 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 "QToolButton { color: #c6ccd6; padding: 6px 10px; }"
                 "QToolButton:hover { background: rgba(255,255,255,30); }"
             )
-            btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
+            btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Fixed)
             nav_row.addWidget(btn)
             nav_buttons.append(btn)
+        self.nav_buttons = nav_buttons
 
         bottom_layout.addStretch(1)
         bottom_layout.addWidget(nav_container, 0)
         bottom_layout.addStretch(1)
-        self.log_toggle_btn = QtWidgets.QToolButton()
+        self.profile_button = CompressibleToolButton()
+        self.profile_button.setAutoRaise(True)
+        self.profile_button.setStyleSheet(tool_button_dark_style(padding="4px 10px"))
+        self.profile_button.setToolTip("Open user profile")
+        bottom_layout.addWidget(self.profile_button, 0)
+        self.log_toggle_btn = CompressibleToolButton()
         self.log_toggle_btn.setText("Logs")
         self.log_toggle_btn.setCheckable(True)
         self.log_toggle_btn.setAutoRaise(True)
         self.log_toggle_btn.setStyleSheet(tool_button_dark_style(padding="4px 10px"))
         bottom_layout.addWidget(self.log_toggle_btn, 0)
         bottom_layout.addWidget(self.media_group, 0)
+        self._bottom_nav_compact = False
 
         # Wire nav
         if nav_buttons:
@@ -587,7 +620,9 @@ class LauncherWindow(QtWidgets.QMainWindow):
             nav_buttons[4].clicked.connect(lambda: self.pages.setCurrentIndex(4))
         if len(nav_buttons) > 5:
             nav_buttons[5].clicked.connect(lambda: self.pages.setCurrentIndex(5))
+        self.profile_button.clicked.connect(self._open_user_profile)
         self.log_toggle_btn.toggled.connect(self._set_log_panel_expanded)
+        self._refresh_user_profile_summary()
 
         self._nav_clients_btn = nav_buttons[3] if len(nav_buttons) > 3 else None
         self._nav_clients_label = "Clients"
@@ -975,15 +1010,21 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.asset_open_folder_btn.clicked.connect(self.asset_controller.open_asset_project_folder)
         self.asset_work_tabs.currentChanged.connect(self.asset_controller.on_asset_tab_changed)
         self.asset_shots_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
+        self.asset_shots_list.itemDoubleClicked.connect(self.asset_controller.on_asset_entity_double_clicked)
         self.asset_assets_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
+        self.asset_assets_list.itemDoubleClicked.connect(self.asset_controller.on_asset_entity_double_clicked)
         self.asset_assets_list.customContextMenuRequested.connect(self.asset_controller.show_asset_context_menu)
         self.asset_library_list.itemClicked.connect(self.asset_controller.on_asset_entity_clicked)
+        self.asset_library_list.itemDoubleClicked.connect(self.asset_controller.on_asset_entity_double_clicked)
         self.asset_library_list.customContextMenuRequested.connect(self.asset_controller.show_asset_context_menu)
         self.asset_prev_btn.clicked.connect(self.asset_controller.prev_preview_image)
         self.asset_next_btn.clicked.connect(self.asset_controller.next_preview_image)
         self.asset_fullscreen_btn.clicked.connect(self.asset_controller.toggle_asset_video_fullscreen)
         self.asset_context_combo.currentTextChanged.connect(self.asset_controller.update_asset_context)
         self.asset_inventory_list.itemClicked.connect(self.asset_controller.on_asset_inventory_clicked)
+        self.asset_inventory_list.itemDoubleClicked.connect(
+            self.asset_controller.on_asset_inventory_double_clicked
+        )
         self.asset_inventory_list.customContextMenuRequested.connect(
             self.asset_controller.show_asset_inventory_context_menu
         )
@@ -1047,6 +1088,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self.dev_picnc_convert_btn.clicked.connect(self._dev_convert_picnc)
 
         self.asset_controller.apply_asset_shots_size(self.asset_shots_size.currentText(), refresh=False)
+        self._update_bottom_bar_layout()
 
         self._startup_status("Refreshing project data...")
         self.project_controller.refresh_projects()
@@ -1119,6 +1161,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
+        self._update_bottom_bar_layout()
         self._layout_overlay_panels()
 
     def apply_initial_window_geometry(self) -> None:
@@ -1137,6 +1180,42 @@ class LauncherWindow(QtWidgets.QMainWindow):
         frame = self.frameGeometry()
         frame.moveCenter(available.center())
         self.move(frame.topLeft())
+
+    def _update_bottom_bar_layout(self) -> None:
+        if not hasattr(self, "nav_buttons"):
+            return
+        width = int(self.width())
+        compact = width < 980
+        tiny = width < 760
+        if getattr(self, "_bottom_nav_compact", None) == (compact, tiny):
+            return
+        self._bottom_nav_compact = (compact, tiny)
+        labels = ["Projects", "Asset Manager", "Board", "Clients", "Settings", "Dev"]
+        compact_labels = ["Projects", "Assets", "Board", "Clients", "Settings", "Dev"]
+        tiny_labels = ["Proj", "Assets", "Board", "Client", "Set", "Dev"]
+        selected = tiny_labels if tiny else compact_labels if compact else labels
+        font = QtGui.QFont()
+        font.setPointSize(10 if tiny else 11 if compact else 14)
+        padding = "3px 5px" if tiny else "4px 7px" if compact else "6px 10px"
+        for idx, btn in enumerate(self.nav_buttons):
+            if idx < len(selected):
+                btn.setText(selected[idx])
+            btn.setFont(font)
+            btn.setStyleSheet(
+                f"QToolButton {{ color: #c6ccd6; padding: {padding}; }}"
+                "QToolButton:hover { background: rgba(255,255,255,30); }"
+            )
+        self.media_label.setVisible(not compact)
+        self.media_group.setVisible(not tiny)
+        self.log_toggle_btn.setText("Log" if tiny else "Logs")
+        if hasattr(self, "bottom_layout"):
+            self.bottom_layout.setSpacing(4 if tiny else 6 if compact else 10)
+            margins = 6 if compact else 10
+            self.bottom_layout.setContentsMargins(margins, 4, margins, 4)
+        if hasattr(self, "nav_container"):
+            self.nav_container.updateGeometry()
+        if hasattr(self, "bottom_bar"):
+            self.bottom_bar.updateGeometry()
 
     @staticmethod
     def _to_houdini_path(text: str) -> str:
@@ -1167,6 +1246,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
 
     def _on_main_page_changed(self, index: int) -> None:
         self._sync_page_dock_visibility()
+        self._update_bottom_bar_layout()
         # Ensure board visuals/overrides are freshly applied when entering the Board page.
         if int(index) == 1 and hasattr(self, "asset_controller") and self.asset_controller is not None:
             QtCore.QTimer.singleShot(0, self.asset_controller.ensure_project_context_loaded)
@@ -1238,6 +1318,7 @@ class LauncherWindow(QtWidgets.QMainWindow):
                 "runtime_cache_location": runtime_cache_location,
                 "runtime_cache_max_gb": runtime_cache_max_gb,
                 "runtime_cache_max_days": runtime_cache_max_days,
+                "user_profile": self.settings_page.profile_data(),
             }
         )
         save_settings(self.settings)
@@ -1250,11 +1331,24 @@ class LauncherWindow(QtWidgets.QMainWindow):
         self._houdini_exe = houdini_exe
         self._blender_exe = blender_exe
         self._video_backend_pref = video_backend
+        self._refresh_user_profile_summary()
 
         self.apply_projects_dir(resolved_projects_dir, persist=False, sync_settings_field=False)
         self._is_first_run = False
         self.settings_page.set_startup_context(False)
         self._refresh_settings_validation()
+
+    def _open_user_profile(self) -> None:
+        self.pages.setCurrentIndex(4)
+        self.settings_page.nav_profile_btn.setChecked(True)
+        self.settings_page.settings_stack.setCurrentIndex(0)
+
+    def _refresh_user_profile_summary(self) -> None:
+        profile = self.settings_page.profile_data()
+        name = profile["display_name"] or "Create profile"
+        self.profile_button.setText(f"{profile_initials(profile)}  {name}")
+        details = [value for value in (profile["role"], profile["studio"], profile["email"]) if value]
+        self.profile_button.setToolTip("\n".join(details) if details else "Open user profile")
 
     def apply_projects_dir(
         self,

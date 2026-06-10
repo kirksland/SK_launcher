@@ -17,6 +17,7 @@ BOARD_VIEWPORT_ACTION_RULES = (
     ActionRule("board.media.convert_video_to_sequence", targets=("board.viewport",), when="single_video"),
     ActionRule("board.group.create", targets=("board.viewport",), when="can_group", separator_before=True),
     ActionRule("board.layout.auto", targets=("board.viewport",)),
+    ActionRule("board.slideshow.start", targets=("board.viewport",), when="can_slideshow"),
     ActionRule("board.group.remove_selected", targets=("board.viewport",), when="has_group_members"),
     ActionRule("board.group.ungroup", targets=("board.viewport",), when="has_group"),
 )
@@ -58,6 +59,8 @@ class BoardView(QtWidgets.QGraphicsView):
         self._rubberband_add = False
         self._rubberband_prev: list[QtWidgets.QGraphicsItem] = []
         self._quality_timer: Optional[QtCore.QTimer] = None
+        self._external_drag_start_pos: Optional[QtCore.QPoint] = None
+        self._external_drag_item: Optional[QtWidgets.QGraphicsItem] = None
 
     def drawBackground(self, painter: QtGui.QPainter, rect: QtCore.QRectF) -> None:
         painter.save()
@@ -124,6 +127,13 @@ class BoardView(QtWidgets.QGraphicsView):
             self._show_context_menu(event.pos(), self.viewport().mapToGlobal(event.pos()))
             event.accept()
             return
+        if event.button() == QtCore.Qt.MouseButton.LeftButton and event.modifiers() & QtCore.Qt.KeyboardModifier.AltModifier:
+            item = self._exportable_image_item_at(event.pos())
+            if item is not None:
+                self._external_drag_start_pos = event.pos()
+                self._external_drag_item = item
+                event.accept()
+                return
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self._move_start_positions = {id(i): i.pos() for i in self.scene().selectedItems()}
             controller = self._resolve_controller()
@@ -160,6 +170,14 @@ class BoardView(QtWidgets.QGraphicsView):
             self._update_scale(event)
             event.accept()
             return
+        if self._external_drag_item is not None and self._external_drag_start_pos is not None:
+            if (event.pos() - self._external_drag_start_pos).manhattanLength() >= QtWidgets.QApplication.startDragDistance():
+                item = self._external_drag_item
+                self._external_drag_item = None
+                self._external_drag_start_pos = None
+                self._begin_external_image_drag(item)
+                event.accept()
+                return
         if self._panning:
             delta = event.pos() - self._pan_start
             self._pan_start = event.pos()
@@ -206,6 +224,8 @@ class BoardView(QtWidgets.QGraphicsView):
             self._schedule_quality_update()
             return
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._external_drag_item = None
+            self._external_drag_start_pos = None
             controller = self._resolve_controller()
             if self._rubberband_add:
                 for item in self._rubberband_prev:
@@ -225,6 +245,65 @@ class BoardView(QtWidgets.QGraphicsView):
             self._schedule_quality_update()
             self._notify_overlay_position()
         super().mouseReleaseEvent(event)
+
+    def _exportable_image_item_at(self, view_pos: QtCore.QPoint) -> Optional[QtWidgets.QGraphicsItem]:
+        item = self.itemAt(view_pos)
+        while item is not None:
+            if item.data(0) == "image":
+                return item
+            item = item.parentItem()
+        return None
+
+    def _image_export_paths_for_drag(self, anchor_item: QtWidgets.QGraphicsItem) -> list[QtCore.QUrl]:
+        controller = self._resolve_controller()
+        project_root = getattr(controller, "_project_root", None)
+        if project_root is None:
+            return []
+        selected = [
+            item
+            for item in self.scene().selectedItems()
+            if item.data(0) == "image"
+        ]
+        items = selected if anchor_item in selected else [anchor_item]
+        urls: list[QtCore.QUrl] = []
+        seen: set[str] = set()
+        assets_dir = project_root / ".skyforge_board_assets"
+        for item in items:
+            filename = str(item.data(1) or "").strip()
+            if not filename:
+                continue
+            path = assets_dir / filename
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            key = str(resolved)
+            if key in seen or not resolved.exists() or not resolved.is_file():
+                continue
+            seen.add(key)
+            urls.append(QtCore.QUrl.fromLocalFile(str(resolved)))
+        return urls
+
+    def _begin_external_image_drag(self, anchor_item: QtWidgets.QGraphicsItem) -> None:
+        urls = self._image_export_paths_for_drag(anchor_item)
+        if not urls:
+            return
+        mime = QtCore.QMimeData()
+        mime.setUrls(urls)
+        mime.setText("\n".join(url.toLocalFile() for url in urls))
+        drag = QtGui.QDrag(self)
+        drag.setMimeData(mime)
+        pixmap = self.viewport().grab()
+        if not pixmap.isNull():
+            preview = pixmap.scaled(
+                160,
+                120,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            drag.setPixmap(preview)
+            drag.setHotSpot(QtCore.QPoint(preview.width() // 2, preview.height() // 2))
+        drag.exec(QtCore.Qt.DropAction.CopyAction)
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         scene_pos = self.mapToScene(event.pos())
@@ -301,6 +380,8 @@ class BoardView(QtWidgets.QGraphicsView):
         selected_items = [i for i in selected if getattr(i, "data", lambda _k: None)(0) in ("image", "note", "video", "sequence")]
         has_group_members = bool(selected_items)
         can_group = len(selected_items) >= 2
+        selected_image_count = sum(1 for item in selected_items if item.data(0) == "image")
+        can_slideshow = selected_image_count >= 2
         single_video = len(selected_items) == 1 and selected_items[0].data(0) == "video"
         metadata = {
             "scene_pos": self.mapToScene(view_pos),
@@ -309,6 +390,8 @@ class BoardView(QtWidgets.QGraphicsView):
             "has_group": has_group,
             "has_group_members": has_group_members,
             "can_group": can_group,
+            "can_slideshow": can_slideshow,
+            "selected_image_count": selected_image_count,
             "single_video": single_video,
         }
         if single_video:

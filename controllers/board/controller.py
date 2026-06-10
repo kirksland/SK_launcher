@@ -36,6 +36,7 @@ from controllers.board.media_import_controller import BoardMediaImportController
 from controllers.board.media_render_controller import BoardMediaRenderController
 from controllers.board.notes_controller import BoardNotesController
 from controllers.board.scene_view_controller import BoardSceneViewController
+from controllers.board.slideshow_controller import BoardSlideshowController
 from core.board_state import (
     ApplyPayloadState,
     apply_pending_groups_to_scene,
@@ -129,6 +130,7 @@ class BoardController:
         self._edit_panel = BoardEditPanelController(self)
         self._media_import = BoardMediaImportController(self)
         self._notes = BoardNotesController(self)
+        self._slideshow = BoardSlideshowController(self)
         self._history_controller = BoardHistoryController(self)
         self._edit_image_thread: Optional[QtCore.QThread] = None
         self._edit_image_worker: Optional[ImageAdjustPreviewWorker] = None
@@ -136,7 +138,7 @@ class BoardController:
         self._edit_preview_pending_channel: Optional[str] = None
         self._edit_preview_dragging: bool = False
         self._edit_preview_fast_dim: int = 640
-        self._edit_preview_full_dim: int = 1280
+        self._edit_preview_full_dim: int = self._max_display_dim
         self._edit_exr_preview_busy: bool = False
         self._edit_exr_preview_runtime = PreviewRuntimeState()
         self._edit_exr_preview_request_key: Optional[str] = None
@@ -733,6 +735,9 @@ class BoardController:
 
     def select_group_members(self, group_item: BoardGroupItem) -> None:
         self._group_actions.select_group_members(group_item)
+
+    def start_selected_image_slideshow(self) -> None:
+        self._slideshow.start_selected_images()
 
     def _groups(self) -> list[BoardGroupItem]:
         return self._group_actions.groups()

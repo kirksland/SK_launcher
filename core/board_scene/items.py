@@ -153,6 +153,14 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
         self._rect = QtCore.QRectF(0, 0, self._base_size.width(), self._base_size.height())
         self.setTransformOriginPoint(self._base_size.width() * 0.5, self._base_size.height() * 0.5)
 
+    def _pixmap_for_quality(self, quality: str) -> QtGui.QPixmap:
+        if quality == "full":
+            if self._full_pixmap is None:
+                self._full_pixmap = self._controller._get_display_pixmap(self._path, self._full_dim)
+            if self._full_pixmap is not None and not self._full_pixmap.isNull():
+                return self._full_pixmap
+        return self._proxy_pixmap
+
     def set_quality(self, quality: str) -> None:
         if self._override_pixmap is not None:
             self._pixmap = self._override_pixmap
@@ -161,12 +169,7 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
             return
         if quality == self._quality:
             return
-        if quality == "full":
-            if self._full_pixmap is None:
-                self._full_pixmap = self._controller._get_display_pixmap(self._path, self._full_dim)
-            new_pixmap = self._full_pixmap
-        else:
-            new_pixmap = self._proxy_pixmap
+        new_pixmap = self._pixmap_for_quality(quality)
         if new_pixmap is None or new_pixmap.isNull():
             return
         self._pixmap = new_pixmap
@@ -179,7 +182,7 @@ class BoardImageItem(QtWidgets.QGraphicsItem):
             self._pixmap = pixmap
         else:
             self._override_pixmap = None
-            self._pixmap = self._proxy_pixmap
+            self._pixmap = self._pixmap_for_quality(self._quality)
         self.update()
 
     def file_name(self) -> str:

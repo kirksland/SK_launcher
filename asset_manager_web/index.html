@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0d1117">
+  <title>Skyforge Asset Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Skyforge home">
+        <span class="brand-mark">S</span>
+        <span class="brand-copy">
+          <strong>SKYFORGE</strong>
+          <small>PRODUCTION OS</small>
+        </span>
+      </a>
+
+      <nav class="main-nav" aria-label="Navigation principale">
+        <a href="#"><span class="nav-icon">⌂</span>Overview</a>
+        <a href="#" class="active"><span class="nav-icon">◇</span>Asset Manager</a>
+        <a href="#"><span class="nav-icon">▦</span>Board</a>
+        <a href="#"><span class="nav-icon">◎</span>Clients</a>
+      </nav>
+
+      <div class="sidebar-section">
+        <div class="section-label">
+          <span>Projects</span>
+          <button class="icon-button" aria-label="Ajouter un projet">+</button>
+        </div>
+        <div id="project-list" class="project-list"></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="storage-head">
+          <span>Local storage</span>
+          <strong>68%</strong>
+        </div>
+        <div class="progress"><i style="width: 68%"></i></div>
+        <small>326 GB libres sur 1 TB</small>
+        <button class="profile">
+          <span class="avatar">JM</span>
+          <span><strong>Justin M.</strong><small>Pipeline artist</small></span>
+          <span class="profile-more">•••</span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <button id="menu-button" class="mobile-menu" aria-label="Ouvrir le menu">☰</button>
+        <div class="breadcrumbs">
+          <span>Asset Manager</span><b>/</b><strong id="breadcrumb-project">Nebula</strong>
+        </div>
+        <label class="global-search">
+          <span>⌕</span>
+          <input id="search" type="search" placeholder="Rechercher un asset, shot, fichier..." autocomplete="off">
+          <kbd>⌘ K</kbd>
+        </label>
+        <button class="top-action" title="Notifications">○</button>
+        <button id="refresh-button" class="refresh-button"><span>↻</span> Sync</button>
+      </header>
+
+      <section class="content">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow"><span class="live-dot"></span> Workspace connecté</p>
+            <h1 id="project-title">Nebula</h1>
+            <p id="project-path" class="project-path">D:\Productions\Nebula</p>
+          </div>
+          <div class="heading-actions">
+            <button class="button secondary">Layout <span>⌄</span></button>
+            <button class="button primary">+ Nouvel asset</button>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <article class="stat-card">
+            <span class="stat-icon cyan">◇</span>
+            <div><small>Assets</small><strong id="asset-count">24</strong></div>
+            <em>+3 cette semaine</em>
+          </article>
+          <article class="stat-card">
+            <span class="stat-icon violet">▱</span>
+            <div><small>Shots</small><strong id="shot-count">18</strong></div>
+            <em>12 en production</em>
+          </article>
+          <article class="stat-card">
+            <span class="stat-icon amber">↗</span>
+            <div><small>Publishes</small><strong>142</strong></div>
+            <em>8 aujourd’hui</em>
+          </article>
+          <article class="stat-card">
+            <span class="stat-icon green">✓</span>
+            <div><small>Pipeline</small><strong>Healthy</strong></div>
+            <em>Tout est à jour</em>
+          </article>
+        </div>
+
+        <div class="manager-layout">
+          <section class="browser-panel panel">
+            <div class="panel-toolbar">
+              <div class="tabs" role="tablist">
+                <button class="tab active" data-kind="assets">Assets <span id="assets-tab-count">24</span></button>
+                <button class="tab" data-kind="shots">Shots <span id="shots-tab-count">18</span></button>
+                <button class="tab" data-kind="library">Library <span>9</span></button>
+                <button class="tab" data-kind="videos">Video Library <span>6</span></button>
+              </div>
+              <div class="view-actions">
+                <button id="open-board-button" class="button secondary video-action" hidden>Ouvrir un Board</button>
+                <button id="add-folder-button" class="button secondary video-action" hidden>+ Ajouter un dossier</button>
+                <button id="add-files-button" class="button secondary video-action" hidden>+ Choisir des videos</button>
+                <input id="folder-input" type="file" webkitdirectory multiple hidden>
+                <input id="video-files-input" type="file" accept="video/*,.mov,.mkv,.avi,.m4v" multiple hidden>
+                <select id="gallery-filter" aria-label="Filtrer par galerie" hidden>
+                  <option value="all">Toutes les galeries</option>
+                </select>
+                <select id="sort-filter" aria-label="Trier les medias" hidden>
+                  <option value="board">Ordre du board</option>
+                  <option value="recent">Plus recents</option>
+                  <option value="name">Nom A-Z</option>
+                  <option value="duration">Duree</option>
+                </select>
+                <button class="icon-button active" title="Vue grille">▦</button>
+                <button class="icon-button" title="Vue liste">☷</button>
+                <select id="context-filter" aria-label="Filtrer par contexte">
+                  <option value="all">Tous les contextes</option>
+                  <option value="modeling">Modeling</option>
+                  <option value="lookdev">Lookdev</option>
+                  <option value="animation">Animation</option>
+                </select>
+              </div>
+            </div>
+            <div id="video-library-help" class="video-library-help" hidden>
+              <strong>Pour lire tes videos</strong>
+              <span>1. Clique sur <b>Ajouter un dossier</b> ou <b>Ouvrir un Board</b>.</span>
+              <span>2. Les vraies videos apparaissent avec le badge <b>LOCAL</b>.</span>
+              <span>3. Clique pour inspecter. Double-clique pour ouvrir le lecteur local.</span>
+            </div>
+            <div id="video-import-status" class="video-import-status" hidden></div>
+            <div id="asset-grid" class="asset-grid"></div>
+            <button id="load-more-videos" class="load-more-videos" hidden>Afficher plus de videos</button>
+            <div id="compare-tray" class="compare-tray" hidden>
+              <div>
+                <strong><span id="compare-count">0</span> medias selectionnes</strong>
+                <small>Compare cadrage, timing et versions cote a cote.</small>
+              </div>
+              <div id="compare-items" class="compare-items"></div>
+              <button id="clear-compare" class="button secondary">Vider</button>
+              <button id="open-compare" class="button primary">Comparer</button>
+            </div>
+            <div id="empty-state" class="empty-state" hidden>
+              <span>⌕</span>
+              <strong>Aucun résultat</strong>
+              <p>Essaie un autre terme ou change le filtre de contexte.</p>
+            </div>
+          </section>
+
+          <aside id="inspector" class="inspector panel">
+            <div class="inspector-head">
+              <span>Inspector</span>
+              <button id="close-inspector" class="icon-button">×</button>
+            </div>
+            <div id="inspector-content"></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="compare-modal" class="compare-modal" hidden>
+    <div class="compare-dialog">
+      <div class="compare-dialog-head">
+        <div><small>REVIEW ROOM</small><strong>Comparaison des shots</strong></div>
+        <button id="close-compare" class="icon-button" aria-label="Fermer">X</button>
+      </div>
+      <div id="compare-grid" class="compare-grid"></div>
+    </div>
+  </div>
+
+  <div id="video-modal" class="video-modal" hidden>
+    <div class="video-modal-dialog">
+      <div class="video-modal-head">
+        <div><small>LECTEUR LOCAL</small><strong id="video-modal-title">Video</strong></div>
+        <button id="close-video-modal" class="icon-button" aria-label="Fermer">X</button>
+      </div>
+      <div class="video-modal-body">
+        <video id="video-modal-player" controls autoplay preload="auto"></video>
+        <div id="video-modal-error" class="video-modal-error" hidden>
+          <strong>Le fichier est trouvé, mais le navigateur ne sait pas le décoder.</strong>
+          <span>Essaie un MP4 encodé en H.264/AAC ou un WebM. Les MOV ProRes, AVI et certains MKV ne sont généralement pas lisibles directement.</span>
+        </div>
+      </div>
+      <div id="video-modal-path" class="video-modal-path"></div>
+    </div>
+  </div>
+
+  <div id="folder-sources" class="folder-sources" hidden></div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtWidgets
 
 from core.asset_details import build_asset_meta_text, normalize_list_context, read_history_note
 from core.asset_inventory import build_entity_inventory
+from core.comfy_metadata import format_workflow_json, load_comfy_video_metadata
 from core.project_storage import asset_exr_thumb_dir
 from core.asset_selection import build_active_asset_selection, choose_best_context_for_selection
 from core.metadata import load_metadata
@@ -45,6 +46,7 @@ class AssetDetailsPanelController:
         )
         self.w._preview_index = 0
         self.w._asset_inventory_preview_path = None
+        self.clear_comfy_metadata()
         preview_size = self.asset_preview_target_size()
         self.w.asset_preview.setPixmap(build_thumbnail_pixmap(entity_dir, preview_size))
         self.update_preview_label()
@@ -124,13 +126,11 @@ class AssetDetailsPanelController:
             self.w.asset_page.asset_inventory_hint if hasattr(self.w.asset_page, "asset_inventory_hint") else None,
             cache_root=self.asset_preview_cache_root(),
         )
-        first_video = inventory_renderer.render(
+        inventory_renderer.render(
             inventory,
             on_selected_path=self.sync_asset_inventory_preview,
         )
-
-        if not self.w._preview_images and first_video is not None:
-            self.w.asset_video_controller.preview_first_frame(first_video)
+        self.update_comfy_metadata(self.current_entity_video_path())
 
         self.w.asset_history_list.clear()
         self.w.asset_history_list.addItem(read_history_note(entity_dir))
@@ -256,20 +256,97 @@ class AssetDetailsPanelController:
         if not path_text:
             return
         path = Path(str(path_text))
-        if kind == "video" and path.exists():
-            self.w.asset_video_controller.play_path(path)
-            return
         if kind == "source" and path.exists():
             self.host.set_asset_status(f"Selected source file: {self.w._to_houdini_path(str(path))}")
             return
+        if kind == "video" and path.exists():
+            self.host.set_asset_status(f"Selected video: {path.name}")
+            self.update_comfy_metadata(path)
+            return
         if path.exists():
             self.sync_asset_inventory_preview(path, kind)
+
+    def on_asset_inventory_double_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
+        kind = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
+        path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if kind != "video" or not path_text:
+            return
+        path = Path(str(path_text))
+        if path.exists():
+            self.w.asset_video_controller.play_path(path)
+
+    def current_entity_video_path(self) -> Optional[Path]:
+        current_path = self.host._current_asset_inventory_path()
+        if current_path is not None and current_path.exists():
+            current_item = self.w.asset_inventory_list.currentItem()
+            if (
+                current_item is not None
+                and current_item.data(QtCore.Qt.ItemDataRole.UserRole + 1) == "video"
+            ):
+                return current_path
+
+        for row in range(self.w.asset_inventory_list.count()):
+            item = self.w.asset_inventory_list.item(row)
+            if item is None:
+                continue
+            path_text = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            kind = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
+            if kind != "video" or not path_text:
+                continue
+            path = Path(str(path_text))
+            if path.exists():
+                return path
+        return None
+
+    def clear_comfy_metadata(self) -> None:
+        page = self.w.asset_page
+        if not hasattr(page, "asset_comfy_frame"):
+            return
+        page.asset_comfy_frame.setVisible(False)
+        page.asset_comfy_summary.clear()
+        page.asset_comfy_prompt.clear()
+        page.asset_comfy_negative.clear()
+        page.asset_comfy_workflow.clear()
+
+    def update_comfy_metadata(self, path: Optional[Path]) -> None:
+        page = self.w.asset_page
+        if not hasattr(page, "asset_comfy_frame"):
+            return
+        metadata = load_comfy_video_metadata(path) if path is not None else None
+        if metadata is None:
+            self.clear_comfy_metadata()
+            return
+
+        summary_parts = []
+        if metadata.model:
+            summary_parts.append(Path(metadata.model).name)
+        if metadata.seed is not None:
+            summary_parts.append(f"Seed {metadata.seed}")
+        if metadata.steps is not None:
+            summary_parts.append(f"{metadata.steps} steps")
+        if metadata.sampler:
+            sampler = metadata.sampler
+            if metadata.scheduler:
+                sampler += f" / {metadata.scheduler}"
+            summary_parts.append(sampler)
+        if metadata.cfg is not None:
+            summary_parts.append(f"CFG {metadata.cfg:g}")
+
+        page.asset_comfy_summary.setText(" | ".join(summary_parts) or "Embedded ComfyUI workflow")
+        page.asset_comfy_prompt.setPlainText(metadata.positive_prompt or "No positive prompt text found.")
+        page.asset_comfy_negative.setPlainText(metadata.negative_prompt or "No negative prompt text found.")
+        page.asset_comfy_workflow.setPlainText(
+            format_workflow_json(metadata) if metadata.has_workflow else "No workflow JSON found."
+        )
+        page.asset_comfy_copy_workflow_btn.setEnabled(metadata.has_workflow)
+        page.asset_comfy_frame.setVisible(True)
 
     def sync_asset_inventory_preview(self, path: Path, kind: Optional[str]) -> None:
         if not path.exists():
             return
         if kind == "video":
-            self.w.asset_video_controller.preview_first_frame(path)
+            self.host.set_asset_status(f"Selected video: {path.name}")
+            self.update_comfy_metadata(path)
             return
         if kind == "image":
             images = getattr(self.w, "_preview_images", [])

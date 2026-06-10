@@ -461,6 +461,17 @@ class AssetManagerController:
     def on_asset_entity_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         self._browser_panel.on_asset_entity_clicked(item)
 
+    def on_asset_entity_double_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
+        self._browser_panel.on_asset_entity_double_clicked(item)
+
+    def play_current_entity_video(self, expected_entity: Path) -> None:
+        current_entity = getattr(self.w, "_asset_current_entity", None)
+        if current_entity is None or Path(current_entity) != expected_entity:
+            return
+        video_path = self._details_panel.current_entity_video_path()
+        if video_path is not None:
+            self.w.asset_video_controller.play_path(video_path)
+
     def on_asset_tab_changed(self, index: int) -> None:
         self._browser_panel.on_asset_tab_changed(index)
 
@@ -629,6 +640,9 @@ class AssetManagerController:
 
     def on_asset_inventory_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         self._details_panel.on_asset_inventory_clicked(item)
+
+    def on_asset_inventory_double_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
+        self._details_panel.on_asset_inventory_double_clicked(item)
 
     def _sync_asset_inventory_preview(self, path: Path, kind: Optional[str]) -> None:
         self._details_panel.sync_asset_inventory_preview(path, kind)
